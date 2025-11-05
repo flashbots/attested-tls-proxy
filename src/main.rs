@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::{fs::File, net::SocketAddr};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
-use attested_tls_proxy::{ProxyClient, ProxyServer};
+use attested_tls_proxy::{MockAttestation, NoAttestation, ProxyClient, ProxyServer};
 
 #[derive(Parser, Debug, Clone)]
 #[clap(version, about, long_about = None)]
@@ -39,9 +39,14 @@ async fn main() {
             server_name,
             server_address,
         } => {
-            let client =
-                ProxyClient::new(cli.address, server_address, server_name.try_into().unwrap())
-                    .await;
+            let client = ProxyClient::new(
+                cli.address,
+                server_address,
+                server_name.try_into().unwrap(),
+                NoAttestation,
+                MockAttestation,
+            )
+            .await;
 
             loop {
                 client.accept().await.unwrap();
@@ -50,7 +55,18 @@ async fn main() {
         CliCommand::Server { client_address } => {
             let cert_chain = load_certs_pem("certs.pem").unwrap();
             let key = load_private_key_pem("key.pem");
-            let server = ProxyServer::new(cert_chain, key, cli.address, client_address).await;
+            let local_attestation = MockAttestation;
+            let remote_attestation = NoAttestation;
+
+            let server = ProxyServer::new(
+                cert_chain,
+                key,
+                cli.address,
+                client_address,
+                local_attestation,
+                remote_attestation,
+            )
+            .await;
 
             loop {
                 server.accept().await.unwrap();
