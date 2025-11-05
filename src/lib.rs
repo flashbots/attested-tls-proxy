@@ -212,12 +212,7 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         Self {
             inner,
             connector,
-<<<<<<< HEAD
-            target: target.into(),
-=======
-            listener,
             target,
->>>>>>> main
             target_name,
         }
     }
