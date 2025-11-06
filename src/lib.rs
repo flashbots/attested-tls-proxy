@@ -1,7 +1,8 @@
 mod attestation;
 
 pub use attestation::{AttestationPlatform, MockAttestation, NoAttestation};
-use tokio_rustls::rustls::server::WebPkiClientVerifier;
+use thiserror::Error;
+use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 
 #[cfg(test)]
 mod test_helpers;
@@ -60,26 +61,23 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
         local_attestation_platform: L,
         remote_attestation_platform: R,
         client_auth: bool,
-    ) -> Self {
+    ) -> Result<Self, ProxyError> {
         if remote_attestation_platform.is_cvm() && !client_auth {
-            panic!("Client auth is required when the client is running in a CVM");
+            return Err(ProxyError::NoClientAuth);
         }
 
         let server_config = if client_auth {
             let root_store =
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let verifier = WebPkiClientVerifier::builder(Arc::new(root_store))
-                .build()
-                .expect("invalid client verifier");
+            let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
+
             ServerConfig::builder()
                 .with_client_cert_verifier(verifier)
-                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)
-                .expect("Failed to create rustls server config")
+                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         } else {
             ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)
-                .expect("Failed to create rustls server config")
+                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         };
 
         Self::new_with_tls_config(
@@ -103,26 +101,27 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
         target: SocketAddr,
         local_attestation_platform: L,
         remote_attestation_platform: R,
-    ) -> Self {
+    ) -> Result<Self, ProxyError> {
         let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
-        let listener = TcpListener::bind(local).await.unwrap();
+        let listener = TcpListener::bind(local).await?;
 
         let inner = Proxy {
             listener,
             local_attestation_platform,
             remote_attestation_platform,
         };
-        Self {
+
+        Ok(Self {
             acceptor,
             target,
             inner,
             cert_chain,
-        }
+        })
     }
 
     /// Accept an incoming connection
-    pub async fn accept(&self) -> io::Result<()> {
-        let (inbound, _client_addr) = self.inner.listener.accept().await.unwrap();
+    pub async fn accept(&self) -> Result<(), ProxyError> {
+        let (inbound, _client_addr) = self.inner.listener.accept().await?;
 
         let acceptor = self.acceptor.clone();
         let target = self.target;
@@ -215,9 +214,9 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         server_name: ServerName<'static>,
         local_attestation_platform: L,
         remote_attestation_platform: R,
-    ) -> Self {
+    ) -> Result<Self, ProxyError> {
         if local_attestation_platform.is_cvm() && cert_and_key.is_none() {
-            panic!("Client auth is required when the client is running in a CVM");
+            return Err(ProxyError::NoClientAuth);
         }
 
         let root_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -228,8 +227,7 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
                 .with_client_auth_cert(
                     cert_and_key.cert_chain.clone(),
                     cert_and_key.key.clone_key(),
-                )
-                .unwrap()
+                )?
         } else {
             ClientConfig::builder()
                 .with_root_certificates(root_store)
@@ -256,8 +254,8 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         local_attestation_platform: L,
         remote_attestation_platform: R,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
-    ) -> Self {
-        let listener = TcpListener::bind(local).await.unwrap();
+    ) -> Result<Self, ProxyError> {
+        let listener = TcpListener::bind(local).await?;
         let connector = TlsConnector::from(client_config.clone());
 
         let inner = Proxy {
@@ -266,17 +264,17 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
             remote_attestation_platform,
         };
 
-        Self {
+        Ok(Self {
             inner,
             connector,
             target,
             target_name,
             cert_chain,
-        }
+        })
     }
 
     pub async fn accept(&self) -> io::Result<()> {
-        let (inbound, _client_addr) = self.inner.listener.accept().await.unwrap();
+        let (inbound, _client_addr) = self.inner.listener.accept().await?;
 
         let connector = self.connector.clone();
         let target_name = self.target_name.clone();
@@ -348,6 +346,18 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum ProxyError {
+    #[error("Client auth is required when the client is running in a CVM")]
+    NoClientAuth,
+    #[error("TLS: {0}")]
+    Rustls(#[from] tokio_rustls::rustls::Error),
+    #[error("Verifier builder: {0}")]
+    VerifierBuilder(#[from] VerifierBuilderError),
+    #[error("IO: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 fn length_prefix(input: &[u8]) -> [u8; 4] {
     let len = input.len() as u32;
     len.to_be_bytes()
@@ -377,7 +387,9 @@ mod tests {
             MockAttestation,
             NoAttestation,
         )
-        .await;
+        .await
+        .unwrap();
+
         let proxy_addr = proxy_server.local_addr().unwrap();
 
         tokio::spawn(async move {
@@ -393,7 +405,8 @@ mod tests {
             MockAttestation,
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
@@ -439,7 +452,9 @@ mod tests {
             MockAttestation,
             MockAttestation,
         )
-        .await;
+        .await
+        .unwrap();
+
         let proxy_addr = proxy_server.local_addr().unwrap();
 
         tokio::spawn(async move {
@@ -455,7 +470,8 @@ mod tests {
             MockAttestation,
             Some(client_cert_chain),
         )
-        .await;
+        .await
+        .unwrap();
 
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
@@ -491,7 +507,9 @@ mod tests {
             local_attestation_platform,
             NoAttestation,
         )
-        .await;
+        .await
+        .unwrap();
+
         let proxy_server_addr = proxy_server.local_addr().unwrap();
 
         tokio::spawn(async move {
@@ -507,7 +525,9 @@ mod tests {
             MockAttestation,
             None,
         )
-        .await;
+        .await
+        .unwrap();
+
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
         tokio::spawn(async move {

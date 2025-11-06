@@ -1,3 +1,4 @@
+use anyhow::{anyhow, ensure};
 use clap::{Parser, Subcommand};
 use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -46,7 +47,7 @@ enum CliCommand {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -56,21 +57,33 @@ async fn main() {
             private_key,
             cert_chain,
         } => {
-            let tls_cert_and_chain = private_key
-                .map(|private_key| load_tls_cert_and_key(cert_chain.unwrap(), private_key));
+            let tls_cert_and_chain = if let Some(private_key) = private_key {
+                Some(load_tls_cert_and_key(
+                    cert_chain.ok_or(anyhow!("Private key given but no certificate chain"))?,
+                    private_key,
+                )?)
+            } else {
+                ensure!(
+                    cert_chain.is_none(),
+                    "Certificate chain given but no private key"
+                );
+                None
+            };
 
             let client = ProxyClient::new(
                 tls_cert_and_chain,
                 cli.address,
                 server_address,
-                server_name.try_into().unwrap(),
+                server_name.try_into()?,
                 NoAttestation,
                 MockAttestation,
             )
-            .await;
+            .await?;
 
             loop {
-                client.accept().await.unwrap();
+                if let Err(err) = client.accept().await {
+                    eprintln!("Failed to handle connection: {err}");
+                }
             }
         }
         CliCommand::Server {
@@ -79,7 +92,7 @@ async fn main() {
             cert_chain,
             client_auth,
         } => {
-            let tls_cert_and_chain = load_tls_cert_and_key(cert_chain, private_key);
+            let tls_cert_and_chain = load_tls_cert_and_key(cert_chain, private_key)?;
             let local_attestation = MockAttestation;
             let remote_attestation = NoAttestation;
 
@@ -91,37 +104,41 @@ async fn main() {
                 remote_attestation,
                 client_auth,
             )
-            .await;
+            .await?;
 
             loop {
-                server.accept().await.unwrap();
+                if let Err(err) = server.accept().await {
+                    eprintln!("Failed to handle connection: {err}");
+                }
             }
         }
     }
 }
 
-fn load_tls_cert_and_key(cert_chain: PathBuf, private_key: PathBuf) -> TlsCertAndKey {
-    let key = load_private_key_pem(private_key);
-    let cert_chain = load_certs_pem(cert_chain).unwrap();
-    TlsCertAndKey { key, cert_chain }
+fn load_tls_cert_and_key(
+    cert_chain: PathBuf,
+    private_key: PathBuf,
+) -> anyhow::Result<TlsCertAndKey> {
+    let key = load_private_key_pem(private_key)?;
+    let cert_chain = load_certs_pem(cert_chain)?;
+    Ok(TlsCertAndKey { key, cert_chain })
 }
 
 pub fn load_certs_pem(path: PathBuf) -> std::io::Result<Vec<CertificateDer<'static>>> {
     Ok(
         rustls_pemfile::certs(&mut std::io::BufReader::new(File::open(path)?))
-            .map(|res| res.unwrap())
+            .map(|res| res.unwrap()) //TODO
             .collect(),
     )
 }
 
-pub fn load_private_key_pem(path: PathBuf) -> PrivateKeyDer<'static> {
-    let mut reader = std::io::BufReader::new(File::open(path).unwrap());
+pub fn load_private_key_pem(path: PathBuf) -> anyhow::Result<PrivateKeyDer<'static>> {
+    let mut reader = std::io::BufReader::new(File::open(path)?);
 
     // Tries to read the key as PKCS#8, PKCS#1, or SEC1
     let pks8_key = rustls_pemfile::pkcs8_private_keys(&mut reader)
         .next()
-        .unwrap()
-        .unwrap();
+        .ok_or(anyhow!("No PKS8 Key"))??;
 
-    PrivateKeyDer::Pkcs8(pks8_key)
+    Ok(PrivateKeyDer::Pkcs8(pks8_key))
 }

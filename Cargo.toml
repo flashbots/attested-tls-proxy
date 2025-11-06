@@ -13,6 +13,7 @@ thiserror = "2.0.17"
 clap = { version = "4.5.51", features = ["derive"] }
 webpki-roots = "1.0.4"
 rustls-pemfile = "2.2.0"
+anyhow = "1.0.100"
 
 [dev-dependencies]
 rcgen = "0.14.5"
