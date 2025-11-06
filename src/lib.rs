@@ -211,7 +211,7 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         .await
     }
 
-    pub async fn new_with_tls_config(
+    async fn new_with_tls_config(
         client_config: Arc<ClientConfig>,
         local: impl ToSocketAddrs,
         target: SocketAddr,
