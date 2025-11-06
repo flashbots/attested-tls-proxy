@@ -216,6 +216,10 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         local_attestation_platform: L,
         remote_attestation_platform: R,
     ) -> Self {
+        if local_attestation_platform.is_cvm() && cert_and_key.is_none() {
+            panic!("Client auth is required when the client is running in a CVM");
+        }
+
         let root_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
         let client_config = if let Some(ref cert_and_key) = cert_and_key {
