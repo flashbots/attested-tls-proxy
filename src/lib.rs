@@ -1,11 +1,14 @@
 mod attestation;
 
+use attestation::AttestationError;
 pub use attestation::{AttestationPlatform, MockAttestation, NoAttestation};
-use tokio_rustls::rustls::server::WebPkiClientVerifier;
+use thiserror::Error;
+use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 
 #[cfg(test)]
 mod test_helpers;
 
+use std::num::TryFromIntError;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -60,26 +63,23 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
         local_attestation_platform: L,
         remote_attestation_platform: R,
         client_auth: bool,
-    ) -> Self {
+    ) -> Result<Self, ProxyError> {
         if remote_attestation_platform.is_cvm() && !client_auth {
-            panic!("Client auth is required when the client is running in a CVM");
+            return Err(ProxyError::NoClientAuth);
         }
 
         let server_config = if client_auth {
             let root_store =
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let verifier = WebPkiClientVerifier::builder(Arc::new(root_store))
-                .build()
-                .expect("invalid client verifier");
+            let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
+
             ServerConfig::builder()
                 .with_client_cert_verifier(verifier)
-                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)
-                .expect("Failed to create rustls server config")
+                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         } else {
             ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)
-                .expect("Failed to create rustls server config")
+                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         };
 
         Self::new_with_tls_config(
@@ -103,26 +103,27 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
         target: SocketAddr,
         local_attestation_platform: L,
         remote_attestation_platform: R,
-    ) -> Self {
+    ) -> Result<Self, ProxyError> {
         let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
-        let listener = TcpListener::bind(local).await.unwrap();
+        let listener = TcpListener::bind(local).await?;
 
         let inner = Proxy {
             listener,
             local_attestation_platform,
             remote_attestation_platform,
         };
-        Self {
+
+        Ok(Self {
             acceptor,
             target,
             inner,
             cert_chain,
-        }
+        })
     }
 
     /// Accept an incoming connection
-    pub async fn accept(&self) -> io::Result<()> {
-        let (inbound, _client_addr) = self.inner.listener.accept().await.unwrap();
+    pub async fn accept(&self) -> Result<(), ProxyError> {
+        let (inbound, _client_addr) = self.inner.listener.accept().await?;
 
         let acceptor = self.acceptor.clone();
         let target = self.target;
@@ -130,58 +131,18 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
         let local_attestation_platform = self.inner.local_attestation_platform.clone();
         let remote_attestation_platform = self.inner.remote_attestation_platform.clone();
         tokio::spawn(async move {
-            let mut tls_stream = acceptor.accept(inbound).await.unwrap();
-            let (_io, connection) = tls_stream.get_ref();
-
-            let mut exporter = [0u8; 32];
-            connection
-                .export_keying_material(
-                    &mut exporter,
-                    EXPORTER_LABEL,
-                    None, // context
-                )
-                .unwrap();
-
-            let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
-
-            let attestation = if local_attestation_platform.is_cvm() {
-                local_attestation_platform
-                    .create_attestation(&cert_chain, exporter)
-                    .unwrap()
-            } else {
-                Vec::new()
-            };
-
-            let attestation_length_prefix = length_prefix(&attestation);
-
-            tls_stream
-                .write_all(&attestation_length_prefix)
-                .await
-                .unwrap();
-
-            tls_stream.write_all(&attestation).await.unwrap();
-
-            let mut length_bytes = [0; 4];
-            tls_stream.read_exact(&mut length_bytes).await.unwrap();
-            let length: usize = u32::from_be_bytes(length_bytes).try_into().unwrap();
-
-            let mut buf = vec![0; length];
-            tls_stream.read_exact(&mut buf).await.unwrap();
-
-            if remote_attestation_platform.is_cvm() {
-                remote_attestation_platform
-                    .verify_attestation(buf, &remote_cert_chain.unwrap(), exporter)
-                    .unwrap();
+            if let Err(err) = Self::handle_connection(
+                inbound,
+                acceptor,
+                target,
+                cert_chain,
+                local_attestation_platform,
+                remote_attestation_platform,
+            )
+            .await
+            {
+                eprintln!("Failed to handle connection: {err}");
             }
-
-            let outbound = TcpStream::connect(target).await.unwrap();
-
-            let (mut inbound_reader, mut inbound_writer) = tokio::io::split(tls_stream);
-            let (mut outbound_reader, mut outbound_writer) = outbound.into_split();
-
-            let client_to_server = tokio::io::copy(&mut inbound_reader, &mut outbound_writer);
-            let server_to_client = tokio::io::copy(&mut outbound_reader, &mut inbound_writer);
-            tokio::try_join!(client_to_server, server_to_client).unwrap();
         });
 
         Ok(())
@@ -189,6 +150,64 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
 
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.inner.listener.local_addr()
+    }
+
+    async fn handle_connection(
+        inbound: TcpStream,
+        acceptor: TlsAcceptor,
+        target: SocketAddr,
+        cert_chain: Vec<CertificateDer<'static>>,
+        local_attestation_platform: L,
+        remote_attestation_platform: R,
+    ) -> Result<(), ProxyError> {
+        let mut tls_stream = acceptor.accept(inbound).await?;
+        let (_io, connection) = tls_stream.get_ref();
+
+        let mut exporter = [0u8; 32];
+        connection.export_keying_material(
+            &mut exporter,
+            EXPORTER_LABEL,
+            None, // context
+        )?;
+
+        let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
+
+        let attestation = if local_attestation_platform.is_cvm() {
+            local_attestation_platform.create_attestation(&cert_chain, exporter)?
+        } else {
+            Vec::new()
+        };
+
+        let attestation_length_prefix = length_prefix(&attestation);
+
+        tls_stream.write_all(&attestation_length_prefix).await?;
+
+        tls_stream.write_all(&attestation).await?;
+
+        let mut length_bytes = [0; 4];
+        tls_stream.read_exact(&mut length_bytes).await?;
+        let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
+
+        let mut buf = vec![0; length];
+        tls_stream.read_exact(&mut buf).await?;
+
+        if remote_attestation_platform.is_cvm() {
+            remote_attestation_platform.verify_attestation(
+                buf,
+                &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
+                exporter,
+            )?;
+        }
+
+        let outbound = TcpStream::connect(target).await?;
+
+        let (mut inbound_reader, mut inbound_writer) = tokio::io::split(tls_stream);
+        let (mut outbound_reader, mut outbound_writer) = outbound.into_split();
+
+        let client_to_server = tokio::io::copy(&mut inbound_reader, &mut outbound_writer);
+        let server_to_client = tokio::io::copy(&mut outbound_reader, &mut inbound_writer);
+        tokio::try_join!(client_to_server, server_to_client)?;
+        Ok(())
     }
 }
 
@@ -215,9 +234,9 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         server_name: ServerName<'static>,
         local_attestation_platform: L,
         remote_attestation_platform: R,
-    ) -> Self {
+    ) -> Result<Self, ProxyError> {
         if local_attestation_platform.is_cvm() && cert_and_key.is_none() {
-            panic!("Client auth is required when the client is running in a CVM");
+            return Err(ProxyError::NoClientAuth);
         }
 
         let root_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -228,8 +247,7 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
                 .with_client_auth_cert(
                     cert_and_key.cert_chain.clone(),
                     cert_and_key.key.clone_key(),
-                )
-                .unwrap()
+                )?
         } else {
             ClientConfig::builder()
                 .with_root_certificates(root_store)
@@ -248,6 +266,9 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         .await
     }
 
+    /// Create a new proxy with given TLS configuration
+    ///
+    /// This is private as it allows dangerous configuration but is used in tests
     async fn new_with_tls_config(
         client_config: Arc<ClientConfig>,
         local: impl ToSocketAddrs,
@@ -256,8 +277,8 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         local_attestation_platform: L,
         remote_attestation_platform: R,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
-    ) -> Self {
-        let listener = TcpListener::bind(local).await.unwrap();
+    ) -> Result<Self, ProxyError> {
+        let listener = TcpListener::bind(local).await?;
         let connector = TlsConnector::from(client_config.clone());
 
         let inner = Proxy {
@@ -266,17 +287,18 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
             remote_attestation_platform,
         };
 
-        Self {
+        Ok(Self {
             inner,
             connector,
             target,
             target_name,
             cert_chain,
-        }
+        })
     }
 
+    /// Accept an incoming connection and handle it
     pub async fn accept(&self) -> io::Result<()> {
-        let (inbound, _client_addr) = self.inner.listener.accept().await.unwrap();
+        let (inbound, _client_addr) = self.inner.listener.accept().await?;
 
         let connector = self.connector.clone();
         let target_name = self.target_name.clone();
@@ -286,68 +308,110 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         let cert_chain = self.cert_chain.clone();
 
         tokio::spawn(async move {
-            let out = TcpStream::connect(target).await.unwrap();
-            let mut tls_stream = connector.connect(target_name, out).await.unwrap();
-
-            let (_io, server_connection) = tls_stream.get_ref();
-
-            let mut exporter = [0u8; 32];
-            server_connection
-                .export_keying_material(
-                    &mut exporter,
-                    EXPORTER_LABEL,
-                    None, // context
-                )
-                .unwrap();
-
-            let remote_cert_chain = server_connection.peer_certificates().unwrap().to_owned();
-
-            let mut length_bytes = [0; 4];
-            tls_stream.read_exact(&mut length_bytes).await.unwrap();
-            let length: usize = u32::from_be_bytes(length_bytes).try_into().unwrap();
-
-            let mut buf = vec![0; length];
-            tls_stream.read_exact(&mut buf).await.unwrap();
-
-            if remote_attestation_platform.is_cvm() {
-                remote_attestation_platform
-                    .verify_attestation(buf, &remote_cert_chain, exporter)
-                    .unwrap();
+            if let Err(err) = Self::handle_connection(
+                inbound,
+                connector,
+                target,
+                target_name,
+                cert_chain,
+                local_attestation_platform,
+                remote_attestation_platform,
+            )
+            .await
+            {
+                eprintln!("Failed to handle connection: {err}");
             }
-
-            let attestation = if local_attestation_platform.is_cvm() {
-                local_attestation_platform
-                    .create_attestation(&cert_chain.unwrap(), exporter)
-                    .unwrap()
-            } else {
-                Vec::new()
-            };
-
-            let attestation_length_prefix = length_prefix(&attestation);
-
-            tls_stream
-                .write_all(&attestation_length_prefix)
-                .await
-                .unwrap();
-
-            tls_stream.write_all(&attestation).await.unwrap();
-
-            let (mut inbound_reader, mut inbound_writer) = inbound.into_split();
-            let (mut outbound_reader, mut outbound_writer) = tokio::io::split(tls_stream);
-
-            let client_to_server = tokio::io::copy(&mut inbound_reader, &mut outbound_writer);
-            let server_to_client = tokio::io::copy(&mut outbound_reader, &mut inbound_writer);
-            tokio::try_join!(client_to_server, server_to_client).unwrap();
         });
 
         Ok(())
     }
 
+    /// Helper to return the local socket address from the underlying TCP listener
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.inner.listener.local_addr()
     }
+
+    /// Handle an incoming connection
+    async fn handle_connection(
+        inbound: TcpStream,
+        connector: TlsConnector,
+        target: SocketAddr,
+        target_name: ServerName<'static>,
+        cert_chain: Option<Vec<CertificateDer<'static>>>,
+        local_attestation_platform: L,
+        remote_attestation_platform: R,
+    ) -> Result<(), ProxyError> {
+        let out = TcpStream::connect(target).await?;
+        let mut tls_stream = connector.connect(target_name, out).await?;
+
+        let (_io, server_connection) = tls_stream.get_ref();
+
+        let mut exporter = [0u8; 32];
+        server_connection.export_keying_material(
+            &mut exporter,
+            EXPORTER_LABEL,
+            None, // context
+        )?;
+
+        let remote_cert_chain = server_connection
+            .peer_certificates()
+            .ok_or(ProxyError::NoCertificate)?
+            .to_owned();
+
+        let mut length_bytes = [0; 4];
+        tls_stream.read_exact(&mut length_bytes).await?;
+        let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
+
+        let mut buf = vec![0; length];
+        tls_stream.read_exact(&mut buf).await?;
+
+        if remote_attestation_platform.is_cvm() {
+            remote_attestation_platform.verify_attestation(buf, &remote_cert_chain, exporter)?;
+        }
+
+        let attestation = if local_attestation_platform.is_cvm() {
+            local_attestation_platform
+                .create_attestation(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?
+        } else {
+            Vec::new()
+        };
+
+        let attestation_length_prefix = length_prefix(&attestation);
+
+        tls_stream.write_all(&attestation_length_prefix).await?;
+
+        tls_stream.write_all(&attestation).await?;
+
+        let (mut inbound_reader, mut inbound_writer) = inbound.into_split();
+        let (mut outbound_reader, mut outbound_writer) = tokio::io::split(tls_stream);
+
+        let client_to_server = tokio::io::copy(&mut inbound_reader, &mut outbound_writer);
+        let server_to_client = tokio::io::copy(&mut outbound_reader, &mut inbound_writer);
+        tokio::try_join!(client_to_server, server_to_client)?;
+        Ok(())
+    }
 }
 
+/// An error when running a proxy client or server
+#[derive(Error, Debug)]
+pub enum ProxyError {
+    #[error("Client auth is required when the client is running in a CVM")]
+    NoClientAuth,
+    #[error("Failed to get server ceritifcate")]
+    NoCertificate,
+    #[error("TLS: {0}")]
+    Rustls(#[from] tokio_rustls::rustls::Error),
+    #[error("Verifier builder: {0}")]
+    VerifierBuilder(#[from] VerifierBuilderError),
+    #[error("IO: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Attestation: {0}")]
+    Attestation(#[from] AttestationError),
+    #[error("Integer conversion: {0}")]
+    IntConversion(#[from] TryFromIntError),
+}
+
+/// Given a byte array, encode its length as a 4 byte big endian u32
 fn length_prefix(input: &[u8]) -> [u8; 4] {
     let len = input.len() as u32;
     len.to_be_bytes()
@@ -377,7 +441,9 @@ mod tests {
             MockAttestation,
             NoAttestation,
         )
-        .await;
+        .await
+        .unwrap();
+
         let proxy_addr = proxy_server.local_addr().unwrap();
 
         tokio::spawn(async move {
@@ -393,7 +459,8 @@ mod tests {
             MockAttestation,
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
@@ -439,7 +506,9 @@ mod tests {
             MockAttestation,
             MockAttestation,
         )
-        .await;
+        .await
+        .unwrap();
+
         let proxy_addr = proxy_server.local_addr().unwrap();
 
         tokio::spawn(async move {
@@ -455,7 +524,8 @@ mod tests {
             MockAttestation,
             Some(client_cert_chain),
         )
-        .await;
+        .await
+        .unwrap();
 
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
@@ -491,7 +561,9 @@ mod tests {
             local_attestation_platform,
             NoAttestation,
         )
-        .await;
+        .await
+        .unwrap();
+
         let proxy_server_addr = proxy_server.local_addr().unwrap();
 
         tokio::spawn(async move {
@@ -507,7 +579,9 @@ mod tests {
             MockAttestation,
             None,
         )
-        .await;
+        .await
+        .unwrap();
+
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
         tokio::spawn(async move {
