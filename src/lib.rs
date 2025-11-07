@@ -392,6 +392,64 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
     }
 }
 
+/// Just get the attested remote certificate, with no client authentication
+pub async fn get_tls_cert<R: AttestationPlatform>(
+    server_address: SocketAddr,
+    server_name: ServerName<'static>,
+    remote_attestation_platform: R,
+) -> Result<Vec<CertificateDer<'static>>, ProxyError> {
+    let root_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let client_config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    get_tls_cert_with_config(
+        server_address,
+        server_name,
+        remote_attestation_platform,
+        client_config.into(),
+    )
+    .await
+}
+
+async fn get_tls_cert_with_config<R: AttestationPlatform>(
+    server_address: SocketAddr,
+    server_name: ServerName<'static>,
+    remote_attestation_platform: R,
+    client_config: Arc<ClientConfig>,
+) -> Result<Vec<CertificateDer<'static>>, ProxyError> {
+    let connector = TlsConnector::from(client_config);
+
+    let out = TcpStream::connect(server_address).await?;
+    let mut tls_stream = connector.connect(server_name, out).await?;
+
+    let (_io, server_connection) = tls_stream.get_ref();
+
+    let mut exporter = [0u8; 32];
+    server_connection.export_keying_material(
+        &mut exporter,
+        EXPORTER_LABEL,
+        None, // context
+    )?;
+
+    let remote_cert_chain = server_connection
+        .peer_certificates()
+        .ok_or(ProxyError::NoCertificate)?
+        .to_owned();
+
+    let mut length_bytes = [0; 4];
+    tls_stream.read_exact(&mut length_bytes).await?;
+    let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
+
+    let mut buf = vec![0; length];
+    tls_stream.read_exact(&mut buf).await?;
+
+    if remote_attestation_platform.is_cvm() {
+        remote_attestation_platform.verify_attestation(buf, &remote_cert_chain, exporter)?;
+    }
+
+    Ok(remote_cert_chain)
+}
+
 /// An error when running a proxy client or server
 #[derive(Error, Debug)]
 pub enum ProxyError {
@@ -594,5 +652,44 @@ mod tests {
         out.read(&mut buf).await.unwrap();
 
         assert_eq!(buf[..], b"some data"[..]);
+    }
+
+    #[tokio::test]
+    async fn test_get_tls_cert() {
+        let target_addr = example_service().await;
+        let target_name = "name".to_string();
+
+        let (cert_chain, private_key) = generate_certificate_chain(target_name.clone());
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+
+        let local_attestation_platform = MockAttestation;
+
+        let proxy_server = ProxyServer::new_with_tls_config(
+            cert_chain.clone(),
+            server_config,
+            "127.0.0.1:0",
+            target_addr,
+            local_attestation_platform,
+            NoAttestation,
+        )
+        .await
+        .unwrap();
+
+        let proxy_server_addr = proxy_server.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let retrieved_chain = get_tls_cert_with_config(
+            proxy_server_addr,
+            target_name.try_into().unwrap(),
+            MockAttestation,
+            client_config,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(retrieved_chain, cert_chain);
     }
 }

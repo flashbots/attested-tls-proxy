@@ -3,22 +3,24 @@ use clap::{Parser, Subcommand};
 use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
-use attested_tls_proxy::{MockAttestation, NoAttestation, ProxyClient, ProxyServer, TlsCertAndKey};
+use attested_tls_proxy::{
+    get_tls_cert, MockAttestation, NoAttestation, ProxyClient, ProxyServer, TlsCertAndKey,
+};
 
 #[derive(Parser, Debug, Clone)]
 #[clap(version, about, long_about = None)]
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
-    /// Socket address to listen on
-    #[arg(short, long)]
-    address: SocketAddr,
 }
 
 #[derive(Subcommand, Debug, Clone)]
 enum CliCommand {
     /// Run a proxy client
     Client {
+        /// Socket address to listen on
+        #[arg(short, long)]
+        address: SocketAddr,
         /// The socket address of the proxy server
         #[arg(short, long)]
         server_address: SocketAddr,
@@ -34,6 +36,9 @@ enum CliCommand {
     },
     /// Run a proxy server
     Server {
+        /// Socket address to listen on
+        #[arg(short, long)]
+        address: SocketAddr,
         /// Socket address of the target service to forward traffic to
         #[arg(short, long)]
         target_address: SocketAddr,
@@ -48,6 +53,15 @@ enum CliCommand {
         #[arg(long)]
         client_auth: bool,
     },
+    /// Retrieve the attested TLS certificate from a proxy server
+    GetTlsCert {
+        /// The socket address of the proxy server
+        #[arg(short, long)]
+        server_address: SocketAddr,
+        /// The domain name of the proxy server
+        #[arg(long)]
+        server_name: String,
+    },
 }
 
 #[tokio::main]
@@ -56,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         CliCommand::Client {
+            address,
             server_name,
             server_address,
             private_key,
@@ -76,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
 
             let client = ProxyClient::new(
                 tls_cert_and_chain,
-                cli.address,
+                address,
                 server_address,
                 server_name.try_into()?,
                 NoAttestation,
@@ -91,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         CliCommand::Server {
+            address,
             target_address,
             private_key,
             cert_chain,
@@ -102,7 +118,7 @@ async fn main() -> anyhow::Result<()> {
 
             let server = ProxyServer::new(
                 tls_cert_and_chain,
-                cli.address,
+                address,
                 target_address,
                 local_attestation,
                 remote_attestation,
@@ -116,7 +132,17 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        CliCommand::GetTlsCert {
+            server_address,
+            server_name,
+        } => {
+            let cert_chain =
+                get_tls_cert(server_address, server_name.try_into()?, MockAttestation).await?;
+            println!("{}", certs_to_pem_string(&cert_chain)?);
+        }
     }
+
+    Ok(())
 }
 
 /// Load TLS details from storage
@@ -129,12 +155,12 @@ fn load_tls_cert_and_key(
     Ok(TlsCertAndKey { key, cert_chain })
 }
 
-pub fn load_certs_pem(path: PathBuf) -> std::io::Result<Vec<CertificateDer<'static>>> {
+fn load_certs_pem(path: PathBuf) -> std::io::Result<Vec<CertificateDer<'static>>> {
     rustls_pemfile::certs(&mut std::io::BufReader::new(File::open(path)?))
         .collect::<Result<Vec<_>, _>>()
 }
 
-pub fn load_private_key_pem(path: PathBuf) -> anyhow::Result<PrivateKeyDer<'static>> {
+fn load_private_key_pem(path: PathBuf) -> anyhow::Result<PrivateKeyDer<'static>> {
     let mut reader = std::io::BufReader::new(File::open(path)?);
 
     // Tries to read the key as PKCS#8, PKCS#1, or SEC1
@@ -143,4 +169,16 @@ pub fn load_private_key_pem(path: PathBuf) -> anyhow::Result<PrivateKeyDer<'stat
         .ok_or(anyhow!("No PKS8 Key"))??;
 
     Ok(PrivateKeyDer::Pkcs8(pks8_key))
+}
+
+/// Given a certificate chain, convert it to a PEM encoded string
+fn certs_to_pem_string(certs: &[CertificateDer<'_>]) -> Result<String, pem_rfc7468::Error> {
+    let mut out = String::new();
+    for cert in certs {
+        let block =
+            pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, cert.as_ref())?;
+        out.push_str(&block);
+        out.push('\n');
+    }
+    Ok(out)
 }
