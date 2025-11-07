@@ -1,5 +1,7 @@
-use rcgen::generate_simple_self_signed;
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio_rustls::rustls::{
@@ -10,16 +12,19 @@ use tokio_rustls::rustls::{
 
 /// Helper to generate a self-signed certificate for testing
 pub fn generate_certificate_chain(
-    name: String,
+    ip: IpAddr,
 ) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
-    let subject_alt_names = vec![name];
-    let cert_key = generate_simple_self_signed(subject_alt_names)
-        .expect("Failed to generate self-signed certificate");
+    let mut params = rcgen::CertificateParams::new(vec![]).unwrap();
+    params.subject_alt_names.push(rcgen::SanType::IpAddress(ip));
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, ip.to_string());
 
-    let certs = vec![CertificateDer::from(cert_key.cert)];
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-        cert_key.signing_key.serialize_der(),
-    ));
+    let keypair = rcgen::KeyPair::generate().unwrap();
+    let cert = params.self_signed(&keypair).unwrap();
+
+    let certs = vec![CertificateDer::from(cert)];
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(keypair.serialize_der()));
     (certs, key)
 }
 

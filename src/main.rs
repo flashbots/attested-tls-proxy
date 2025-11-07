@@ -19,14 +19,10 @@ enum CliCommand {
     /// Run a proxy client
     Client {
         /// Socket address to listen on
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "0.0.0.0:0")]
         address: SocketAddr,
-        /// The socket address of the proxy server
-        #[arg(short, long)]
-        server_address: SocketAddr,
-        /// The domain name of the proxy server
-        #[arg(long)]
-        server_name: String,
+        /// The hostname:port or ip:port of the proxy server (port defaults to 443)
+        server: String,
         /// The path to a PEM encoded private key for client authentication
         #[arg(long)]
         private_key: Option<PathBuf>,
@@ -37,10 +33,9 @@ enum CliCommand {
     /// Run a proxy server
     Server {
         /// Socket address to listen on
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "0.0.0.0:0")]
         address: SocketAddr,
         /// Socket address of the target service to forward traffic to
-        #[arg(short, long)]
         target_address: SocketAddr,
         /// The path to a PEM encoded private key
         #[arg(long)]
@@ -55,12 +50,8 @@ enum CliCommand {
     },
     /// Retrieve the attested TLS certificate from a proxy server
     GetTlsCert {
-        /// The socket address of the proxy server
-        #[arg(short, long)]
-        server_address: SocketAddr,
-        /// The domain name of the proxy server
-        #[arg(long)]
-        server_name: String,
+        /// The hostname:port or ip:port of the proxy server (port defaults to 443)
+        server: String,
     },
 }
 
@@ -71,8 +62,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         CliCommand::Client {
             address,
-            server_name,
-            server_address,
+            server,
             private_key,
             cert_chain,
         } => {
@@ -92,8 +82,7 @@ async fn main() -> anyhow::Result<()> {
             let client = ProxyClient::new(
                 tls_cert_and_chain,
                 address,
-                server_address,
-                server_name.try_into()?,
+                server,
                 NoAttestation,
                 MockAttestation,
             )
@@ -132,12 +121,8 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        CliCommand::GetTlsCert {
-            server_address,
-            server_name,
-        } => {
-            let cert_chain =
-                get_tls_cert(server_address, server_name.try_into()?, MockAttestation).await?;
+        CliCommand::GetTlsCert { server } => {
+            let cert_chain = get_tls_cert(server, MockAttestation).await?;
             println!("{}", certs_to_pem_string(&cert_chain)?);
         }
     }
