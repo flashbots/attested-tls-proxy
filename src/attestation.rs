@@ -5,14 +5,19 @@ use x509_parser::prelude::*;
 
 /// Represents a CVM technology with quote generation and verification
 pub trait AttestationPlatform: Clone + Send + 'static {
+    /// Whether this is CVM attestation. This should always return true except for the [NoAttestation] case.
+    ///
+    /// When false, allows TLS client to be configured without client authentication
     fn is_cvm(&self) -> bool;
 
+    /// Generate an attestation
     fn create_attestation(
         &self,
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
     ) -> Result<Vec<u8>, AttestationError>;
 
+    /// Verify the given attestation payload
     fn verify_attestation(
         &self,
         input: Vec<u8>,
@@ -71,7 +76,7 @@ impl AttestationPlatform for NoAttestation {
         false
     }
 
-    /// Mocks creating an attestation
+    /// Create an empty attestation
     fn create_attestation(
         &self,
         _cert_chain: &[CertificateDer<'_>],
@@ -80,7 +85,7 @@ impl AttestationPlatform for NoAttestation {
         Ok(Vec::new())
     }
 
-    /// Mocks verifying an attestation
+    /// Ensure that an empty attestation is given
     fn verify_attestation(
         &self,
         input: Vec<u8>,

@@ -266,6 +266,9 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         .await
     }
 
+    /// Create a new proxy with given TLS configuration
+    ///
+    /// This is private as it allows dangerous configuration but is used in tests
     async fn new_with_tls_config(
         client_config: Arc<ClientConfig>,
         local: impl ToSocketAddrs,
@@ -293,6 +296,7 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         })
     }
 
+    /// Accept an incoming connection and handle it
     pub async fn accept(&self) -> io::Result<()> {
         let (inbound, _client_addr) = self.inner.listener.accept().await?;
 
@@ -322,10 +326,12 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         Ok(())
     }
 
+    /// Helper to return the local socket address from the underlying TCP listener
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.inner.listener.local_addr()
     }
 
+    /// Handle an incoming connection
     async fn handle_connection(
         inbound: TcpStream,
         connector: TlsConnector,
@@ -386,6 +392,7 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
     }
 }
 
+/// An error when running a proxy client or server
 #[derive(Error, Debug)]
 pub enum ProxyError {
     #[error("Client auth is required when the client is running in a CVM")]
@@ -404,6 +411,7 @@ pub enum ProxyError {
     IntConversion(#[from] TryFromIntError),
 }
 
+/// Given a byte array, encode its length as a 4 byte big endian u32
 fn length_prefix(input: &[u8]) -> [u8; 4] {
     let len = input.len() as u32;
     len.to_be_bytes()

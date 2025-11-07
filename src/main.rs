@@ -19,8 +19,10 @@ struct Cli {
 enum CliCommand {
     /// Run a proxy client
     Client {
+        /// The socket address of the proxy server
         #[arg(short, long)]
         server_address: SocketAddr,
+        /// The domain name of the proxy server
         #[arg(long)]
         server_name: String,
         /// The path to a PEM encoded private key for client authentication
@@ -41,6 +43,8 @@ enum CliCommand {
         /// The path to a PEM encoded certificate chain
         #[arg(long)]
         cert_chain: PathBuf,
+        /// Whether to use client authentication. If the client is running in a CVM this must be
+        /// enabled.
         #[arg(long)]
         client_auth: bool,
     },
@@ -115,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Load TLS details from storage
 fn load_tls_cert_and_key(
     cert_chain: PathBuf,
     private_key: PathBuf,
