@@ -1,4 +1,4 @@
-mod attestation;
+pub mod attestation;
 
 use attestation::AttestationError;
 pub use attestation::{
@@ -501,6 +501,8 @@ fn server_name_from_host(
 
 #[cfg(test)]
 mod tests {
+    use crate::attestation::CvmImageMeasurements;
+
     use super::*;
     use test_helpers::{
         example_http_service, example_service, generate_certificate_chain, generate_tls_config,
@@ -527,6 +529,15 @@ mod tests {
 
         let proxy_addr = proxy_server.local_addr().unwrap();
 
+        let quote_verifier = DcapTdxQuoteVerifier {
+            accepted_platform_measurements: None,
+            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
+                rtmr1: [0u8; 48],
+                rtmr2: [0u8; 48],
+                rtmr3: [0u8; 48],
+            }],
+        };
+
         tokio::spawn(async move {
             proxy_server.accept().await.unwrap();
         });
@@ -536,7 +547,7 @@ mod tests {
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
             NoQuoteGenerator,
-            DcapTdxQuoteVerifier,
+            quote_verifier,
             None,
         )
         .await
@@ -577,13 +588,22 @@ mod tests {
             server_private_key,
         );
 
+        let quote_verifier = DcapTdxQuoteVerifier {
+            accepted_platform_measurements: None,
+            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
+                rtmr1: [0u8; 48],
+                rtmr2: [0u8; 48],
+                rtmr3: [0u8; 48],
+            }],
+        };
+
         let proxy_server = ProxyServer::new_with_tls_config(
             server_cert_chain,
             server_tls_server_config,
             "127.0.0.1:0",
             target_addr,
             DcapTdxQuoteGenerator,
-            DcapTdxQuoteVerifier,
+            quote_verifier.clone(),
         )
         .await
         .unwrap();
@@ -599,7 +619,7 @@ mod tests {
             "127.0.0.1:0",
             proxy_addr.to_string(),
             DcapTdxQuoteGenerator,
-            DcapTdxQuoteVerifier,
+            quote_verifier,
             Some(client_cert_chain),
         )
         .await
@@ -645,12 +665,21 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let quote_verifier = DcapTdxQuoteVerifier {
+            accepted_platform_measurements: None,
+            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
+                rtmr1: [0u8; 48],
+                rtmr2: [0u8; 48],
+                rtmr3: [0u8; 48],
+            }],
+        };
+
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0",
             proxy_server_addr.to_string(),
             NoQuoteGenerator,
-            DcapTdxQuoteVerifier,
+            quote_verifier,
             None,
         )
         .await
@@ -694,13 +723,19 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
-        let retrieved_chain = get_tls_cert_with_config(
-            proxy_server_addr.to_string(),
-            DcapTdxQuoteVerifier,
-            client_config,
-        )
-        .await
-        .unwrap();
+        let quote_verifier = DcapTdxQuoteVerifier {
+            accepted_platform_measurements: None,
+            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
+                rtmr1: [0u8; 48],
+                rtmr2: [0u8; 48],
+                rtmr3: [0u8; 48],
+            }],
+        };
+
+        let retrieved_chain =
+            get_tls_cert_with_config(proxy_server_addr.to_string(), quote_verifier, client_config)
+                .await
+                .unwrap();
 
         assert_eq!(retrieved_chain, cert_chain);
     }

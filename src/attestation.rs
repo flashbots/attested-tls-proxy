@@ -39,29 +39,6 @@ pub trait QuoteVerifier: Clone + Send + 'static {
     ) -> impl Future<Output = Result<(), AttestationError>> + Send;
 }
 
-// /// Represents a CVM technology with quote generation and verification
-// pub trait AttestationPlatform: Clone + Send + 'static {
-//     /// Whether this is CVM attestation. This should always return true except for the [NoAttestation] case.
-//     ///
-//     /// When false, allows TLS client to be configured without client authentication
-//     fn is_cvm(&self) -> bool;
-//
-//     /// Generate an attestation
-//     fn create_attestation(
-//         &self,
-//         cert_chain: &[CertificateDer<'_>],
-//         exporter: [u8; 32],
-//     ) -> Result<Vec<u8>, AttestationError>;
-//
-//     /// Verify the given attestation payload
-//     fn verify_attestation(
-//         &self,
-//         input: Vec<u8>,
-//         cert_chain: &[CertificateDer<'_>],
-//         exporter: [u8; 32],
-//     ) -> impl Future<Output = Result<(), AttestationError>> + Send;
-// }
-
 #[derive(Clone)]
 pub struct DcapTdxQuoteGenerator;
 
@@ -81,8 +58,73 @@ impl QuoteGenerator for DcapTdxQuoteGenerator {
     }
 }
 
+/// Measurements determined by the CVM platform
+#[derive(Clone, PartialEq)]
+pub struct PlatformMeasurements {
+    pub mrtd: [u8; 48],
+    pub rtmr0: [u8; 48],
+}
+
+impl PlatformMeasurements {
+    fn from_dcap_qvl_quote(quote: &dcap_qvl::quote::Quote) -> Result<Self, AttestationError> {
+        let report = match quote.report {
+            Report::TD10(report) => report,
+            Report::TD15(report) => report.base,
+            Report::SgxEnclave(_) => {
+                return Err(AttestationError::SgxNotSupported);
+            }
+        };
+        Ok(Self {
+            mrtd: report.mr_td,
+            rtmr0: report.rt_mr0,
+        })
+    }
+
+    fn from_tdx_quote(quote: &tdx_quote::Quote) -> Self {
+        Self {
+            mrtd: quote.mrtd(),
+            rtmr0: quote.rtmr0(),
+        }
+    }
+}
+
+/// Measurements determined by the CVM image
+#[derive(Clone, PartialEq)]
+pub struct CvmImageMeasurements {
+    pub rtmr1: [u8; 48],
+    pub rtmr2: [u8; 48],
+    pub rtmr3: [u8; 48],
+}
+
+impl CvmImageMeasurements {
+    fn from_dcap_qvl_quote(quote: &dcap_qvl::quote::Quote) -> Result<Self, AttestationError> {
+        let report = match quote.report {
+            Report::TD10(report) => report,
+            Report::TD15(report) => report.base,
+            Report::SgxEnclave(_) => {
+                return Err(AttestationError::SgxNotSupported);
+            }
+        };
+        Ok(Self {
+            rtmr1: report.rt_mr1,
+            rtmr2: report.rt_mr2,
+            rtmr3: report.rt_mr3,
+        })
+    }
+
+    fn from_tdx_quote(quote: &tdx_quote::Quote) -> Self {
+        Self {
+            rtmr1: quote.rtmr1(),
+            rtmr2: quote.rtmr2(),
+            rtmr3: quote.rtmr3(),
+        }
+    }
+}
 #[derive(Clone)]
-pub struct DcapTdxQuoteVerifier;
+pub struct DcapTdxQuoteVerifier {
+    pub accepted_platform_measurements: Option<Vec<PlatformMeasurements>>,
+    pub accepted_cvm_image_measurements: Vec<CvmImageMeasurements>,
+}
 
 impl QuoteVerifier for DcapTdxQuoteVerifier {
     fn is_cvm(&self) -> bool {
@@ -97,8 +139,7 @@ impl QuoteVerifier for DcapTdxQuoteVerifier {
     ) -> impl Future<Output = Result<(), AttestationError>> + Send {
         async move {
             let quote_input = compute_report_input(cert_chain, exporter)?;
-            // In tests we use mock quotes which will fail to verify
-            if cfg!(not(test)) {
+            let (platform_measurements, image_measurements) = if cfg!(not(test)) {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
@@ -112,16 +153,39 @@ impl QuoteVerifier for DcapTdxQuoteVerifier {
                 let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now).unwrap();
 
                 let quote = Quote::parse(&input).unwrap();
+                let measurements = (
+                    PlatformMeasurements::from_dcap_qvl_quote(&quote)?,
+                    CvmImageMeasurements::from_dcap_qvl_quote(&quote)?,
+                );
                 if get_quote_input_data(quote.report) != quote_input {
                     return Err(AttestationError::InputMismatch);
                 }
+                measurements
             } else {
+                // In tests we use mock quotes which will fail to verify
                 let quote = tdx_quote::Quote::from_bytes(&input).unwrap();
                 if quote.report_input_data() != quote_input {
                     return Err(AttestationError::InputMismatch);
                 }
+
+                (
+                    PlatformMeasurements::from_tdx_quote(&quote),
+                    CvmImageMeasurements::from_tdx_quote(&quote),
+                )
+            };
+
+            if let Some(accepted_platform_measurements) = &self.accepted_platform_measurements {
+                if !accepted_platform_measurements.contains(&platform_measurements) {
+                    panic!("Bad measurements");
+                }
             }
 
+            if !self
+                .accepted_cvm_image_measurements
+                .contains(&image_measurements)
+            {
+                panic!("Bad measurements");
+            }
             Ok(())
         }
     }
@@ -240,4 +304,6 @@ pub enum AttestationError {
     AttestationGivenWhenNoneExpected,
     #[error("Configfs-tsm quote generation: {0}")]
     QuoteGeneration(#[from] configfs_tsm::QuoteGenerationError),
+    #[error("SGX quote given when TDX quote expected")]
+    SgxNotSupported,
 }
