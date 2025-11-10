@@ -1,7 +1,10 @@
 mod attestation;
 
 use attestation::AttestationError;
-pub use attestation::{AttestationPlatform, DcapTdxAttestation, NoAttestation};
+pub use attestation::{
+    DcapTdxQuoteGenerator, DcapTdxQuoteVerifier, NoQuoteGenerator, NoQuoteVerifier, QuoteGenerator,
+    QuoteVerifier,
+};
 use thiserror::Error;
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 
@@ -29,8 +32,8 @@ pub struct TlsCertAndKey {
 
 struct Proxy<L, R>
 where
-    L: AttestationPlatform,
-    R: AttestationPlatform,
+    L: QuoteGenerator,
+    R: QuoteVerifier,
 {
     /// The underlying TCP listener
     listener: TcpListener,
@@ -43,8 +46,8 @@ where
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer<L, R>
 where
-    L: AttestationPlatform,
-    R: AttestationPlatform,
+    L: QuoteGenerator,
+    R: QuoteVerifier,
 {
     inner: Proxy<L, R>,
     /// The certificate chain
@@ -55,7 +58,7 @@ where
     target: SocketAddr,
 }
 
-impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
+impl<L: QuoteGenerator, R: QuoteVerifier> ProxyServer<L, R> {
     pub async fn new(
         cert_and_key: TlsCertAndKey,
         local: impl ToSocketAddrs,
@@ -215,8 +218,8 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
 
 pub struct ProxyClient<L, R>
 where
-    L: AttestationPlatform,
-    R: AttestationPlatform,
+    L: QuoteGenerator,
+    R: QuoteVerifier,
 {
     inner: Proxy<L, R>,
     connector: TlsConnector,
@@ -226,7 +229,7 @@ where
     cert_chain: Option<Vec<CertificateDer<'static>>>,
 }
 
-impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
+impl<L: QuoteGenerator, R: QuoteVerifier> ProxyClient<L, R> {
     pub async fn new(
         cert_and_key: Option<TlsCertAndKey>,
         address: impl ToSocketAddrs,
@@ -390,7 +393,7 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
 }
 
 /// Just get the attested remote certificate, with no client authentication
-pub async fn get_tls_cert<R: AttestationPlatform>(
+pub async fn get_tls_cert<R: QuoteVerifier>(
     server_name: String,
     remote_attestation_platform: R,
 ) -> Result<Vec<CertificateDer<'static>>, ProxyError> {
@@ -406,7 +409,7 @@ pub async fn get_tls_cert<R: AttestationPlatform>(
     .await
 }
 
-async fn get_tls_cert_with_config<R: AttestationPlatform>(
+async fn get_tls_cert_with_config<R: QuoteVerifier>(
     server_name: String,
     remote_attestation_platform: R,
     client_config: Arc<ClientConfig>,
@@ -516,8 +519,8 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            DcapTdxAttestation,
-            NoAttestation,
+            DcapTdxQuoteGenerator,
+            NoQuoteVerifier,
         )
         .await
         .unwrap();
@@ -532,8 +535,8 @@ mod tests {
             client_config,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
-            NoAttestation,
-            DcapTdxAttestation,
+            NoQuoteGenerator,
+            DcapTdxQuoteVerifier,
             None,
         )
         .await
@@ -579,8 +582,8 @@ mod tests {
             server_tls_server_config,
             "127.0.0.1:0",
             target_addr,
-            DcapTdxAttestation,
-            DcapTdxAttestation,
+            DcapTdxQuoteGenerator,
+            DcapTdxQuoteVerifier,
         )
         .await
         .unwrap();
@@ -595,8 +598,8 @@ mod tests {
             client_tls_client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            DcapTdxAttestation,
-            DcapTdxAttestation,
+            DcapTdxQuoteGenerator,
+            DcapTdxQuoteVerifier,
             Some(client_cert_chain),
         )
         .await
@@ -625,15 +628,13 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let local_attestation_platform = DcapTdxAttestation;
-
         let proxy_server = ProxyServer::new_with_tls_config(
             cert_chain,
             server_config,
             "127.0.0.1:0",
             target_addr,
-            local_attestation_platform,
-            NoAttestation,
+            DcapTdxQuoteGenerator,
+            NoQuoteVerifier,
         )
         .await
         .unwrap();
@@ -648,8 +649,8 @@ mod tests {
             client_config,
             "127.0.0.1:0",
             proxy_server_addr.to_string(),
-            NoAttestation,
-            DcapTdxAttestation,
+            NoQuoteGenerator,
+            DcapTdxQuoteVerifier,
             None,
         )
         .await
@@ -676,15 +677,13 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let local_attestation_platform = DcapTdxAttestation;
-
         let proxy_server = ProxyServer::new_with_tls_config(
             cert_chain.clone(),
             server_config,
             "127.0.0.1:0",
             target_addr,
-            local_attestation_platform,
-            NoAttestation,
+            DcapTdxQuoteGenerator,
+            NoQuoteVerifier,
         )
         .await
         .unwrap();
@@ -697,7 +696,7 @@ mod tests {
 
         let retrieved_chain = get_tls_cert_with_config(
             proxy_server_addr.to_string(),
-            DcapTdxAttestation,
+            DcapTdxQuoteVerifier,
             client_config,
         )
         .await

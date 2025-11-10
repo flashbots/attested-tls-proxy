@@ -10,8 +10,7 @@ use x509_parser::prelude::*;
 
 const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
-/// Represents a CVM technology with quote generation and verification
-pub trait AttestationPlatform: Clone + Send + 'static {
+pub trait QuoteGenerator: Clone + Send + 'static {
     /// Whether this is CVM attestation. This should always return true except for the [NoAttestation] case.
     ///
     /// When false, allows TLS client to be configured without client authentication
@@ -23,6 +22,13 @@ pub trait AttestationPlatform: Clone + Send + 'static {
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
     ) -> Result<Vec<u8>, AttestationError>;
+}
+
+pub trait QuoteVerifier: Clone + Send + 'static {
+    /// Whether this is CVM attestation. This should always return true except for the [NoAttestation] case.
+    ///
+    /// When false, allows TLS client to be configured without client authentication
+    fn is_cvm(&self) -> bool;
 
     /// Verify the given attestation payload
     fn verify_attestation(
@@ -33,10 +39,33 @@ pub trait AttestationPlatform: Clone + Send + 'static {
     ) -> impl Future<Output = Result<(), AttestationError>> + Send;
 }
 
-#[derive(Clone)]
-pub struct DcapTdxAttestation;
+// /// Represents a CVM technology with quote generation and verification
+// pub trait AttestationPlatform: Clone + Send + 'static {
+//     /// Whether this is CVM attestation. This should always return true except for the [NoAttestation] case.
+//     ///
+//     /// When false, allows TLS client to be configured without client authentication
+//     fn is_cvm(&self) -> bool;
+//
+//     /// Generate an attestation
+//     fn create_attestation(
+//         &self,
+//         cert_chain: &[CertificateDer<'_>],
+//         exporter: [u8; 32],
+//     ) -> Result<Vec<u8>, AttestationError>;
+//
+//     /// Verify the given attestation payload
+//     fn verify_attestation(
+//         &self,
+//         input: Vec<u8>,
+//         cert_chain: &[CertificateDer<'_>],
+//         exporter: [u8; 32],
+//     ) -> impl Future<Output = Result<(), AttestationError>> + Send;
+// }
 
-impl AttestationPlatform for DcapTdxAttestation {
+#[derive(Clone)]
+pub struct DcapTdxQuoteGenerator;
+
+impl QuoteGenerator for DcapTdxQuoteGenerator {
     fn is_cvm(&self) -> bool {
         true
     }
@@ -50,6 +79,15 @@ impl AttestationPlatform for DcapTdxAttestation {
 
         Ok(generate_quote(quote_input)?)
     }
+}
+
+#[derive(Clone)]
+pub struct DcapTdxQuoteVerifier;
+
+impl QuoteVerifier for DcapTdxQuoteVerifier {
+    fn is_cvm(&self) -> bool {
+        true
+    }
 
     fn verify_attestation(
         &self,
@@ -59,25 +97,29 @@ impl AttestationPlatform for DcapTdxAttestation {
     ) -> impl Future<Output = Result<(), AttestationError>> + Send {
         async move {
             let quote_input = compute_report_input(cert_chain, exporter)?;
-
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            let quote = Quote::parse(&input).unwrap();
-            let ca = quote.ca().unwrap();
-            let fmspc = hex::encode_upper(quote.fmspc().unwrap());
-            let collateral = get_collateral_for_fmspc(PCS_URL, fmspc, ca, false)
-                .await
-                .unwrap();
-
             // In tests we use mock quotes which will fail to verify
             if cfg!(not(test)) {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let quote = Quote::parse(&input).unwrap();
+                let ca = quote.ca().unwrap();
+                let fmspc = hex::encode_upper(quote.fmspc().unwrap());
+                let collateral = get_collateral_for_fmspc(PCS_URL, fmspc, ca, false)
+                    .await
+                    .unwrap();
                 let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now).unwrap();
-            }
-            let quote = Quote::parse(&input).unwrap();
-            if get_quote_input_data(quote.report) != quote_input {
-                return Err(AttestationError::InputMismatch);
+
+                let quote = Quote::parse(&input).unwrap();
+                if get_quote_input_data(quote.report) != quote_input {
+                    return Err(AttestationError::InputMismatch);
+                }
+            } else {
+                let quote = tdx_quote::Quote::from_bytes(&input).unwrap();
+                if quote.report_input_data() != quote_input {
+                    return Err(AttestationError::InputMismatch);
+                }
             }
 
             Ok(())
@@ -109,9 +151,9 @@ pub fn compute_report_input(
 
 /// For no CVM platform (eg: for one-sided remote-attested TLS)
 #[derive(Clone)]
-pub struct NoAttestation;
+pub struct NoQuoteGenerator;
 
-impl AttestationPlatform for NoAttestation {
+impl QuoteGenerator for NoQuoteGenerator {
     fn is_cvm(&self) -> bool {
         false
     }
@@ -124,7 +166,16 @@ impl AttestationPlatform for NoAttestation {
     ) -> Result<Vec<u8>, AttestationError> {
         Ok(Vec::new())
     }
+}
 
+/// For no CVM platform (eg: for one-sided remote-attested TLS)
+#[derive(Clone)]
+pub struct NoQuoteVerifier;
+
+impl QuoteVerifier for NoQuoteVerifier {
+    fn is_cvm(&self) -> bool {
+        false
+    }
     /// Ensure that an empty attestation is given
     async fn verify_attestation(
         &self,
