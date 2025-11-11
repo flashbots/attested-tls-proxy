@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 tokio = { version = "1.48.0", features = ["full"]}
-tokio-rustls = "0.26.4"
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"]}
 sha2 = "0.10.9"
 x509-parser = "0.18.0"
 thiserror = "2.0.17"
@@ -15,6 +15,11 @@ webpki-roots = "1.0.4"
 rustls-pemfile = "2.2.0"
 anyhow = "1.0.100"
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
+tdx-quote = { version = "0.0.4", features = ["mock"] }
+configfs-tsm = "0.0.2"
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+dcap-qvl = "0.3.4"
+hex = "0.4.3"
 
 [dev-dependencies]
 rcgen = "0.14.5"

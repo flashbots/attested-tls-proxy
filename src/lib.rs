@@ -1,7 +1,10 @@
-mod attestation;
+pub mod attestation;
 
 use attestation::AttestationError;
-pub use attestation::{AttestationPlatform, MockAttestation, NoAttestation};
+pub use attestation::{
+    DcapTdxQuoteGenerator, DcapTdxQuoteVerifier, NoQuoteGenerator, NoQuoteVerifier, QuoteGenerator,
+    QuoteVerifier,
+};
 use thiserror::Error;
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 
@@ -29,8 +32,8 @@ pub struct TlsCertAndKey {
 
 struct Proxy<L, R>
 where
-    L: AttestationPlatform,
-    R: AttestationPlatform,
+    L: QuoteGenerator,
+    R: QuoteVerifier,
 {
     /// The underlying TCP listener
     listener: TcpListener,
@@ -43,8 +46,8 @@ where
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer<L, R>
 where
-    L: AttestationPlatform,
-    R: AttestationPlatform,
+    L: QuoteGenerator,
+    R: QuoteVerifier,
 {
     inner: Proxy<L, R>,
     /// The certificate chain
@@ -55,7 +58,7 @@ where
     target: SocketAddr,
 }
 
-impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
+impl<L: QuoteGenerator, R: QuoteVerifier> ProxyServer<L, R> {
     pub async fn new(
         cert_and_key: TlsCertAndKey,
         local: impl ToSocketAddrs,
@@ -192,11 +195,13 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
         tls_stream.read_exact(&mut buf).await?;
 
         if remote_attestation_platform.is_cvm() {
-            remote_attestation_platform.verify_attestation(
-                buf,
-                &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
-                exporter,
-            )?;
+            remote_attestation_platform
+                .verify_attestation(
+                    buf,
+                    &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
+                    exporter,
+                )
+                .await?;
         }
 
         let outbound = TcpStream::connect(target).await?;
@@ -213,8 +218,8 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyServer<L, R> {
 
 pub struct ProxyClient<L, R>
 where
-    L: AttestationPlatform,
-    R: AttestationPlatform,
+    L: QuoteGenerator,
+    R: QuoteVerifier,
 {
     inner: Proxy<L, R>,
     connector: TlsConnector,
@@ -224,7 +229,7 @@ where
     cert_chain: Option<Vec<CertificateDer<'static>>>,
 }
 
-impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
+impl<L: QuoteGenerator, R: QuoteVerifier> ProxyClient<L, R> {
     pub async fn new(
         cert_and_key: Option<TlsCertAndKey>,
         address: impl ToSocketAddrs,
@@ -359,7 +364,9 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
         tls_stream.read_exact(&mut buf).await?;
 
         if remote_attestation_platform.is_cvm() {
-            remote_attestation_platform.verify_attestation(buf, &remote_cert_chain, exporter)?;
+            remote_attestation_platform
+                .verify_attestation(buf, &remote_cert_chain, exporter)
+                .await?;
         }
 
         let attestation = if local_attestation_platform.is_cvm() {
@@ -386,7 +393,7 @@ impl<L: AttestationPlatform, R: AttestationPlatform> ProxyClient<L, R> {
 }
 
 /// Just get the attested remote certificate, with no client authentication
-pub async fn get_tls_cert<R: AttestationPlatform>(
+pub async fn get_tls_cert<R: QuoteVerifier>(
     server_name: String,
     remote_attestation_platform: R,
 ) -> Result<Vec<CertificateDer<'static>>, ProxyError> {
@@ -402,7 +409,7 @@ pub async fn get_tls_cert<R: AttestationPlatform>(
     .await
 }
 
-async fn get_tls_cert_with_config<R: AttestationPlatform>(
+async fn get_tls_cert_with_config<R: QuoteVerifier>(
     server_name: String,
     remote_attestation_platform: R,
     client_config: Arc<ClientConfig>,
@@ -436,7 +443,9 @@ async fn get_tls_cert_with_config<R: AttestationPlatform>(
     tls_stream.read_exact(&mut buf).await?;
 
     if remote_attestation_platform.is_cvm() {
-        remote_attestation_platform.verify_attestation(buf, &remote_cert_chain, exporter)?;
+        remote_attestation_platform
+            .verify_attestation(buf, &remote_cert_chain, exporter)
+            .await?;
     }
 
     Ok(remote_cert_chain)
@@ -492,6 +501,8 @@ fn server_name_from_host(
 
 #[cfg(test)]
 mod tests {
+    use crate::attestation::CvmImageMeasurements;
+
     use super::*;
     use test_helpers::{
         example_http_service, example_service, generate_certificate_chain, generate_tls_config,
@@ -510,13 +521,23 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            MockAttestation,
-            NoAttestation,
+            DcapTdxQuoteGenerator,
+            NoQuoteVerifier,
         )
         .await
         .unwrap();
 
         let proxy_addr = proxy_server.local_addr().unwrap();
+
+        let quote_verifier = DcapTdxQuoteVerifier {
+            accepted_platform_measurements: None,
+            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
+                rtmr1: [0u8; 48],
+                rtmr2: [0u8; 48],
+                rtmr3: [0u8; 48],
+            }],
+            pccs_url: None,
+        };
 
         tokio::spawn(async move {
             proxy_server.accept().await.unwrap();
@@ -526,8 +547,8 @@ mod tests {
             client_config,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
-            NoAttestation,
-            MockAttestation,
+            NoQuoteGenerator,
+            quote_verifier,
             None,
         )
         .await
@@ -568,13 +589,23 @@ mod tests {
             server_private_key,
         );
 
+        let quote_verifier = DcapTdxQuoteVerifier {
+            accepted_platform_measurements: None,
+            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
+                rtmr1: [0u8; 48],
+                rtmr2: [0u8; 48],
+                rtmr3: [0u8; 48],
+            }],
+            pccs_url: None,
+        };
+
         let proxy_server = ProxyServer::new_with_tls_config(
             server_cert_chain,
             server_tls_server_config,
             "127.0.0.1:0",
             target_addr,
-            MockAttestation,
-            MockAttestation,
+            DcapTdxQuoteGenerator,
+            quote_verifier.clone(),
         )
         .await
         .unwrap();
@@ -589,8 +620,8 @@ mod tests {
             client_tls_client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            MockAttestation,
-            MockAttestation,
+            DcapTdxQuoteGenerator,
+            quote_verifier,
             Some(client_cert_chain),
         )
         .await
@@ -619,15 +650,13 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let local_attestation_platform = MockAttestation;
-
         let proxy_server = ProxyServer::new_with_tls_config(
             cert_chain,
             server_config,
             "127.0.0.1:0",
             target_addr,
-            local_attestation_platform,
-            NoAttestation,
+            DcapTdxQuoteGenerator,
+            NoQuoteVerifier,
         )
         .await
         .unwrap();
@@ -638,12 +667,22 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let quote_verifier = DcapTdxQuoteVerifier {
+            accepted_platform_measurements: None,
+            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
+                rtmr1: [0u8; 48],
+                rtmr2: [0u8; 48],
+                rtmr3: [0u8; 48],
+            }],
+            pccs_url: None,
+        };
+
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0",
             proxy_server_addr.to_string(),
-            NoAttestation,
-            MockAttestation,
+            NoQuoteGenerator,
+            quote_verifier,
             None,
         )
         .await
@@ -670,15 +709,13 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let local_attestation_platform = MockAttestation;
-
         let proxy_server = ProxyServer::new_with_tls_config(
             cert_chain.clone(),
             server_config,
             "127.0.0.1:0",
             target_addr,
-            local_attestation_platform,
-            NoAttestation,
+            DcapTdxQuoteGenerator,
+            NoQuoteVerifier,
         )
         .await
         .unwrap();
@@ -689,13 +726,20 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
-        let retrieved_chain = get_tls_cert_with_config(
-            proxy_server_addr.to_string(),
-            MockAttestation,
-            client_config,
-        )
-        .await
-        .unwrap();
+        let quote_verifier = DcapTdxQuoteVerifier {
+            accepted_platform_measurements: None,
+            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
+                rtmr1: [0u8; 48],
+                rtmr2: [0u8; 48],
+                rtmr3: [0u8; 48],
+            }],
+            pccs_url: None,
+        };
+
+        let retrieved_chain =
+            get_tls_cert_with_config(proxy_server_addr.to_string(), quote_verifier, client_config)
+                .await
+                .unwrap();
 
         assert_eq!(retrieved_chain, cert_chain);
     }
