@@ -14,6 +14,8 @@ use x509_parser::prelude::*;
 /// For fetching collateral directly from intel, if no PCCS is specified
 const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
+type Measurements = (PlatformMeasurements, CvmImageMeasurements);
+
 /// Defines how to generate a quote
 pub trait QuoteGenerator: Clone + Send + 'static {
     /// Whether this is CVM attestation. This should always return true except for the [NoQuoteGenerator] case.
@@ -42,7 +44,7 @@ pub trait QuoteVerifier: Clone + Send + 'static {
         input: Vec<u8>,
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
-    ) -> impl Future<Output = Result<(), AttestationError>> + Send;
+    ) -> impl Future<Output = Result<Option<Measurements>, AttestationError>> + Send;
 }
 
 /// Quote generation using configfs_tsm
@@ -151,7 +153,7 @@ impl QuoteVerifier for DcapTdxQuoteVerifier {
         input: Vec<u8>,
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
-    ) -> Result<(), AttestationError> {
+    ) -> Result<Option<Measurements>, AttestationError> {
         let quote_input = compute_report_input(cert_chain, exporter)?;
         let (platform_measurements, image_measurements) = if cfg!(not(test)) {
             let now = std::time::SystemTime::now()
@@ -205,7 +207,7 @@ impl QuoteVerifier for DcapTdxQuoteVerifier {
             return Err(AttestationError::UnacceptableOsImageMeasurements);
         }
 
-        Ok(())
+        Ok(Some((platform_measurements, image_measurements)))
     }
 }
 
@@ -264,9 +266,9 @@ impl QuoteVerifier for NoQuoteVerifier {
         input: Vec<u8>,
         _cert_chain: &[CertificateDer<'_>],
         _exporter: [u8; 32],
-    ) -> Result<(), AttestationError> {
+    ) -> Result<Option<Measurements>, AttestationError> {
         if input.is_empty() {
-            Ok(())
+            Ok(None)
         } else {
             Err(AttestationError::AttestationGivenWhenNoneExpected)
         }
