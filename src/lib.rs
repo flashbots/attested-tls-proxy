@@ -405,6 +405,61 @@ impl<L: QuoteGenerator, R: QuoteVerifier> ProxyClient<L, R> {
         Ok(())
     }
 
+    async fn setup_connection(
+        connector: TlsConnector,
+        target: String,
+        cert_chain: Option<Vec<CertificateDer<'static>>>,
+        local_attestation_platform: L,
+        remote_attestation_platform: R,
+    ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, ProxyError> {
+        let out = TcpStream::connect(&target).await?;
+        let mut tls_stream = connector
+            .connect(server_name_from_host(&target)?, out)
+            .await?;
+
+        let (_io, server_connection) = tls_stream.get_ref();
+
+        let mut exporter = [0u8; 32];
+        server_connection.export_keying_material(
+            &mut exporter,
+            EXPORTER_LABEL,
+            None, // context
+        )?;
+
+        let remote_cert_chain = server_connection
+            .peer_certificates()
+            .ok_or(ProxyError::NoCertificate)?
+            .to_owned();
+
+        let mut length_bytes = [0; 4];
+        tls_stream.read_exact(&mut length_bytes).await?;
+        let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
+
+        let mut buf = vec![0; length];
+        tls_stream.read_exact(&mut buf).await?;
+
+        if remote_attestation_platform.is_cvm() {
+            remote_attestation_platform
+                .verify_attestation(buf, &remote_cert_chain, exporter)
+                .await?;
+        }
+
+        let attestation = if local_attestation_platform.is_cvm() {
+            local_attestation_platform
+                .create_attestation(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?
+        } else {
+            Vec::new()
+        };
+
+        let attestation_length_prefix = length_prefix(&attestation);
+
+        tls_stream.write_all(&attestation_length_prefix).await?;
+
+        tls_stream.write_all(&attestation).await?;
+
+        Ok(tls_stream)
+    }
+
     // Handle a request from the source client to the proxy server
     async fn handle_http_request(
         req: hyper::Request<hyper::body::Incoming>,
@@ -414,62 +469,15 @@ impl<L: QuoteGenerator, R: QuoteVerifier> ProxyClient<L, R> {
         local_attestation_platform: L,
         remote_attestation_platform: R,
     ) -> Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error> {
-        let out = TcpStream::connect(&target).await.unwrap();
-        let mut tls_stream = connector
-            .connect(server_name_from_host(&target).unwrap(), out)
-            .await
-            .unwrap();
-
-        let (_io, server_connection) = tls_stream.get_ref();
-
-        let mut exporter = [0u8; 32];
-        server_connection
-            .export_keying_material(
-                &mut exporter,
-                EXPORTER_LABEL,
-                None, // context
-            )
-            .unwrap();
-
-        let remote_cert_chain = server_connection
-            .peer_certificates()
-            .ok_or(ProxyError::NoCertificate)
-            .unwrap()
-            .to_owned();
-
-        let mut length_bytes = [0; 4];
-        tls_stream.read_exact(&mut length_bytes).await.unwrap();
-        let length: usize = u32::from_be_bytes(length_bytes).try_into().unwrap();
-
-        let mut buf = vec![0; length];
-        tls_stream.read_exact(&mut buf).await.unwrap();
-
-        if remote_attestation_platform.is_cvm() {
-            remote_attestation_platform
-                .verify_attestation(buf, &remote_cert_chain, exporter)
-                .await
-                .unwrap();
-        }
-
-        let attestation = if local_attestation_platform.is_cvm() {
-            local_attestation_platform
-                .create_attestation(
-                    &cert_chain.ok_or(ProxyError::NoClientAuth).unwrap(),
-                    exporter,
-                )
-                .unwrap()
-        } else {
-            Vec::new()
-        };
-
-        let attestation_length_prefix = length_prefix(&attestation);
-
-        tls_stream
-            .write_all(&attestation_length_prefix)
-            .await
-            .unwrap();
-
-        tls_stream.write_all(&attestation).await.unwrap();
+        let tls_stream = Self::setup_connection(
+            connector,
+            target,
+            cert_chain,
+            local_attestation_platform,
+            remote_attestation_platform,
+        )
+        .await
+        .unwrap();
 
         // Now the attestation is done, forward the request to the proxy server
         let outbound_io = TokioIo::new(tls_stream);
