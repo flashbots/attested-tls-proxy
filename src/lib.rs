@@ -5,6 +5,10 @@ pub use attestation::{
     DcapTdxQuoteGenerator, DcapTdxQuoteVerifier, NoQuoteGenerator, NoQuoteVerifier, QuoteGenerator,
     QuoteVerifier,
 };
+use hyper::server::conn::http1::Builder;
+use hyper::service::service_fn;
+use hyper::Response;
+use hyper_util::rt::TokioIo;
 use thiserror::Error;
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 
@@ -204,15 +208,51 @@ impl<L: QuoteGenerator, R: QuoteVerifier> ProxyServer<L, R> {
                 .await?;
         }
 
-        let outbound = TcpStream::connect(target).await?;
+        let http = Builder::new();
+        let service =
+            service_fn(move |req| async move { Self::handle_http_request(req, target).await });
 
-        let (mut inbound_reader, mut inbound_writer) = tokio::io::split(tls_stream);
-        let (mut outbound_reader, mut outbound_writer) = outbound.into_split();
+        let io = TokioIo::new(tls_stream);
+        http.serve_connection(io, service).await.unwrap();
 
-        let client_to_server = tokio::io::copy(&mut inbound_reader, &mut outbound_writer);
-        let server_to_client = tokio::io::copy(&mut outbound_reader, &mut inbound_writer);
-        tokio::try_join!(client_to_server, server_to_client)?;
+        // let (mut inbound_reader, mut inbound_writer) = tokio::io::split(tls_stream);
+        // let (mut outbound_reader, mut outbound_writer) = outbound.into_split();
+        //
+        // let client_to_server = tokio::io::copy(&mut inbound_reader, &mut outbound_writer);
+        // let server_to_client = tokio::io::copy(&mut outbound_reader, &mut inbound_writer);
+        // tokio::try_join!(client_to_server, server_to_client)?;
         Ok(())
+    }
+
+    // Handle a request from the proxy client to the target server
+    async fn handle_http_request(
+        req: hyper::Request<hyper::body::Incoming>,
+        target: SocketAddr,
+    ) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
+        let outbound = TcpStream::connect(target).await.unwrap();
+        let outbound_io = TokioIo::new(outbound);
+        let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
+            .handshake::<_, hyper::body::Incoming>(outbound_io)
+            .await
+            .unwrap();
+
+        // Drive the connection
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                eprintln!("client conn error: {e}");
+            }
+        });
+
+        match sender.send_request(req).await {
+            Ok(resp) => Ok(resp),
+            Err(e) => {
+                eprintln!("send_request error: {e}");
+                // let mut resp = Response::new(hyper::body::Incoming::empty());
+                // *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
+                // Ok(resp)
+                panic!("todo");
+            }
+        }
     }
 }
 
@@ -337,58 +377,129 @@ impl<L: QuoteGenerator, R: QuoteVerifier> ProxyClient<L, R> {
         local_attestation_platform: L,
         remote_attestation_platform: R,
     ) -> Result<(), ProxyError> {
-        let out = TcpStream::connect(&target).await?;
+        let http = Builder::new();
+        let service = service_fn(move |req| {
+            let connector = connector.clone();
+            let target = target.clone();
+            let cert_chain = cert_chain.clone();
+            let local_attestation_platform = local_attestation_platform.clone();
+            let remote_attestation_platform = remote_attestation_platform.clone();
+            async move {
+                Self::handle_http_request(
+                    req,
+                    connector,
+                    target,
+                    cert_chain,
+                    local_attestation_platform,
+                    remote_attestation_platform,
+                )
+                .await
+            }
+        });
+
+        let io = TokioIo::new(inbound);
+        http.serve_connection(io, service).await.unwrap();
+
+        // let (mut inbound_reader, mut inbound_writer) = inbound.into_split();
+        // let (mut outbound_reader, mut outbound_writer) = tokio::io::split(tls_stream);
+        //
+        // let client_to_server = tokio::io::copy(&mut inbound_reader, &mut outbound_writer);
+        // let server_to_client = tokio::io::copy(&mut outbound_reader, &mut inbound_writer);
+        // tokio::try_join!(client_to_server, server_to_client)?;
+        Ok(())
+    }
+
+    // Handle a request from the source client to the proxy server
+    async fn handle_http_request(
+        req: hyper::Request<hyper::body::Incoming>,
+        connector: TlsConnector,
+        target: String,
+        cert_chain: Option<Vec<CertificateDer<'static>>>,
+        local_attestation_platform: L,
+        remote_attestation_platform: R,
+    ) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
+        let out = TcpStream::connect(&target).await.unwrap();
         let mut tls_stream = connector
-            .connect(server_name_from_host(&target)?, out)
-            .await?;
+            .connect(server_name_from_host(&target).unwrap(), out)
+            .await
+            .unwrap();
 
         let (_io, server_connection) = tls_stream.get_ref();
 
         let mut exporter = [0u8; 32];
-        server_connection.export_keying_material(
-            &mut exporter,
-            EXPORTER_LABEL,
-            None, // context
-        )?;
+        server_connection
+            .export_keying_material(
+                &mut exporter,
+                EXPORTER_LABEL,
+                None, // context
+            )
+            .unwrap();
 
         let remote_cert_chain = server_connection
             .peer_certificates()
-            .ok_or(ProxyError::NoCertificate)?
+            .ok_or(ProxyError::NoCertificate)
+            .unwrap()
             .to_owned();
 
         let mut length_bytes = [0; 4];
-        tls_stream.read_exact(&mut length_bytes).await?;
-        let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
+        tls_stream.read_exact(&mut length_bytes).await.unwrap();
+        let length: usize = u32::from_be_bytes(length_bytes).try_into().unwrap();
 
         let mut buf = vec![0; length];
-        tls_stream.read_exact(&mut buf).await?;
+        tls_stream.read_exact(&mut buf).await.unwrap();
 
         if remote_attestation_platform.is_cvm() {
             remote_attestation_platform
                 .verify_attestation(buf, &remote_cert_chain, exporter)
-                .await?;
+                .await
+                .unwrap();
         }
 
         let attestation = if local_attestation_platform.is_cvm() {
             local_attestation_platform
-                .create_attestation(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?
+                .create_attestation(
+                    &cert_chain.ok_or(ProxyError::NoClientAuth).unwrap(),
+                    exporter,
+                )
+                .unwrap()
         } else {
             Vec::new()
         };
 
         let attestation_length_prefix = length_prefix(&attestation);
 
-        tls_stream.write_all(&attestation_length_prefix).await?;
+        tls_stream
+            .write_all(&attestation_length_prefix)
+            .await
+            .unwrap();
 
-        tls_stream.write_all(&attestation).await?;
+        tls_stream.write_all(&attestation).await.unwrap();
 
-        let (mut inbound_reader, mut inbound_writer) = inbound.into_split();
-        let (mut outbound_reader, mut outbound_writer) = tokio::io::split(tls_stream);
+        // Now the attestation is done, forward the connection to the proxy server
+        // let outbound = TcpStream::connect(target).await.unwrap();
+        let outbound_io = TokioIo::new(tls_stream);
+        let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
+            .handshake::<_, hyper::body::Incoming>(outbound_io)
+            .await
+            .unwrap();
 
-        let client_to_server = tokio::io::copy(&mut inbound_reader, &mut outbound_writer);
-        let server_to_client = tokio::io::copy(&mut outbound_reader, &mut inbound_writer);
-        tokio::try_join!(client_to_server, server_to_client)?;
-        Ok(())
+        // Drive the connection
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                eprintln!("client conn error: {e}");
+            }
+        });
+
+        match sender.send_request(req).await {
+            Ok(resp) => Ok(resp),
+            Err(e) => {
+                eprintln!("send_request error: {e}");
+                // let mut resp = Response::new(hyper::body::Incoming::empty());
+                // *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
+                // Ok(resp)
+                panic!("todo");
+            }
+        }
     }
 }
 
@@ -641,65 +752,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(res, "foobar");
-    }
-
-    #[tokio::test]
-    async fn raw_tcp_proxy() {
-        let target_addr = example_service().await;
-
-        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
-        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
-
-        let proxy_server = ProxyServer::new_with_tls_config(
-            cert_chain,
-            server_config,
-            "127.0.0.1:0",
-            target_addr,
-            DcapTdxQuoteGenerator,
-            NoQuoteVerifier,
-        )
-        .await
-        .unwrap();
-
-        let proxy_server_addr = proxy_server.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            proxy_server.accept().await.unwrap();
-        });
-
-        let quote_verifier = DcapTdxQuoteVerifier {
-            accepted_platform_measurements: None,
-            accepted_cvm_image_measurements: vec![CvmImageMeasurements {
-                rtmr1: [0u8; 48],
-                rtmr2: [0u8; 48],
-                rtmr3: [0u8; 48],
-            }],
-            pccs_url: None,
-        };
-
-        let proxy_client = ProxyClient::new_with_tls_config(
-            client_config,
-            "127.0.0.1:0",
-            proxy_server_addr.to_string(),
-            NoQuoteGenerator,
-            quote_verifier,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let proxy_client_addr = proxy_client.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            proxy_client.accept().await.unwrap();
-        });
-
-        let mut out = TcpStream::connect(proxy_client_addr).await.unwrap();
-
-        let mut buf = [0; 9];
-        out.read(&mut buf).await.unwrap();
-
-        assert_eq!(buf[..], b"some data"[..]);
     }
 
     #[tokio::test]
