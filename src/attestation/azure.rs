@@ -18,7 +18,7 @@ impl QuoteGenerator for MaaQuoteGenerator {
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
     ) -> Result<Vec<u8>, AttestationError> {
-        let quote_input = compute_report_input(cert_chain, exporter)?;
+        let _quote_input = compute_report_input(cert_chain, exporter)?;
 
         let td_report = report::get_report().unwrap();
 
@@ -29,12 +29,12 @@ impl QuoteGenerator for MaaQuoteGenerator {
         // let rtmr3 = td_report.tdinfo.rtrm[3];
 
         // This makes a request to Azure Instance metadata service and gives us a binary response
-        let td_quote_bytes = imds::get_td_quote(&td_report).unwrap();
+        let _td_quote_bytes = imds::get_td_quote(&td_report).unwrap();
 
         let bytes = vtpm::get_report().unwrap();
         let hcl_report = hcl::HclReport::new(bytes).unwrap();
         let var_data_hash = hcl_report.var_data_sha256();
-        let ak_pub = hcl_report.ak_pub().unwrap();
+        let _ak_pub = hcl_report.ak_pub().unwrap();
 
         let td_report: tdx::TdReport = hcl_report.try_into().unwrap();
         assert!(var_data_hash == td_report.report_mac.reportdata[..32]);
