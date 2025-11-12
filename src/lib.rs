@@ -1,10 +1,10 @@
 pub mod attestation;
 
-use attestation::{measurements::Measurements, AttestationError, AttestationType};
 pub use attestation::{
-    DcapTdxQuoteGenerator, DcapTdxQuoteVerifier, NoQuoteGenerator, NoQuoteVerifier, QuoteGenerator,
-    QuoteVerifier,
+    dcap::{DcapTdxQuoteGenerator, DcapTdxQuoteVerifier},
+    NoQuoteGenerator, NoQuoteVerifier, QuoteGenerator, QuoteVerifier,
 };
+use attestation::{measurements::Measurements, AttestationError, AttestationType};
 use bytes::Bytes;
 use http::HeaderValue;
 use http_body_util::combinators::BoxBody;
