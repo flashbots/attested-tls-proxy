@@ -1,6 +1,6 @@
 pub mod attestation;
 
-use attestation::{AttestationError, AttestationType, Measurements};
+use attestation::{measurements::Measurements, AttestationError, AttestationType};
 pub use attestation::{
     DcapTdxQuoteGenerator, DcapTdxQuoteVerifier, NoQuoteGenerator, NoQuoteVerifier, QuoteGenerator,
     QuoteVerifier,
@@ -690,7 +690,7 @@ fn server_name_from_host(
 
 #[cfg(test)]
 mod tests {
-    use crate::attestation::CvmImageMeasurements;
+    use crate::attestation::measurements::CvmImageMeasurements;
 
     use super::*;
     use test_helpers::{

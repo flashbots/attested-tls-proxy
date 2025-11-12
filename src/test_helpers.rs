@@ -12,7 +12,7 @@ use tokio_rustls::rustls::{
 };
 
 use crate::{
-    attestation::{CvmImageMeasurements, Measurements, PlatformMeasurements},
+    attestation::measurements::{CvmImageMeasurements, Measurements, PlatformMeasurements},
     MEASUREMENT_HEADER,
 };
 

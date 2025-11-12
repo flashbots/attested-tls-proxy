@@ -4,7 +4,7 @@ use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 use attested_tls_proxy::{
-    attestation::{AttestationType, CvmImageMeasurements},
+    attestation::{measurements::CvmImageMeasurements, AttestationType},
     get_tls_cert, DcapTdxQuoteGenerator, DcapTdxQuoteVerifier, NoQuoteGenerator, NoQuoteVerifier,
     ProxyClient, ProxyServer, TlsCertAndKey,
 };
