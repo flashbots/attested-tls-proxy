@@ -10,7 +10,30 @@ It has three commands:
 
 Unlike `cvm-reverse-proxy`, this uses post-handshake remote-attested TLS, meaning regular CA-signed TLS certificates can be used.
 
-However attestation generation and verification is not yet implemented - there is a trait provided and mock attestation for testing purposes.
+This repo shares some code with [ameba23/attested-channels](https://github.com/ameba23/attested-channels) and may eventually be merged with that crate.
 
-This shares some code with [ameba23/attested-channels](https://github.com/ameba23/attested-channels) and may eventually be merged with that crate.
+## Measurement headers
+
+When attestation is validated successfully, the following values are injected into the request / response headers:
+
+Header name: `X-Flashbots-Measurement`
+
+Header value:
+```json
+{
+  "0": "48 byte MRTD value encoded as hex",
+  "1": "48 byte RTMR0 value encoded as hex",
+  "2": "48 byte RTMR1 value encoded as hex",
+  "3": "48 byte RTMR2 value encoded as hex",
+  "4": "48 byte RTMR3 value encoded as hex",
+}
+```
+
+Header name: `X-Flashbots-Attestation-Type`
+
+Header value:
+
+One of `none`, `dummy`, `azure-tdx`, `qemu-tdx`, `gcp-tdx`.
+
+These aim to match the header formatting used by `cvm-reverse-proxy`.
 

@@ -1,10 +1,15 @@
-use std::time::SystemTimeError;
+use std::{
+    collections::HashMap,
+    fmt::{self, Display, Formatter},
+    time::SystemTimeError,
+};
 
 use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
     collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
 };
+use http::{header::InvalidHeaderValue, HeaderValue};
 use sha2::{Digest, Sha256};
 use tdx_quote::QuoteParseError;
 use thiserror::Error;
@@ -14,12 +19,105 @@ use x509_parser::prelude::*;
 /// For fetching collateral directly from intel, if no PCCS is specified
 const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Measurements {
+    pub platform: PlatformMeasurements,
+    pub cvm_image: CvmImageMeasurements,
+}
+
+impl Measurements {
+    pub fn to_header_format(&self) -> Result<HeaderValue, MeasurementFormatError> {
+        let mut measurements_map = HashMap::new();
+        measurements_map.insert(0, hex::encode(self.platform.mrtd));
+        measurements_map.insert(1, hex::encode(self.platform.rtmr0));
+        measurements_map.insert(2, hex::encode(self.cvm_image.rtmr1));
+        measurements_map.insert(3, hex::encode(self.cvm_image.rtmr2));
+        measurements_map.insert(4, hex::encode(self.cvm_image.rtmr3));
+        Ok(HeaderValue::from_str(&serde_json::to_string(
+            &measurements_map,
+        )?)?)
+    }
+
+    pub fn from_header_format(input: &str) -> Result<Self, MeasurementFormatError> {
+        let measurements_map: HashMap<u32, String> = serde_json::from_str(input)?;
+        let measurements_map: HashMap<u32, [u8; 48]> = measurements_map
+            .into_iter()
+            .map(|(k, v)| (k, hex::decode(v).unwrap().try_into().unwrap()))
+            .collect();
+
+        Ok(Self {
+            platform: PlatformMeasurements {
+                mrtd: *measurements_map
+                    .get(&0)
+                    .ok_or(MeasurementFormatError::MissingValue("MRTD".to_string()))?,
+                rtmr0: *measurements_map
+                    .get(&1)
+                    .ok_or(MeasurementFormatError::MissingValue("RTMR0".to_string()))?,
+            },
+            cvm_image: CvmImageMeasurements {
+                rtmr1: *measurements_map
+                    .get(&2)
+                    .ok_or(MeasurementFormatError::MissingValue("RTMR1".to_string()))?,
+                rtmr2: *measurements_map
+                    .get(&3)
+                    .ok_or(MeasurementFormatError::MissingValue("RTMR2".to_string()))?,
+                rtmr3: *measurements_map
+                    .get(&4)
+                    .ok_or(MeasurementFormatError::MissingValue("RTMR3".to_string()))?,
+            },
+        })
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum MeasurementFormatError {
+    #[error("JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Missing value: {0}")]
+    MissingValue(String),
+    #[error("Invalid header value: {0}")]
+    BadHeaderValue(#[from] InvalidHeaderValue),
+}
+
+/// Type of attestaion used
+/// Only supported (or soon-to-be supported) types are given
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AttestationType {
+    /// No attestion
+    None,
+    /// Mock attestion
+    Dummy,
+    /// TDX on Google Cloud Platform
+    GcpTdx,
+    /// TDX on Azure, with MAA
+    AzureTdx,
+    /// TDX on Qemu (no cloud platform)
+    QemuTdx,
+}
+
+impl AttestationType {
+    /// Matches the names used by Constellation aTLS
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AttestationType::None => "none",
+            AttestationType::Dummy => "dummy",
+            AttestationType::AzureTdx => "azure-tdx",
+            AttestationType::QemuTdx => "qemu-tdx",
+            AttestationType::GcpTdx => "gcp-tdx",
+        }
+    }
+}
+
+impl Display for AttestationType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Defines how to generate a quote
 pub trait QuoteGenerator: Clone + Send + 'static {
-    /// Whether this is CVM attestation. This should always return true except for the [NoQuoteGenerator] case.
-    ///
-    /// When false, allows TLS client to be configured without client authentication
-    fn is_cvm(&self) -> bool;
+    /// Type of attestation used
+    fn attestation_type(&self) -> AttestationType;
 
     /// Generate an attestation
     fn create_attestation(
@@ -31,10 +129,8 @@ pub trait QuoteGenerator: Clone + Send + 'static {
 
 /// Defines how to verify a quote
 pub trait QuoteVerifier: Clone + Send + 'static {
-    /// Whether this is CVM attestation. This should always return true except for the [NoQuoteVerifier] case.
-    ///
-    /// When false, allows TLS client to be configured without client authentication
-    fn is_cvm(&self) -> bool;
+    /// Type of attestation used
+    fn attestation_type(&self) -> AttestationType;
 
     /// Verify the given attestation payload
     fn verify_attestation(
@@ -42,16 +138,19 @@ pub trait QuoteVerifier: Clone + Send + 'static {
         input: Vec<u8>,
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
-    ) -> impl Future<Output = Result<(), AttestationError>> + Send;
+    ) -> impl Future<Output = Result<Option<Measurements>, AttestationError>> + Send;
 }
 
 /// Quote generation using configfs_tsm
 #[derive(Clone)]
-pub struct DcapTdxQuoteGenerator;
+pub struct DcapTdxQuoteGenerator {
+    pub attestation_type: AttestationType,
+}
 
 impl QuoteGenerator for DcapTdxQuoteGenerator {
-    fn is_cvm(&self) -> bool {
-        true
+    /// Type of attestation used
+    fn attestation_type(&self) -> AttestationType {
+        self.attestation_type
     }
 
     fn create_attestation(
@@ -66,7 +165,7 @@ impl QuoteGenerator for DcapTdxQuoteGenerator {
 }
 
 /// Measurements determined by the CVM platform
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct PlatformMeasurements {
     pub mrtd: [u8; 48],
     pub rtmr0: [u8; 48],
@@ -96,7 +195,7 @@ impl PlatformMeasurements {
 }
 
 /// Measurements determined by the CVM image
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct CvmImageMeasurements {
     pub rtmr1: [u8; 48],
     pub rtmr2: [u8; 48],
@@ -132,6 +231,7 @@ impl CvmImageMeasurements {
 /// OS image specific measurements
 #[derive(Clone)]
 pub struct DcapTdxQuoteVerifier {
+    pub attestation_type: AttestationType,
     /// Platform specific allowed Measurements
     /// Currently an option as this may be determined internally on a per-platform basis (Eg: GCP)
     pub accepted_platform_measurements: Option<Vec<PlatformMeasurements>>,
@@ -142,8 +242,9 @@ pub struct DcapTdxQuoteVerifier {
 }
 
 impl QuoteVerifier for DcapTdxQuoteVerifier {
-    fn is_cvm(&self) -> bool {
-        true
+    /// Type of attestation used
+    fn attestation_type(&self) -> AttestationType {
+        self.attestation_type
     }
 
     async fn verify_attestation(
@@ -151,7 +252,7 @@ impl QuoteVerifier for DcapTdxQuoteVerifier {
         input: Vec<u8>,
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
-    ) -> Result<(), AttestationError> {
+    ) -> Result<Option<Measurements>, AttestationError> {
         let quote_input = compute_report_input(cert_chain, exporter)?;
         let (platform_measurements, image_measurements) = if cfg!(not(test)) {
             let now = std::time::SystemTime::now()
@@ -205,7 +306,10 @@ impl QuoteVerifier for DcapTdxQuoteVerifier {
             return Err(AttestationError::UnacceptableOsImageMeasurements);
         }
 
-        Ok(())
+        Ok(Some(Measurements {
+            platform: platform_measurements,
+            cvm_image: image_measurements,
+        }))
     }
 }
 
@@ -236,8 +340,9 @@ pub fn compute_report_input(
 pub struct NoQuoteGenerator;
 
 impl QuoteGenerator for NoQuoteGenerator {
-    fn is_cvm(&self) -> bool {
-        false
+    /// Type of attestation used
+    fn attestation_type(&self) -> AttestationType {
+        AttestationType::None
     }
 
     /// Create an empty attestation
@@ -255,18 +360,20 @@ impl QuoteGenerator for NoQuoteGenerator {
 pub struct NoQuoteVerifier;
 
 impl QuoteVerifier for NoQuoteVerifier {
-    fn is_cvm(&self) -> bool {
-        false
+    /// Type of attestation used
+    fn attestation_type(&self) -> AttestationType {
+        AttestationType::None
     }
+
     /// Ensure that an empty attestation is given
     async fn verify_attestation(
         &self,
         input: Vec<u8>,
         _cert_chain: &[CertificateDer<'_>],
         _exporter: [u8; 32],
-    ) -> Result<(), AttestationError> {
+    ) -> Result<Option<Measurements>, AttestationError> {
         if input.is_empty() {
-            Ok(())
+            Ok(None)
         } else {
             Err(AttestationError::AttestationGivenWhenNoneExpected)
         }

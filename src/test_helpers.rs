@@ -1,3 +1,4 @@
+use axum::response::IntoResponse;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
@@ -8,6 +9,11 @@ use tokio_rustls::rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     server::{danger::ClientCertVerifier, WebPkiClientVerifier},
     ClientConfig, RootCertStore, ServerConfig,
+};
+
+use crate::{
+    attestation::{CvmImageMeasurements, Measurements, PlatformMeasurements},
+    MEASUREMENT_HEADER,
 };
 
 /// Helper to generate a self-signed certificate for testing
@@ -111,13 +117,21 @@ pub async fn example_http_service() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let app = axum::Router::new().route("/", axum::routing::get(|| async { "foobar" }));
+    let app = axum::Router::new().route("/", axum::routing::get(get_handler));
 
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
 
     addr
+}
+
+async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
+    headers
+        .get(MEASUREMENT_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("No measurements")
+        .to_string()
 }
 
 pub async fn example_service() -> SocketAddr {
@@ -132,4 +146,18 @@ pub async fn example_service() -> SocketAddr {
     });
 
     addr
+}
+
+pub fn default_measurements() -> Measurements {
+    Measurements {
+        platform: PlatformMeasurements {
+            mrtd: [0u8; 48],
+            rtmr0: [0u8; 48],
+        },
+        cvm_image: CvmImageMeasurements {
+            rtmr1: [0u8; 48],
+            rtmr2: [0u8; 48],
+            rtmr3: [0u8; 48],
+        },
+    }
 }

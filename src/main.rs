@@ -4,8 +4,9 @@ use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 use attested_tls_proxy::{
-    attestation::CvmImageMeasurements, get_tls_cert, DcapTdxQuoteGenerator, DcapTdxQuoteVerifier,
-    NoQuoteGenerator, NoQuoteVerifier, ProxyClient, ProxyServer, TlsCertAndKey,
+    attestation::{AttestationType, CvmImageMeasurements},
+    get_tls_cert, DcapTdxQuoteGenerator, DcapTdxQuoteVerifier, NoQuoteGenerator, NoQuoteVerifier,
+    ProxyClient, ProxyServer, TlsCertAndKey,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -81,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let quote_verifier = DcapTdxQuoteVerifier {
+                attestation_type: AttestationType::Dummy,
                 accepted_platform_measurements: None,
                 accepted_cvm_image_measurements: vec![CvmImageMeasurements {
                     rtmr1: [0u8; 48],
@@ -113,7 +115,9 @@ async fn main() -> anyhow::Result<()> {
             client_auth,
         } => {
             let tls_cert_and_chain = load_tls_cert_and_key(cert_chain, private_key)?;
-            let local_attestation = DcapTdxQuoteGenerator;
+            let local_attestation = DcapTdxQuoteGenerator {
+                attestation_type: AttestationType::Dummy,
+            };
             let remote_attestation = NoQuoteVerifier;
 
             let server = ProxyServer::new(
@@ -134,6 +138,7 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::GetTlsCert { server } => {
             let quote_verifier = DcapTdxQuoteVerifier {
+                attestation_type: AttestationType::Dummy,
                 accepted_platform_measurements: None,
                 accepted_cvm_image_measurements: vec![CvmImageMeasurements {
                     rtmr1: [0u8; 48],
