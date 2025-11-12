@@ -21,6 +21,14 @@ impl QuoteGenerator for MaaQuoteGenerator {
         let quote_input = compute_report_input(cert_chain, exporter)?;
 
         let td_report = report::get_report().unwrap();
+
+        // let mrtd = td_report.tdinfo.mrtd;
+        // let rtmr0 = td_report.tdinfo.rtrm[0];
+        // let rtmr1 = td_report.tdinfo.rtrm[1];
+        // let rtmr2 = td_report.tdinfo.rtrm[2];
+        // let rtmr3 = td_report.tdinfo.rtrm[3];
+
+        // This makes a request to Azure Instance metadata service and gives us a binary response
         let td_quote_bytes = imds::get_td_quote(&td_report).unwrap();
 
         let bytes = vtpm::get_report().unwrap();
