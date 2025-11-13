@@ -1,10 +1,10 @@
 pub mod attestation;
 
-use attestation::{AttestationError, AttestationType, Measurements};
 pub use attestation::{
-    DcapTdxQuoteGenerator, DcapTdxQuoteVerifier, NoQuoteGenerator, NoQuoteVerifier, QuoteGenerator,
-    QuoteVerifier,
+    dcap::{DcapTdxQuoteGenerator, DcapTdxQuoteVerifier},
+    NoQuoteGenerator, NoQuoteVerifier, QuoteGenerator, QuoteVerifier,
 };
+use attestation::{measurements::Measurements, AttestationError, AttestationType};
 use bytes::Bytes;
 use http::HeaderValue;
 use http_body_util::combinators::BoxBody;
@@ -193,7 +193,9 @@ impl<L: QuoteGenerator, R: QuoteVerifier> ProxyServer<L, R> {
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
         let attestation = if local_quote_generator.attestation_type() != AttestationType::None {
-            local_quote_generator.create_attestation(&cert_chain, exporter)?
+            local_quote_generator
+                .create_attestation(&cert_chain, exporter)
+                .await?
         } else {
             Vec::new()
         };
@@ -508,7 +510,8 @@ impl<L: QuoteGenerator, R: QuoteVerifier> ProxyClient<L, R> {
 
         let attestation = if local_quote_generator.attestation_type() != AttestationType::None {
             local_quote_generator
-                .create_attestation(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?
+                .create_attestation(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)
+                .await?
         } else {
             Vec::new()
         };
@@ -690,7 +693,7 @@ fn server_name_from_host(
 
 #[cfg(test)]
 mod tests {
-    use crate::attestation::CvmImageMeasurements;
+    use crate::attestation::measurements::CvmImageMeasurements;
 
     use super::*;
     use test_helpers::{
