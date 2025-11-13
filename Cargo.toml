@@ -30,6 +30,8 @@ az-tdx-vtpm = "0.7.4"
 serde = "1.0.228"
 base64 = "0.22.1"
 reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
+josekit = "0.10.3"
+# jwt-simple = "0.12.13"
 
 [dev-dependencies]
 rcgen = "0.14.5"

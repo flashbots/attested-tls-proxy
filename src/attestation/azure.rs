@@ -1,7 +1,7 @@
 use az_tdx_vtpm::{hcl, imds, report, vtpm};
 use tokio_rustls::rustls::pki_types::CertificateDer;
 // use openssl::pkey::{PKey, Public};
-use base64::prelude::*;
+use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use reqwest::Client;
 use serde::Serialize;
 
@@ -58,8 +58,8 @@ impl QuoteGenerator for MaaGenerator {
         // let pub_key = PKey::public_key_from_der(&der).unwrap();
         // tpm_quote.verify(&pub_key, nonce).unwrap();
 
-        let quote_b64 = BASE64_STANDARD.encode(&td_quote_bytes);
-        let runtime_b64 = BASE64_STANDARD.encode(hcl_var_data);
+        let quote_b64 = BASE64_URL_SAFE.encode(&td_quote_bytes);
+        let runtime_b64 = BASE64_URL_SAFE.encode(hcl_var_data);
 
         let body = TdxVmRequest {
             quote: quote_b64,
@@ -123,8 +123,25 @@ impl QuoteVerifier for MaaVerifier {
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
     ) -> Result<Option<super::measurements::Measurements>, AttestationError> {
-        let input_data = compute_report_input(cert_chain, exporter)?;
+        let _input_data = compute_report_input(cert_chain, exporter)?;
+        let token = String::from_utf8(input).unwrap();
+
+        self.decode_jwt(&token).await.unwrap();
+
         todo!()
+    }
+}
+
+impl MaaVerifier {
+    async fn decode_jwt(&self, token: &str) -> Result<(), AttestationError> {
+        // Parse payload (claims) without verification (TODO this will be swapped out once we have the
+        // key-getting logic)
+        let parts: Vec<&str> = token.split('.').collect();
+        let claims_json = BASE64_URL_SAFE.decode(parts[1]).unwrap();
+
+        let claims: serde_json::Value = serde_json::from_slice(&claims_json).unwrap();
+        println!("{claims}");
+        Ok(())
     }
 }
 
@@ -142,4 +159,27 @@ struct TdxVmRequest<'a> {
     runtime_data: Option<RuntimeData<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     nonce: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_decode_hcl() {
+        // from cvm-reverse-proxy/internal/attestation/azure/tdx/testdata/hclreport.bin
+        let hcl_bytes: &'static [u8] = include_bytes!("../../test-assets/hclreport.bin");
+
+        let hcl_report = hcl::HclReport::new(hcl_bytes.to_vec()).unwrap();
+        let hcl_var_data = hcl_report.var_data();
+        let var_data_values: serde_json::Value = serde_json::from_slice(&hcl_var_data).unwrap();
+
+        // Check that it contains 64 byte user data
+        assert_eq!(
+            hex::decode(var_data_values["user-data"].as_str().unwrap())
+                .unwrap()
+                .len(),
+            64
+        );
+    }
 }
