@@ -14,6 +14,19 @@ use attested_tls_proxy::{
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
+    // TODO missing:
+    // Name:  "log-json",
+    // Value: false,
+    // Usage: "log in JSON format",
+    //
+    // Name:  "log-debug",
+    // Value: true,
+    // Usage: "log debug messages",
+    //
+    // Name:    "log-dcap-quote",
+    // EnvVars: []string{"LOG_DCAP_QUOTE"},
+    // Value:   false,
+    // Usage:   "log dcap quotes to folder quotes/",
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -22,33 +35,78 @@ enum CliCommand {
     Client {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0")]
-        address: SocketAddr,
+        listen_addr: SocketAddr,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
-        server: String,
+        // TODO `cvm-reverse-proxy` accepts with with protocol, eg: `https://localhost:80`
+        target_addr: String,
         /// The path to a PEM encoded private key for client authentication
         #[arg(long)]
-        private_key: Option<PathBuf>,
+        tls_private_key_path: Option<PathBuf>,
         /// The path to a PEM encoded certificate chain for client authentication
         #[arg(long)]
-        cert_chain: Option<PathBuf>,
+        tls_certificate_path: Option<PathBuf>,
+        /// Type of attestaion to present (dafaults to none)
+        /// If other than None, a TLS key and certicate must also be given
+        #[arg(long)]
+        client_attestation_type: Option<String>,
+        // Value: string(proxy.AttestationNone),
+        // TODO missing:
+        // Name:  "tls-ca-certificate",
+        // Usage: "additional CA certificate to verify against (PEM) [default=no additional TLS certs]. Only valid with --verify-tls.",
+        //
+        //
+        // Name:  "server-measurements",
+        // Usage: "optional path to JSON measurements enforced on the server",
+        //
+        // Name:    "override-azurev6-tcbinfo",
+        // Value:   false,
+        // EnvVars: []string{"OVERRIDE_AZUREV6_TCBINFO"},
+        // Usage:   "Allows Azure's V6 instance outdated SEAM Loader",
+        //
+        // Name:    "dev-dummy-dcap",
+        // EnvVars: []string{"DEV_DUMMY_DCAP"},
+        // Usage:   "URL of the remote dummy DCAP service. Only with --client-attestation-type dummy.",
     },
     /// Run a proxy server
     Server {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0")]
-        address: SocketAddr,
+        listen_addr: SocketAddr,
         /// Socket address of the target service to forward traffic to
-        target_address: SocketAddr,
+        target_addr: SocketAddr,
         /// The path to a PEM encoded private key
         #[arg(long)]
-        private_key: PathBuf,
+        tls_private_key_path: PathBuf,
         /// The path to a PEM encoded certificate chain
         #[arg(long)]
-        cert_chain: PathBuf,
+        tls_certificate_path: PathBuf,
         /// Whether to use client authentication. If the client is running in a CVM this must be
         /// enabled.
         #[arg(long)]
         client_auth: bool,
+        // TODO missing:
+        // Name:    "listen-addr-healthcheck",
+        // EnvVars: []string{"LISTEN_ADDR_HEALTHCHECK"},
+        // Value:   "",
+        // Usage:   "address to listen on for health checks",
+        //
+        // Name:    "server-attestation-type",
+        // EnvVars: []string{"SERVER_ATTESTATION_TYPE"},
+        // Value:   string(proxy.AttestationAuto),
+        // Usage:   "type of attestation to present (" + proxy.AvailableAttestationTypes + "). Set to " + string(proxy.AttestationDummy) + " to connect to a remote tdx quote provider. Defaults to automatic detection.",
+        //
+        // Name:    "client-measurements",
+        // EnvVars: []string{"CLIENT_MEASUREMENTS"},
+        // Usage:   "optional path to JSON measurements enforced on the client",
+        //
+        // Name:    "override-azurev6-tcbinfo",
+        // Value:   false,
+        // EnvVars: []string{"OVERRIDE_AZUREV6_TCBINFO"},
+        // Usage:   "Allows Azure's V6 instance outdated SEAM Loader",
+        //
+        // Name:    "dev-dummy-dcap",
+        // EnvVars: []string{"DEV_DUMMY_DCAP"},
+        // Usage:   "URL of the remote dummy DCAP service. Only with --server-attestation-type dummy.",
     },
     /// Retrieve the attested TLS certificate from a proxy server
     GetTlsCert {
@@ -63,22 +121,30 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         CliCommand::Client {
-            address,
-            server,
-            private_key,
-            cert_chain,
+            listen_addr,
+            target_addr,
+            tls_private_key_path,
+            tls_certificate_path,
+            client_attestation_type,
         } => {
-            let tls_cert_and_chain = if let Some(private_key) = private_key {
+            let tls_cert_and_chain = if let Some(private_key) = tls_private_key_path {
                 Some(load_tls_cert_and_key(
-                    cert_chain.ok_or(anyhow!("Private key given but no certificate chain"))?,
+                    tls_certificate_path
+                        .ok_or(anyhow!("Private key given but no certificate chain"))?,
                     private_key,
                 )?)
             } else {
                 ensure!(
-                    cert_chain.is_none(),
+                    tls_certificate_path.is_none(),
                     "Certificate chain given but no private key"
                 );
                 None
+            };
+
+            // TODO
+            let _client_attestation_type = match client_attestation_type {
+                Some(_) => AttestationType::QemuTdx,
+                None => AttestationType::None,
             };
 
             let quote_verifier = DcapTdxQuoteVerifier {
@@ -94,8 +160,8 @@ async fn main() -> anyhow::Result<()> {
 
             let client = ProxyClient::new(
                 tls_cert_and_chain,
-                address,
-                server,
+                listen_addr,
+                target_addr,
                 NoQuoteGenerator,
                 quote_verifier,
             )
@@ -108,13 +174,14 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         CliCommand::Server {
-            address,
-            target_address,
-            private_key,
-            cert_chain,
+            listen_addr,
+            target_addr,
+            tls_private_key_path,
+            tls_certificate_path,
             client_auth,
         } => {
-            let tls_cert_and_chain = load_tls_cert_and_key(cert_chain, private_key)?;
+            let tls_cert_and_chain =
+                load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
             let local_attestation = DcapTdxQuoteGenerator {
                 attestation_type: AttestationType::Dummy,
             };
@@ -122,8 +189,8 @@ async fn main() -> anyhow::Result<()> {
 
             let server = ProxyServer::new(
                 tls_cert_and_chain,
-                address,
-                target_address,
+                listen_addr,
+                target_addr,
                 local_attestation,
                 remote_attestation,
                 client_auth,
