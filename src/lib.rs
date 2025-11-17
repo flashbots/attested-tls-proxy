@@ -188,8 +188,7 @@ impl ProxyServer {
                 &cert_chain,
                 exporter,
                 local_quote_generator,
-            )?)
-            .unwrap()
+            )?)?
         } else {
             Vec::new()
         };
@@ -209,8 +208,7 @@ impl ProxyServer {
 
         let (measurements, remote_attestation_type) = if attestation_verifier.has_remote_attestion()
         {
-            let remote_attestation_payload: AttesationPayload =
-                serde_json::from_slice(&buf).unwrap();
+            let remote_attestation_payload: AttesationPayload = serde_json::from_slice(&buf)?;
 
             let remote_attestation_type = remote_attestation_payload.attestation_type.clone();
             (
@@ -502,9 +500,9 @@ impl ProxyClient {
         let mut buf = vec![0; length];
         tls_stream.read_exact(&mut buf).await?;
 
-        let remote_attestation_payload: AttesationPayload = serde_json::from_slice(&buf).unwrap();
+        let remote_attestation_payload: AttesationPayload = serde_json::from_slice(&buf)?;
         let remote_attestation_type =
-            AttestationType::parse_from_str(&remote_attestation_payload.attestation_type).unwrap();
+            AttestationType::parse_from_str(&remote_attestation_payload.attestation_type)?;
 
         let measurements = attestation_verifier
             .verify_attestation(remote_attestation_payload, &remote_cert_chain, exporter)
@@ -515,8 +513,7 @@ impl ProxyClient {
                 &cert_chain.ok_or(ProxyError::NoClientAuth)?,
                 exporter,
                 local_quote_generator,
-            )?)
-            .unwrap()
+            )?)?
         } else {
             Vec::new()
         };
@@ -637,7 +634,7 @@ async fn get_tls_cert_with_config(
     let mut buf = vec![0; length];
     tls_stream.read_exact(&mut buf).await?;
 
-    let remote_attestation_payload: AttesationPayload = serde_json::from_slice(&buf).unwrap();
+    let remote_attestation_payload: AttesationPayload = serde_json::from_slice(&buf)?;
 
     let _measurements = attestation_verifier
         .verify_attestation(remote_attestation_payload, &remote_cert_chain, exporter)
@@ -667,6 +664,8 @@ pub enum ProxyError {
     BadDnsName(#[from] tokio_rustls::rustls::pki_types::InvalidDnsNameError),
     #[error("HTTP: {0}")]
     Hyper(#[from] hyper::Error),
+    #[error("JSON: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 /// Given a byte array, encode its length as a 4 byte big endian u32

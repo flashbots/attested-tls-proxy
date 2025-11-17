@@ -92,8 +92,15 @@ impl Measurements {
         let measurements_map: HashMap<u32, String> = serde_json::from_str(input)?;
         let measurements_map: HashMap<u32, [u8; 48]> = measurements_map
             .into_iter()
-            .map(|(k, v)| (k, hex::decode(v).unwrap().try_into().unwrap()))
-            .collect();
+            .map(|(k, v)| {
+                Ok((
+                    k,
+                    hex::decode(v)?
+                        .try_into()
+                        .map_err(|_| MeasurementFormatError::BadLength)?,
+                ))
+            })
+            .collect::<Result<_, MeasurementFormatError>>()?;
 
         Ok(Self {
             platform: PlatformMeasurements {
@@ -127,6 +134,14 @@ pub enum MeasurementFormatError {
     MissingValue(String),
     #[error("Invalid header value: {0}")]
     BadHeaderValue(#[from] InvalidHeaderValue),
+    #[error("IO: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Attestation type not valid")]
+    AttestationTypeNotValid,
+    #[error("Hex: {0}")]
+    Hex(#[from] hex::FromHexError),
+    #[error("Expected 48 byte value")]
+    BadLength,
 }
 
 #[derive(Clone, Debug)]
@@ -137,7 +152,9 @@ pub struct MeasurementRecord {
 }
 
 /// Given the path to a JSON file containing measurements, return a [Vec<MeasurementRecord>]
-pub async fn get_measurements_from_file(measurement_file: PathBuf) -> AttestationVerifier {
+pub async fn get_measurements_from_file(
+    measurement_file: PathBuf,
+) -> Result<AttestationVerifier, MeasurementFormatError> {
     #[derive(Debug, Deserialize)]
     struct MeasurementRecordSimple {
         measurement_id: String,
@@ -150,47 +167,42 @@ pub async fn get_measurements_from_file(measurement_file: PathBuf) -> Attestatio
         expected: String,
     }
 
-    let measurements_json = tokio::fs::read(measurement_file).await.unwrap();
+    let measurements_json = tokio::fs::read(measurement_file).await?;
     let measurements_simple: Vec<MeasurementRecordSimple> =
-        serde_json::from_slice(&measurements_json).unwrap();
+        serde_json::from_slice(&measurements_json)?;
     let mut measurements = Vec::new();
     for measurement in measurements_simple {
         measurements.push(MeasurementRecord {
             measurement_id: measurement.measurement_id,
             attestation_type: AttestationType::parse_from_str(&measurement.attestation_type)
-                .unwrap(),
+                .map_err(|_| MeasurementFormatError::AttestationTypeNotValid)?,
             measurements: Measurements {
                 platform: PlatformMeasurements {
-                    mrtd: hex::decode(&measurement.measurements["0"].expected)
-                        .unwrap()
+                    mrtd: hex::decode(&measurement.measurements["0"].expected)?
                         .try_into()
-                        .unwrap(),
-                    rtmr0: hex::decode(&measurement.measurements["1"].expected)
-                        .unwrap()
+                        .map_err(|_| MeasurementFormatError::BadLength)?,
+                    rtmr0: hex::decode(&measurement.measurements["1"].expected)?
                         .try_into()
-                        .unwrap(),
+                        .map_err(|_| MeasurementFormatError::BadLength)?,
                 },
                 cvm_image: CvmImageMeasurements {
-                    rtmr1: hex::decode(&measurement.measurements["2"].expected)
-                        .unwrap()
+                    rtmr1: hex::decode(&measurement.measurements["2"].expected)?
                         .try_into()
-                        .unwrap(),
-                    rtmr2: hex::decode(&measurement.measurements["3"].expected)
-                        .unwrap()
+                        .map_err(|_| MeasurementFormatError::BadLength)?,
+                    rtmr2: hex::decode(&measurement.measurements["3"].expected)?
                         .try_into()
-                        .unwrap(),
-                    rtmr3: hex::decode(&measurement.measurements["4"].expected)
-                        .unwrap()
+                        .map_err(|_| MeasurementFormatError::BadLength)?,
+                    rtmr3: hex::decode(&measurement.measurements["4"].expected)?
                         .try_into()
-                        .unwrap(),
+                        .map_err(|_| MeasurementFormatError::BadLength)?,
                 },
             },
         });
     }
 
-    AttestationVerifier {
+    Ok(AttestationVerifier {
         accepted_measurements: measurements,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -199,6 +211,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_measurements_file() {
-        get_measurements_from_file("test-assets/measurements.json".into()).await;
+        get_measurements_from_file("test-assets/measurements.json".into())
+            .await
+            .unwrap();
     }
 }

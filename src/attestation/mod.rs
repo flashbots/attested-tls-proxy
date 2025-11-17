@@ -155,8 +155,7 @@ impl AttestationVerifier {
         exporter: [u8; 32],
     ) -> Result<Option<Measurements>, AttestationError> {
         let attestation_type =
-            AttestationType::parse_from_str(&attestation_payload.attestation_type).unwrap();
-        println!("handling {attestation_type}");
+            AttestationType::parse_from_str(&attestation_payload.attestation_type)?;
 
         let measurements = match attestation_type {
             AttestationType::DcapTdx => {
@@ -187,22 +186,6 @@ impl AttestationVerifier {
         !self.accepted_measurements.is_empty()
     }
 }
-
-// /// Defines how to verify a quote
-// pub trait QuoteVerifier: Sync + Send + 'static {
-//     /// Type of attestation used
-//     fn attestation_type(&self) -> AttestationType;
-//
-//     /// Verify the given attestation payload
-//     fn verify_attestation(
-//         &self,
-//         input: Vec<u8>,
-//         cert_chain: &[CertificateDer<'_>],
-//         exporter: [u8; 32],
-//     ) -> Pin<
-//         Box<dyn Future<Output = Result<Option<Measurements>, AttestationError>> + Send + 'static>,
-//     >;
-// }
 
 /// Quote generation using configfs_tsm
 #[derive(Clone)]
@@ -322,31 +305,6 @@ impl QuoteGenerator for NoQuoteGenerator {
         Ok(Vec::new())
     }
 }
-
-/// For no CVM platform (eg: for one-sided remote-attested TLS)
-// #[derive(Clone)]
-// pub struct NoQuoteVerifier;
-//
-// impl QuoteVerifier for NoQuoteVerifier {
-//     /// Type of attestation used
-//     fn attestation_type(&self) -> AttestationType {
-//         AttestationType::None
-//     }
-//
-//     /// Ensure that an empty attestation is given
-//     async fn verify_attestation(
-//         &self,
-//         input: Vec<u8>,
-//         _cert_chain: &[CertificateDer<'_>],
-//         _exporter: [u8; 32],
-//     ) -> Result<Option<Measurements>, AttestationError> {
-//         if input.is_empty() {
-//             Ok(None)
-//         } else {
-//             Err(AttestationError::AttestationGivenWhenNoneExpected)
-//         }
-//     }
-// }
 
 /// Create a mock quote for testing on non-confidential hardware
 #[cfg(test)]

@@ -55,11 +55,6 @@ enum CliCommand {
         // Name:  "tls-ca-certificate",
         // Usage: "additional CA certificate to verify against (PEM) [default=no additional TLS certs]. Only valid with --verify-tls.",
         //
-        // Name:    "override-azurev6-tcbinfo",
-        // Value:   false,
-        // EnvVars: []string{"OVERRIDE_AZUREV6_TCBINFO"},
-        // Usage:   "Allows Azure's V6 instance outdated SEAM Loader",
-        //
         // Name:    "dev-dummy-dcap",
         // EnvVars: []string{"DEV_DUMMY_DCAP"},
         // Usage:   "URL of the remote dummy DCAP service. Only with --client-attestation-type dummy.",
@@ -93,13 +88,6 @@ enum CliCommand {
         // EnvVars: []string{"LISTEN_ADDR_HEALTHCHECK"},
         // Value:   "",
         // Usage:   "address to listen on for health checks",
-        //
-        //
-        //
-        // Name:    "override-azurev6-tcbinfo",
-        // Value:   false,
-        // EnvVars: []string{"OVERRIDE_AZUREV6_TCBINFO"},
-        // Usage:   "Allows Azure's V6 instance outdated SEAM Loader",
         //
         // Name:    "dev-dummy-dcap",
         // EnvVars: []string{"DEV_DUMMY_DCAP"},
@@ -143,7 +131,9 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let attestation_verifier = match server_measurements {
-                Some(server_measurements) => get_measurements_from_file(server_measurements).await,
+                Some(server_measurements) => {
+                    get_measurements_from_file(server_measurements).await?
+                }
                 None => AttestationVerifier::do_not_verify(),
             };
 
@@ -187,7 +177,9 @@ async fn main() -> anyhow::Result<()> {
             let local_attestation_generator = server_attestation_type.get_quote_generator()?;
 
             let attestation_verifier = match client_measurements {
-                Some(client_measurements) => get_measurements_from_file(client_measurements).await,
+                Some(client_measurements) => {
+                    get_measurements_from_file(client_measurements).await?
+                }
                 None => AttestationVerifier::do_not_verify(),
             };
 
@@ -212,7 +204,9 @@ async fn main() -> anyhow::Result<()> {
             server_measurements,
         } => {
             let attestation_verifier = match server_measurements {
-                Some(server_measurements) => get_measurements_from_file(server_measurements).await,
+                Some(server_measurements) => {
+                    get_measurements_from_file(server_measurements).await?
+                }
                 None => AttestationVerifier::do_not_verify(),
             };
             let cert_chain = get_tls_cert(server, attestation_verifier).await?;
