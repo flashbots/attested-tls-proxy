@@ -50,10 +50,10 @@ enum CliCommand {
         /// Optional path to file containing JSON measurements to be enforced on the server
         #[arg(long)]
         server_measurements: Option<PathBuf>,
+        #[arg(long)]
+        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
+        tls_ca_certificate: Option<PathBuf>,
         // TODO missing:
-        // Name:  "tls-ca-certificate",
-        // Usage: "additional CA certificate to verify against (PEM) [default=no additional TLS certs]. Only valid with --verify-tls.",
-        //
         // Name:    "dev-dummy-dcap",
         // EnvVars: []string{"DEV_DUMMY_DCAP"},
         // Usage:   "URL of the remote dummy DCAP service. Only with --client-attestation-type dummy.",
@@ -114,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
             tls_certificate_path,
             client_attestation_type,
             server_measurements,
+            tls_ca_certificate,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
@@ -145,6 +146,16 @@ async fn main() -> anyhow::Result<()> {
                 serde_json::Value::String(client_attestation_type.unwrap_or("none".to_string())),
             )?;
 
+            let remote_tls_cert = match tls_ca_certificate {
+                Some(remote_cert_filename) => Some(
+                    load_certs_pem(remote_cert_filename)?
+                        .first()
+                        .ok_or(anyhow!("Filename given but no ceritificates found"))?
+                        .clone(),
+                ),
+                None => None,
+            };
+
             let client_attestation_generator = client_attestation_type.get_quote_generator()?;
 
             let client = ProxyClient::new(
@@ -153,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
                 target_addr,
                 client_attestation_generator,
                 attestation_verifier,
+                remote_tls_cert,
             )
             .await?;
 

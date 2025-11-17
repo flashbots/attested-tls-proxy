@@ -320,6 +320,7 @@ impl ProxyClient {
         server_name: String,
         local_quote_generator: Arc<dyn QuoteGenerator>,
         attestation_verifier: AttestationVerifier,
+        remote_certificate: Option<CertificateDer<'static>>,
     ) -> Result<Self, ProxyError> {
         if local_quote_generator.attestation_type() != AttestationType::None
             && cert_and_key.is_none()
@@ -327,7 +328,14 @@ impl ProxyClient {
             return Err(ProxyError::NoClientAuth);
         }
 
-        let root_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let root_store = match remote_certificate {
+            Some(remote_certificate) => {
+                let mut root_store = RootCertStore::empty();
+                root_store.add(remote_certificate)?;
+                root_store
+            }
+            None => RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
+        };
 
         let client_config = if let Some(ref cert_and_key) = cert_and_key {
             ClientConfig::builder()
