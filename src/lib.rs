@@ -11,6 +11,7 @@ use hyper::service::service_fn;
 use hyper::Response;
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
+use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 
 #[cfg(test)]
@@ -306,11 +307,15 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
 
 pub struct ProxyClient {
     inner: Proxy,
-    connector: TlsConnector,
-    /// The host and port of the proxy server
-    target: String,
-    /// Certificate chain for client auth
-    cert_chain: Option<Vec<CertificateDer<'static>>>,
+    // connector: TlsConnector,
+    // /// The host and port of the proxy server
+    // target: String,
+    // /// Certificate chain for client auth
+    // cert_chain: Option<Vec<CertificateDer<'static>>>
+    requests_tx: mpsc::Sender<(
+        http::Request<hyper::body::Incoming>,
+        oneshot::Sender<Result<http::Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
+    )>,
 }
 
 impl ProxyClient {
@@ -377,44 +382,87 @@ impl ProxyClient {
 
         let inner = Proxy {
             listener,
-            local_quote_generator,
-            attestation_verifier,
+            local_quote_generator: local_quote_generator.clone(),
+            attestation_verifier: attestation_verifier.clone(),
         };
 
-        Ok(Self {
-            inner,
-            connector,
-            target: host_to_host_with_port(&target_name),
-            cert_chain,
-        })
-    }
+        let target = host_to_host_with_port(&target_name);
 
-    /// Accept an incoming connection and handle it
-    pub async fn accept(&self) -> io::Result<()> {
-        let (inbound, _client_addr) = self.inner.listener.accept().await?;
+        // TODO connect to server and attest
+        // start run loop with channels
+        // return struct with sender
+        //
+        let (tls_stream, measurements, remote_attestation_type) = Self::setup_connection(
+            connector.clone(),
+            target,
+            cert_chain.clone(),
+            local_quote_generator,
+            attestation_verifier,
+        )
+        .await?;
 
-        let connector = self.connector.clone();
-        let target = self.target.clone();
-        let local_quote_generator = self.inner.local_quote_generator.clone();
-        let attestation_verifier = self.inner.attestation_verifier.clone();
-        let cert_chain = self.cert_chain.clone();
+        let outbound_io = TokioIo::new(tls_stream);
+        let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
+            .handshake::<_, hyper::body::Incoming>(outbound_io)
+            .await?;
 
+        // Drive the connection
         tokio::spawn(async move {
-            if let Err(err) = Self::handle_connection(
-                inbound,
-                connector,
-                target,
-                cert_chain,
-                local_quote_generator,
-                attestation_verifier,
-            )
-            .await
-            {
-                eprintln!("Failed to handle connection: {err}");
+            if let Err(e) = conn.await {
+                eprintln!("Client connection error: {e}");
             }
         });
 
-        Ok(())
+        // Channel for getting incoming requests from the source client
+        let (requests_tx, mut requests_rx) = mpsc::channel::<(
+            http::Request<hyper::body::Incoming>,
+            oneshot::Sender<
+                Result<http::Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>,
+            >,
+        )>(1024);
+
+        tokio::spawn(async move {
+            while let Some((req, response_tx)) = requests_rx.recv().await {
+                let resp = match sender.send_request(req).await {
+                    Ok(mut resp) => {
+                        if let Some(measurements) = measurements.clone() {
+                            let headers = resp.headers_mut();
+                            match measurements.to_header_format() {
+                                Ok(header_value) => {
+                                    headers.insert(MEASUREMENT_HEADER, header_value);
+                                }
+                                Err(e) => {
+                                    // This error is highly unlikely - that the measurement values fail to
+                                    // encode to JSON or fit in an HTTP header
+                                    eprintln!("Failed to encode measurement values: {e}");
+                                }
+                            }
+                            headers.insert(
+                                ATTESTATION_TYPE_HEADER,
+                                HeaderValue::from_str(remote_attestation_type.as_str()).unwrap(),
+                            );
+                        }
+                        Ok(resp.map(|b| b.boxed()))
+                    }
+                    Err(e) => {
+                        eprintln!("send_request error: {e}");
+                        let mut resp = Response::new(full(format!("Request failed: {e}")));
+                        *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
+                        Ok(resp)
+                    }
+                };
+                // Send the response back to the source client
+                response_tx.send(resp).unwrap();
+            }
+        });
+
+        Ok(Self {
+            inner,
+            // connector,
+            // target: host_to_host_with_port(&target_name),
+            // cert_chain,
+            requests_tx,
+        })
     }
 
     /// Helper to return the local socket address from the underlying TCP listener
@@ -422,33 +470,34 @@ impl ProxyClient {
         self.inner.listener.local_addr()
     }
 
+    /// Accept an incoming connection and handle it in a separate task
+    pub async fn accept(&self) -> io::Result<()> {
+        let (inbound, _client_addr) = self.inner.listener.accept().await?;
+
+        let requests_tx = self.requests_tx.clone();
+
+        tokio::spawn(async move {
+            if let Err(err) = Self::handle_connection(inbound, requests_tx).await {
+                eprintln!("Failed to handle connection from source client: {err}");
+            }
+        });
+
+        Ok(())
+    }
+
     /// Handle an incoming connection
     async fn handle_connection(
         inbound: TcpStream,
-        connector: TlsConnector,
-        target: String,
-        cert_chain: Option<Vec<CertificateDer<'static>>>,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
-        attestation_verifier: AttestationVerifier,
+        requests_tx: mpsc::Sender<(
+            http::Request<hyper::body::Incoming>,
+            oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
+        )>,
     ) -> Result<(), ProxyError> {
         let http = Builder::new();
         let service = service_fn(move |req| {
-            let connector = connector.clone();
-            let target = target.clone();
-            let cert_chain = cert_chain.clone();
-            let local_quote_generator = local_quote_generator.clone();
-            let attestation_verifier = attestation_verifier.clone();
+            let requests_tx = requests_tx.clone();
             async move {
-                match Self::handle_http_request(
-                    req,
-                    connector,
-                    target,
-                    cert_chain,
-                    local_quote_generator,
-                    attestation_verifier,
-                )
-                .await
-                {
+                match Self::handle_http_request(req, requests_tx).await {
                     Ok(res) => {
                         Ok::<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>(res)
                     }
@@ -537,62 +586,14 @@ impl ProxyClient {
     // Handle a request from the source client to the proxy server
     async fn handle_http_request(
         req: hyper::Request<hyper::body::Incoming>,
-        connector: TlsConnector,
-        target: String,
-        cert_chain: Option<Vec<CertificateDer<'static>>>,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
-        attestation_verifier: AttestationVerifier,
+        requests_tx: mpsc::Sender<(
+            http::Request<hyper::body::Incoming>,
+            oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
+        )>,
     ) -> Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, ProxyError> {
-        let (tls_stream, measurements, remote_attestation_type) = Self::setup_connection(
-            connector,
-            target,
-            cert_chain,
-            local_quote_generator,
-            attestation_verifier,
-        )
-        .await?;
-
-        // Now the attestation is done, forward the request to the proxy server
-        let outbound_io = TokioIo::new(tls_stream);
-        let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
-            .handshake::<_, hyper::body::Incoming>(outbound_io)
-            .await?;
-
-        // Drive the connection
-        tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                eprintln!("Client connection error: {e}");
-            }
-        });
-
-        match sender.send_request(req).await {
-            Ok(mut resp) => {
-                if let Some(measurements) = measurements {
-                    let headers = resp.headers_mut();
-                    match measurements.to_header_format() {
-                        Ok(header_value) => {
-                            headers.insert(MEASUREMENT_HEADER, header_value);
-                        }
-                        Err(e) => {
-                            // This error is highly unlikely - that the measurement values fail to
-                            // encode to JSON or fit in an HTTP header
-                            eprintln!("Failed to encode measurement values: {e}");
-                        }
-                    }
-                    headers.insert(
-                        ATTESTATION_TYPE_HEADER,
-                        HeaderValue::from_str(remote_attestation_type.as_str()).unwrap(),
-                    );
-                }
-                Ok(resp.map(|b| b.boxed()))
-            }
-            Err(e) => {
-                eprintln!("send_request error: {e}");
-                let mut resp = Response::new(full(format!("Request failed: {e}")));
-                *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
-                Ok(resp)
-            }
-        }
+        let (response_tx, response_rx) = oneshot::channel();
+        requests_tx.send((req, response_tx)).await.unwrap();
+        Ok(response_rx.await.unwrap()?)
     }
 }
 
@@ -808,6 +809,7 @@ mod tests {
         let proxy_addr = proxy_server.local_addr().unwrap();
 
         tokio::spawn(async move {
+            // Accept one connection, then finish
             proxy_server.accept().await.unwrap();
         });
 
@@ -827,9 +829,35 @@ mod tests {
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
         tokio::spawn(async move {
+            // Accept two connections, then finish
+            proxy_client.accept().await.unwrap();
             proxy_client.accept().await.unwrap();
         });
 
+        let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+            .await
+            .unwrap();
+
+        let headers = res.headers();
+        let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
+        let measurements = Measurements::from_header_format(measurements_json).unwrap();
+        assert_eq!(measurements, default_measurements());
+
+        let attestation_type = headers
+            .get(ATTESTATION_TYPE_HEADER)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+
+        let res_body = res.text().await.unwrap();
+
+        // The response body shows us what was in the request header (as the test http server
+        // handler puts them there)
+        let measurements = Measurements::from_header_format(&res_body).unwrap();
+        assert_eq!(measurements, default_measurements());
+
+        // Now do another request - to check that the connection has stayed open
         let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
             .await
             .unwrap();
