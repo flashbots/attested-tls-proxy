@@ -17,6 +17,7 @@ use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 mod test_helpers;
 
 use std::num::TryFromIntError;
+use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -32,10 +33,14 @@ use crate::attestation::{AttesationPayload, AttestationVerifier};
 /// The label used when exporting key material from a TLS session
 const EXPORTER_LABEL: &[u8; 24] = b"EXPORTER-Channel-Binding";
 
+/// The header name for giving attestation type
 const ATTESTATION_TYPE_HEADER: &str = "X-Flashbots-Attestation-Type";
 
 /// The header name for giving measurements
 const MEASUREMENT_HEADER: &str = "X-Flashbots-Measurement";
+
+/// The longest time in seconds to wait between reconnection attempts
+const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 
 type RequestWithResponseSender = (
     http::Request<hyper::body::Incoming>,
@@ -430,17 +435,16 @@ impl ProxyClient {
 
                 // If the connection to the proxy server failed, reconnect
                 if should_reconnect {
-                    // Reconnect to the server
-                    // TODO the error should be handled in a backoff loop
-                    (sender, measurements, remote_attestation_type) = Self::setup_connection(
-                        connector.clone(),
-                        target.clone(),
-                        cert_chain.clone(),
-                        local_quote_generator.clone(),
-                        attestation_verifier.clone(),
-                    )
-                    .await
-                    .unwrap();
+                    // Reconnect to the server - retrying with a backoff
+                    (sender, measurements, remote_attestation_type) =
+                        Self::setup_connection_with_backoff(
+                            connector.clone(),
+                            target.clone(),
+                            cert_chain.clone(),
+                            local_quote_generator.clone(),
+                            attestation_verifier.clone(),
+                        )
+                        .await;
                 }
             }
         });
@@ -498,6 +502,40 @@ impl ProxyClient {
         http.serve_connection(io, service).await?;
 
         Ok(())
+    }
+
+    async fn setup_connection_with_backoff(
+        connector: TlsConnector,
+        target: String,
+        cert_chain: Option<Vec<CertificateDer<'static>>>,
+        local_quote_generator: Arc<dyn QuoteGenerator>,
+        attestation_verifier: AttestationVerifier,
+    ) -> (Http2Sender, Option<Measurements>, AttestationType) {
+        let mut delay = Duration::from_secs(1);
+        let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
+
+        loop {
+            match Self::setup_connection(
+                connector.clone(),
+                target.clone(),
+                cert_chain.clone(),
+                local_quote_generator.clone(),
+                attestation_verifier.clone(),
+            )
+            .await
+            {
+                Ok(output) => {
+                    return output;
+                }
+                Err(e) => {
+                    eprintln!("Reconnect failed: {e}. Retrying in {:#?}...", delay);
+                    tokio::time::sleep(delay).await;
+
+                    // increase delay for next time (exponential), but clamp to max_delay
+                    delay = std::cmp::min(delay * 2, max_delay);
+                }
+            }
+        }
     }
 
     async fn setup_connection(
