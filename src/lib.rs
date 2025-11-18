@@ -12,6 +12,7 @@ use hyper::Response;
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
+use tracing::{error, warn};
 
 #[cfg(test)]
 mod test_helpers;
@@ -152,7 +153,7 @@ impl ProxyServer {
             )
             .await
             {
-                eprintln!("Failed to handle connection: {err}");
+                warn!("Failed to handle connection: {err}");
             }
         });
 
@@ -239,7 +240,7 @@ impl ProxyServer {
                     Err(e) => {
                         // This error is highly unlikely - that the measurement values fail to
                         // encode to JSON or fit in an HTTP header
-                        eprintln!("Failed to encode measurement values: {e}");
+                        error!("Failed to encode measurement values: {e}");
                     }
                 }
                 headers.insert(
@@ -254,7 +255,7 @@ impl ProxyServer {
                         Ok::<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>(res)
                     }
                     Err(e) => {
-                        eprintln!("send_request error: {e}");
+                        warn!("send_request error: {e}");
                         let mut resp = Response::new(full(format!("Request failed: {e}")));
                         *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
                         Ok(resp)
@@ -282,14 +283,14 @@ impl ProxyServer {
         // Drive the connection
         tokio::spawn(async move {
             if let Err(e) = conn.await {
-                eprintln!("Client connection error: {e}");
+                warn!("Client connection error: {e}");
             }
         });
 
         match sender.send_request(req).await {
             Ok(resp) => Ok(resp.map(|b| b.boxed())),
             Err(e) => {
-                eprintln!("send_request error: {e}");
+                warn!("send_request error: {e}");
                 let mut resp = Response::new(full(format!("Request failed: {e}")));
                 *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
                 Ok(resp)
@@ -410,7 +411,7 @@ impl ProxyClient {
             )
             .await
             {
-                eprintln!("Failed to handle connection: {err}");
+                warn!("Failed to handle connection: {err}");
             }
         });
 
@@ -453,7 +454,7 @@ impl ProxyClient {
                         Ok::<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>(res)
                     }
                     Err(e) => {
-                        eprintln!("send_request error: {e}");
+                        warn!("send_request error: {e}");
                         let mut resp = Response::new(full(format!("Request failed: {e}")));
                         *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
                         Ok(resp)
@@ -561,7 +562,7 @@ impl ProxyClient {
         // Drive the connection
         tokio::spawn(async move {
             if let Err(e) = conn.await {
-                eprintln!("Client connection error: {e}");
+                warn!("Client connection error: {e}");
             }
         });
 
@@ -576,7 +577,7 @@ impl ProxyClient {
                         Err(e) => {
                             // This error is highly unlikely - that the measurement values fail to
                             // encode to JSON or fit in an HTTP header
-                            eprintln!("Failed to encode measurement values: {e}");
+                            error!("Failed to encode measurement values: {e}");
                         }
                     }
                     headers.insert(
@@ -587,7 +588,7 @@ impl ProxyClient {
                 Ok(resp.map(|b| b.boxed()))
             }
             Err(e) => {
-                eprintln!("send_request error: {e}");
+                warn!("send_request error: {e}");
                 let mut resp = Response::new(full(format!("Request failed: {e}")));
                 *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
                 Ok(resp)

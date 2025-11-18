@@ -2,6 +2,7 @@ use anyhow::{anyhow, ensure};
 use clap::{Parser, Subcommand};
 use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
     attestation::{measurements::get_measurements_from_file, AttestationType, AttestationVerifier},
@@ -13,15 +14,13 @@ use attested_tls_proxy::{
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
-    // TODO missing:
-    // Name:  "log-json",
-    // Value: false,
-    // Usage: "log in JSON format",
-    //
-    // Name:  "log-debug",
-    // Value: true,
-    // Usage: "log debug messages",
-    //
+    /// Log debug messages
+    #[arg(long, global = true)]
+    log_debug: bool,
+    #[arg(long, global = true)]
+    /// Log in JSON format
+    log_json: bool,
+    // TODO still missing
     // Name:    "log-dcap-quote",
     // EnvVars: []string{"LOG_DCAP_QUOTE"},
     // Value:   false,
@@ -106,6 +105,24 @@ enum CliCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    let level_filter = if cli.log_debug {
+        LevelFilter::DEBUG
+    } else {
+        LevelFilter::WARN
+    };
+
+    let env_filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(level_filter.into())
+        .from_env_lossy();
+
+    let subscriber = tracing_subscriber::fmt::Subscriber::builder().with_env_filter(env_filter);
+
+    if cli.log_json {
+        subscriber.json().init();
+    } else {
+        subscriber.pretty().init();
+    }
+
     match cli.command {
         CliCommand::Client {
             listen_addr,
@@ -170,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
 
             loop {
                 if let Err(err) = client.accept().await {
-                    eprintln!("Failed to handle connection: {err}");
+                    tracing::error!("Failed to handle connection: {err}");
                 }
             }
         }
@@ -211,7 +228,7 @@ async fn main() -> anyhow::Result<()> {
 
             loop {
                 if let Err(err) = server.accept().await {
-                    eprintln!("Failed to handle connection: {err}");
+                    tracing::error!("Failed to handle connection: {err}");
                 }
             }
         }
