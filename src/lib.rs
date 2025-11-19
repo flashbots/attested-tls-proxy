@@ -9,6 +9,8 @@ use http_body_util::BodyExt;
 use hyper::service::service_fn;
 use hyper::Response;
 use hyper_util::rt::TokioIo;
+use parity_scale_codec::Decode;
+use parity_scale_codec::Encode;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
@@ -192,11 +194,12 @@ impl ProxyServer {
 
         // If we are in a CVM, generate an attestation
         let attestation = if local_quote_generator.attestation_type() != AttestationType::None {
-            serde_json::to_vec(&AttesationPayload::from_attestation_generator(
+            AttesationPayload::from_attestation_generator(
                 &cert_chain,
                 exporter,
                 local_quote_generator,
-            )?)?
+            )?
+            .encode()
         } else {
             Vec::new()
         };
@@ -218,7 +221,7 @@ impl ProxyServer {
         // If we expect an attestaion from the client, verify it and get measurements
         let (measurements, remote_attestation_type) = if attestation_verifier.has_remote_attestion()
         {
-            let remote_attestation_payload: AttesationPayload = serde_json::from_slice(&buf)?;
+            let remote_attestation_payload = AttesationPayload::decode(&mut &buf[..])?;
 
             let remote_attestation_type = remote_attestation_payload.attestation_type;
             (
@@ -607,7 +610,7 @@ impl ProxyClient {
         let mut buf = vec![0; length];
         tls_stream.read_exact(&mut buf).await?;
 
-        let remote_attestation_payload: AttesationPayload = serde_json::from_slice(&buf)?;
+        let remote_attestation_payload = AttesationPayload::decode(&mut &buf[..])?;
         let remote_attestation_type = remote_attestation_payload.attestation_type;
 
         // Verify the remote attestation against our accepted measurements
@@ -617,11 +620,12 @@ impl ProxyClient {
 
         // If we are in a CVM, provide an attestation
         let attestation = if local_quote_generator.attestation_type() != AttestationType::None {
-            serde_json::to_vec(&AttesationPayload::from_attestation_generator(
+            AttesationPayload::from_attestation_generator(
                 &cert_chain.ok_or(ProxyError::NoClientAuth)?,
                 exporter,
                 local_quote_generator,
-            )?)?
+            )?
+            .encode()
         } else {
             Vec::new()
         };
@@ -705,7 +709,7 @@ async fn get_tls_cert_with_config(
     let mut buf = vec![0; length];
     tls_stream.read_exact(&mut buf).await?;
 
-    let remote_attestation_payload: AttesationPayload = serde_json::from_slice(&buf)?;
+    let remote_attestation_payload = AttesationPayload::decode(&mut &buf[..])?;
 
     let _measurements = attestation_verifier
         .verify_attestation(remote_attestation_payload, &remote_cert_chain, exporter)
@@ -741,6 +745,8 @@ pub enum ProxyError {
     OneShotRecv(#[from] oneshot::error::RecvError),
     #[error("Failed to send request, connection to proxy-server dropped")]
     MpscSend,
+    #[error("Serialization: {0}")]
+    Serialization(#[from] parity_scale_codec::Error),
 }
 
 impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {

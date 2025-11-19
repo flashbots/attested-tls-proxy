@@ -141,6 +141,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "parity-scale-codec",
  "pem-rfc7468",
  "rand_core 0.6.4",
  "rcgen",

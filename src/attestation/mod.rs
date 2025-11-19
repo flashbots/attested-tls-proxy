@@ -1,6 +1,7 @@
 pub mod measurements;
 
 use measurements::{CvmImageMeasurements, MeasurementRecord, Measurements, PlatformMeasurements};
+use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
@@ -22,7 +23,7 @@ use x509_parser::prelude::*;
 /// For fetching collateral directly from intel, if no PCCS is specified
 const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct AttesationPayload {
     pub attestation_type: AttestationType,
     pub attestation: Vec<u8>,
@@ -82,6 +83,21 @@ impl AttestationType {
                 attestation_type: *self,
             })),
         }
+    }
+}
+
+impl Encode for AttestationType {
+    fn encode(&self) -> Vec<u8> {
+        self.as_str().encode()
+    }
+}
+
+impl Decode for AttestationType {
+    fn decode<I: parity_scale_codec::Input>(
+        input: &mut I,
+    ) -> Result<Self, parity_scale_codec::Error> {
+        let s: String = String::decode(input)?;
+        serde_json::from_str(&format!("\"{s}\"")).map_err(|_| "Failed to decode enum".into())
     }
 }
 
