@@ -111,8 +111,8 @@ Immediately after the TLS handshake, an attestation exchange is made. The server
 Attestation exchange messages are formatted as follows:
 - A 4 byte length prefix - a big endian encoded unsigned 32 bit integer
 - A SCALE (Simple Concatenated Aggregate Little-Endian) encoded [struct](./src/attestation/mod.rs) with the following fields:
-  - Attestation type - a string with one of the attestation types (described above) including `none`.
-  - Attestation - the actual attestation data. In the case of DCAP this is a binary quote report. In the case of `none` this is an empty byte array.
+  - `attestation_type` - a string with one of the attestation types (described above) including `none`.
+  - `attestation` - the actual attestation data. In the case of DCAP this is a binary quote report. In the case of `none` this is an empty byte array.
 
 SCALE is used by parity/substrate and was chosen because it is simple and actually matches the formatting used in TDX quotes. So it was already used as a dependency (of the `dcap-qvl` crate) here.
 
