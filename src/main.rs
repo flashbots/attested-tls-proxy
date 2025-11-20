@@ -17,8 +17,8 @@ struct Cli {
     /// Log debug messages
     #[arg(long, global = true)]
     log_debug: bool,
-    #[arg(long, global = true)]
     /// Log in JSON format
+    #[arg(long, global = true)]
     log_json: bool,
     // TODO still missing
     // Name:    "log-dcap-quote",
