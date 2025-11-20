@@ -11,6 +11,7 @@ use parity_scale_codec::{Decode, Encode};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
+use tracing::{error, warn};
 
 #[cfg(test)]
 mod test_helpers;
@@ -153,7 +154,7 @@ impl ProxyServer {
             )
             .await
             {
-                eprintln!("Failed to handle connection: {err}");
+                warn!("Failed to handle connection: {err}");
             }
         });
 
@@ -244,7 +245,7 @@ impl ProxyServer {
                     Err(e) => {
                         // This error is highly unlikely - that the measurement values fail to
                         // encode to JSON or fit in an HTTP header
-                        eprintln!("Failed to encode measurement values: {e}");
+                        error!("Failed to encode measurement values: {e}");
                     }
                 }
                 headers.insert(
@@ -260,7 +261,7 @@ impl ProxyServer {
                         Ok::<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>(res)
                     }
                     Err(e) => {
-                        eprintln!("Failed to handle a request from a proxy-client: {e}");
+                        warn!("Failed to handle a request from a proxy-client: {e}");
                         let mut resp = Response::new(full(format!("Request failed: {e}")));
                         *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
                         Ok(resp)
@@ -291,7 +292,7 @@ impl ProxyServer {
         // Drive the connection
         tokio::spawn(async move {
             if let Err(e) = conn.await {
-                eprintln!("Client connection error: {e}");
+                warn!("Client connection error: {e}");
             }
         });
 
@@ -299,7 +300,7 @@ impl ProxyServer {
         match sender.send_request(req).await {
             Ok(resp) => Ok(resp.map(|b| b.boxed())),
             Err(e) => {
-                eprintln!("send_request error: {e}");
+                warn!("send_request error: {e}");
                 let mut resp = Response::new(full(format!("Request failed: {e}")));
                 *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
                 Ok(resp)
@@ -428,7 +429,7 @@ impl ProxyClient {
                                 Err(e) => {
                                     // This error is highly unlikely - that the measurement values fail to
                                     // encode to JSON or fit in an HTTP header
-                                    eprintln!("Failed to encode measurement values: {e}");
+                                    error!("Failed to encode measurement values: {e}");
                                 }
                             }
                             headers.insert(
@@ -440,7 +441,7 @@ impl ProxyClient {
                         (Ok(resp.map(|b| b.boxed())), false)
                     }
                     Err(e) => {
-                        eprintln!("Failed to send request to proxy-server: {e}");
+                        warn!("Failed to send request to proxy-server: {e}");
                         let mut resp = Response::new(full(format!("Request failed: {e}")));
                         *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
 
@@ -450,7 +451,7 @@ impl ProxyClient {
 
                 // Send the response back to the source client
                 if response_tx.send(response).is_err() {
-                    eprintln!("Failed to forward response to source client, probably they dropped the connection");
+                    warn!("Failed to forward response to source client, probably they dropped the connection");
                 }
 
                 // If the connection to the proxy server failed, reconnect
@@ -488,7 +489,7 @@ impl ProxyClient {
 
         tokio::spawn(async move {
             if let Err(err) = Self::handle_connection(inbound, requests_tx).await {
-                eprintln!("Failed to handle connection from source client: {err}");
+                warn!("Failed to handle connection from source client: {err}");
             }
         });
 
@@ -510,7 +511,7 @@ impl ProxyClient {
                         Ok::<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>(res)
                     }
                     Err(e) => {
-                        eprintln!("send_request error: {e}");
+                        warn!("send_request error: {e}");
                         let mut resp = Response::new(full(format!("Request failed: {e}")));
                         *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
                         Ok(resp)
@@ -551,7 +552,7 @@ impl ProxyClient {
                     return output;
                 }
                 Err(e) => {
-                    eprintln!("Reconnect failed: {e}. Retrying in {:#?}...", delay);
+                    warn!("Reconnect failed: {e}. Retrying in {:#?}...", delay);
                     tokio::time::sleep(delay).await;
 
                     // increase delay for next time (exponential), but clamp to max_delay
@@ -634,7 +635,7 @@ impl ProxyClient {
         // Drive the connection
         tokio::spawn(async move {
             if let Err(e) = conn.await {
-                eprintln!("Client connection error: {e}");
+                warn!("Client connection error: {e}");
             }
         });
 
