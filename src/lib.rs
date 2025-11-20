@@ -30,6 +30,11 @@ use tokio_rustls::{
 
 use crate::attestation::{AttesationPayload, AttestationVerifier};
 
+/// This makes it possible to add breaking protocol changes and provide backwards compatibility.
+/// When adding more supported versions, note that ordering is important. ALPN will pick the first
+/// protocol which both parties support - so newer supported versions should come first.
+pub const SUPPORTED_ALPN_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"flashbots-ratls/1"];
+
 /// The label used when exporting key material from a TLS session
 const EXPORTER_LABEL: &[u8; 24] = b"EXPORTER-Channel-Binding";
 
@@ -85,7 +90,7 @@ impl ProxyServer {
             return Err(ProxyError::NoClientAuth);
         }
 
-        let server_config = if client_auth {
+        let mut server_config = if client_auth {
             let root_store =
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
@@ -98,6 +103,11 @@ impl ProxyServer {
                 .with_no_client_auth()
                 .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         };
+
+        server_config.alpn_protocols = SUPPORTED_ALPN_PROTOCOL_VERSIONS
+            .into_iter()
+            .map(|p| p.to_vec())
+            .collect();
 
         Self::new_with_tls_config(
             cert_and_key.cert_chain,
@@ -178,6 +188,9 @@ impl ProxyServer {
         // Do TLS handshake
         let mut tls_stream = acceptor.accept(inbound).await?;
         let (_io, connection) = tls_stream.get_ref();
+
+        // Ensure that we agreed a protocol
+        let _negotiated_protocol = connection.alpn_protocol().ok_or(ProxyError::AlpnFailed)?;
 
         // Compute an exporter unique to the session
         let mut exporter = [0u8; 32];
@@ -352,7 +365,7 @@ impl ProxyClient {
         };
 
         // Setup TLS client configuration, with or without client auth
-        let client_config = if let Some(ref cert_and_key) = cert_and_key {
+        let mut client_config = if let Some(ref cert_and_key) = cert_and_key {
             ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_client_auth_cert(
@@ -364,6 +377,11 @@ impl ProxyClient {
                 .with_root_certificates(root_store)
                 .with_no_client_auth()
         };
+
+        client_config.alpn_protocols = SUPPORTED_ALPN_PROTOCOL_VERSIONS
+            .into_iter()
+            .map(|p| p.to_vec())
+            .collect();
 
         Self::new_with_tls_config(
             client_config.into(),
@@ -578,6 +596,11 @@ impl ProxyClient {
 
         let (_io, server_connection) = tls_stream.get_ref();
 
+        // Ensure that we agreed a protocol
+        let _negotiated_protocol = server_connection
+            .alpn_protocol()
+            .ok_or(ProxyError::AlpnFailed)?;
+
         // Compute an exporter unique to the channel
         let mut exporter = [0u8; 32];
         server_connection.export_keying_material(
@@ -737,6 +760,8 @@ pub enum ProxyError {
     MpscSend,
     #[error("Serialization: {0}")]
     Serialization(#[from] parity_scale_codec::Error),
+    #[error("Protocol negotiation failed - remote peer does not support this protocol")]
+    AlpnFailed,
 }
 
 impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {
