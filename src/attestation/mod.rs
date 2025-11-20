@@ -25,14 +25,14 @@ const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
 /// This is the type sent over the channel to provide an attestation
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
-pub struct AttesationPayload {
+pub struct AttestationExchangeMessage {
     /// What CVM platform is used (including none)
     pub attestation_type: AttestationType,
     /// The attestation evidence as bytes - in the case of DCAP this is a quote
     pub attestation: Vec<u8>,
 }
 
-impl AttesationPayload {
+impl AttestationExchangeMessage {
     /// Given an attestation generator (quote generation function for a specific platform)
     /// return an attestation
     /// This also takes the certificate chain and exporter as they are given as input to the attestation
@@ -185,16 +185,16 @@ impl AttestationVerifier {
     /// Verify an attestation, and ensure the measurements match one of our accepted measurements
     pub async fn verify_attestation(
         &self,
-        attestation_payload: AttesationPayload,
+        attestation_exchange_message: AttestationExchangeMessage,
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
     ) -> Result<Option<Measurements>, AttestationError> {
-        let attestation_type = attestation_payload.attestation_type;
+        let attestation_type = attestation_exchange_message.attestation_type;
 
         let measurements = match attestation_type {
             AttestationType::DcapTdx => {
                 verify_dcap_attestation(
-                    attestation_payload.attestation,
+                    attestation_exchange_message.attestation,
                     cert_chain,
                     exporter,
                     self.pccs_url.clone(),
@@ -202,7 +202,7 @@ impl AttestationVerifier {
                 .await?
             }
             AttestationType::None => {
-                if attestation_payload.attestation.is_empty() {
+                if attestation_exchange_message.attestation.is_empty() {
                     return Ok(None);
                 } else {
                     return Err(AttestationError::AttestationGivenWhenNoneExpected);
