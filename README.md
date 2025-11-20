@@ -85,7 +85,7 @@ Header name: `X-Flashbots-Attestation-Type`
 
 Header value: an attestation type given as a string as described below.
   
-## Attestation Types
+### Attestation Types
 
 These are the attestation type names used in the HTTP headers, and the measurements file, and when specifying a local attestation type with the `--client-attestation-type` or `--server-attestation-type` command line options.
 
@@ -116,7 +116,7 @@ Attestation exchange messages are formatted as follows:
 
 SCALE is used by parity/substrate and was chosen because it is simple and actually matches the formatting used in TDX quotes. So it was already used as a dependency (of the `dcap-qvl` crate) here.
 
-## Attestation Generation and Verification
+### Attestation Generation and Verification
 
 Attestation input takes the form of a 64 byte array.
 
@@ -128,7 +128,7 @@ In the case of attestation types `dcap-tx`, `gcp-tdx`, and `qemu-tdx`, a standar
 
 When verifying DCAP attestations, the Intel PCS is used to retrieve collateral unless a PCCS url is provided via a command line argument. If expired TCB collateral is provided, the quote will fail to verify.
 
-## HTTP reverse proxy
+### HTTP reverse proxy
 
 Following a successful attestation exchange, the client can make HTTP requests using HTTP2, and the server will forward them to the target service.
 
