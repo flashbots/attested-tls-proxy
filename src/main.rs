@@ -260,11 +260,13 @@ fn load_tls_cert_and_key(
     Ok(TlsCertAndKey { key, cert_chain })
 }
 
+/// load certificates from a PEM-encoded file
 fn load_certs_pem(path: PathBuf) -> std::io::Result<Vec<CertificateDer<'static>>> {
     rustls_pemfile::certs(&mut std::io::BufReader::new(File::open(path)?))
         .collect::<Result<Vec<_>, _>>()
 }
 
+/// load TLS private key from a PEM-encoded file
 fn load_private_key_pem(path: PathBuf) -> anyhow::Result<PrivateKeyDer<'static>> {
     let mut reader = std::io::BufReader::new(File::open(path)?);
 

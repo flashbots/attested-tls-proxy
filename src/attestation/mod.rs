@@ -1,6 +1,7 @@
 pub mod measurements;
 
 use measurements::{CvmImageMeasurements, MeasurementRecord, Measurements, PlatformMeasurements};
+use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
@@ -22,13 +23,19 @@ use x509_parser::prelude::*;
 /// For fetching collateral directly from intel, if no PCCS is specified
 const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
-#[derive(Debug, Serialize, Deserialize)]
+/// This is the type sent over the channel to provide an attestation
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct AttesationPayload {
+    /// What CVM platform is used (including none)
     pub attestation_type: AttestationType,
+    /// The attestation evidence as bytes - in the case of DCAP this is a quote
     pub attestation: Vec<u8>,
 }
 
 impl AttesationPayload {
+    /// Given an attestation generator (quote generation function for a specific platform)
+    /// return an attestation
+    /// This also takes the certificate chain and exporter as they are given as input to the attestation
     pub fn from_attestation_generator(
         cert_chain: &[CertificateDer<'_>],
         exporter: [u8; 32],
@@ -38,6 +45,15 @@ impl AttesationPayload {
             attestation_type: attesation_generator.attestation_type(),
             attestation: attesation_generator.create_attestation(cert_chain, exporter)?,
         })
+    }
+
+    /// Create an empty attestation payload for the case that we are running in a non-confidential
+    /// environment
+    pub fn without_attestation() -> Self {
+        Self {
+            attestation_type: AttestationType::None,
+            attestation: Vec::new(),
+        }
     }
 }
 
@@ -73,6 +89,7 @@ impl AttestationType {
         }
     }
 
+    /// Get a quote generator for this type of platform
     pub fn get_quote_generator(&self) -> Result<Arc<dyn QuoteGenerator>, AttestationError> {
         match self {
             AttestationType::None => Ok(Arc::new(NoQuoteGenerator)),
@@ -82,6 +99,23 @@ impl AttestationType {
                 attestation_type: *self,
             })),
         }
+    }
+}
+
+/// SCALE encode (used over the wire)
+impl Encode for AttestationType {
+    fn encode(&self) -> Vec<u8> {
+        self.as_str().encode()
+    }
+}
+
+/// SCALE decode
+impl Decode for AttestationType {
+    fn decode<I: parity_scale_codec::Input>(
+        input: &mut I,
+    ) -> Result<Self, parity_scale_codec::Error> {
+        let s: String = String::decode(input)?;
+        serde_json::from_str(&format!("\"{s}\"")).map_err(|_| "Failed to decode enum".into())
     }
 }
 
@@ -104,9 +138,15 @@ pub trait QuoteGenerator: Send + Sync + 'static {
     ) -> Result<Vec<u8>, AttestationError>;
 }
 
+/// Allows remote attestations to be verified
 #[derive(Clone, Debug)]
 pub struct AttestationVerifier {
+    /// The measurement values we accept
+    ///
+    /// If this is empty, anything will be accepted - but measurements are always injected into HTTP
+    /// headers, so that they can be verified upstream
     accepted_measurements: Vec<MeasurementRecord>,
+    /// A PCCS service to use - defaults to Intel PCS
     pccs_url: Option<String>,
 }
 

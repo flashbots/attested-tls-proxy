@@ -2,7 +2,7 @@
 name = "attested-tls-proxy"
 version = "0.1.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 tokio = { version = "1.48.0", features = ["full"] }
@@ -20,7 +20,7 @@ configfs-tsm = "0.0.2"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 dcap-qvl = "0.3.4"
 hex = "0.4.3"
-hyper = { version = "1.7.0", features = ["server"] }
+hyper = { version = "1.7.0", features = ["server", "http2"] }
 hyper-util = "0.1.17"
 http-body-util = "0.1.3"
 bytes = "1.10.1"
@@ -29,6 +29,7 @@ serde_json = "1.0.145"
 serde = "1.0.228"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
+parity-scale-codec = "3.7.5"
 
 [dev-dependencies]
 rcgen = "0.14.5"
