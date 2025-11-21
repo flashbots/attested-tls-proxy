@@ -145,9 +145,9 @@ pub struct AttestationVerifier {
     ///
     /// If this is empty, anything will be accepted - but measurements are always injected into HTTP
     /// headers, so that they can be verified upstream
-    accepted_measurements: Vec<MeasurementRecord>,
+    pub accepted_measurements: Vec<MeasurementRecord>,
     /// A PCCS service to use - defaults to Intel PCS
-    pccs_url: Option<String>,
+    pub pccs_url: Option<String>,
 }
 
 impl AttestationVerifier {
@@ -202,6 +202,9 @@ impl AttestationVerifier {
                 .await?
             }
             AttestationType::None => {
+                if self.has_remote_attestion() {
+                    return Err(AttestationError::AttestationTypeNotAccepted);
+                }
                 if attestation_payload.attestation.is_empty() {
                     return Ok(None);
                 } else {
@@ -216,7 +219,8 @@ impl AttestationVerifier {
         // look through all our accepted measurements
         self.accepted_measurements
             .iter()
-            .find(|a| a.attestation_type == attestation_type && a.measurements == measurements);
+            .find(|a| a.attestation_type == attestation_type && a.measurements == measurements)
+            .ok_or(AttestationError::MeasurementsNotAccepted)?;
 
         Ok(Some(measurements))
     }
@@ -409,4 +413,8 @@ pub enum AttestationError {
     QuoteParse(#[from] QuoteParseError),
     #[error("Attestation type not supported")]
     AttestationTypeNotSupported,
+    #[error("Attestation type not accepted")]
+    AttestationTypeNotAccepted,
+    #[error("Measurements not accepted")]
+    MeasurementsNotAccepted,
 }
