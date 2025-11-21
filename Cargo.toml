@@ -10,7 +10,7 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring
 sha2 = "0.10.9"
 x509-parser = "0.18.0"
 thiserror = "2.0.17"
-clap = { version = "4.5.51", features = ["derive"] }
+clap = { version = "4.5.51", features = ["derive", "env"] }
 webpki-roots = "1.0.4"
 rustls-pemfile = "2.2.0"
 anyhow = "1.0.100"
