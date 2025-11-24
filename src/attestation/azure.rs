@@ -57,16 +57,15 @@ pub async fn create_azure_attestation(
     let quote_b64 = BASE64_URL_SAFE.encode(&td_quote_bytes);
     let runtime_b64 = BASE64_URL_SAFE.encode(hcl_var_data);
 
-    let body = TdxVmRequest {
+    let tdx_vm_request = TdxVmRequest {
         quote: quote_b64,
         runtime_data: Some(RuntimeData {
             data: runtime_b64,
             data_type: "Binary",
         }),
-        nonce: Some("my-app-nonce-or-session-id".to_string()),
+        nonce: Some("my-app-nonce-or-session-id".to_string()), // TODO
     };
-    let body_bytes = serde_json::to_vec(&body)?;
-    let jwt_token = call_tdxvm_attestation(maa_endpoint, aad_access_token, body_bytes).await?;
+    let jwt_token = call_tdxvm_attestation(maa_endpoint, aad_access_token, &tdx_vm_request).await?;
     Ok(jwt_token.as_bytes().to_vec())
 }
 
@@ -74,7 +73,7 @@ pub async fn create_azure_attestation(
 async fn call_tdxvm_attestation(
     maa_endpoint: String,
     aad_access_token: String,
-    body_bytes: Vec<u8>,
+    tdx_vm_request: &TdxVmRequest<'_>,
 ) -> Result<String, MaaError> {
     let url = format!("{}/attest/TdxVm?api-version=2025-06-01", maa_endpoint);
 
@@ -83,7 +82,7 @@ async fn call_tdxvm_attestation(
         .post(&url)
         .bearer_auth(&aad_access_token)
         .header("Content-Type", "application/json")
-        .body(body_bytes)
+        .body(serde_json::to_vec(tdx_vm_request)?)
         .send()
         .await?;
 
