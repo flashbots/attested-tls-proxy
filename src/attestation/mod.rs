@@ -122,7 +122,7 @@ impl AttestationGenerator {
         match self.attestation_type {
             AttestationType::None => Ok(Vec::new()),
             AttestationType::AzureTdx => {
-                azure::create_azure_attestation(cert_chain, exporter).await
+                Ok(azure::create_azure_attestation(cert_chain, exporter).await?)
             }
             AttestationType::Dummy => Err(AttestationError::AttestationTypeNotSupported),
             _ => dcap::create_dcap_attestation(cert_chain, exporter).await,
@@ -291,4 +291,6 @@ pub enum AttestationError {
     AttestationTypeNotAccepted,
     #[error("Measurements not accepted")]
     MeasurementsNotAccepted,
+    #[error("MAA: {0}")]
+    Maa(#[from] azure::MaaError),
 }

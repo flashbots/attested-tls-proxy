@@ -1,10 +1,13 @@
 //! Microsoft Azure Attestation (MAA) evidence generation and verification
+use std::string::FromUtf8Error;
+
 use az_tdx_vtpm::{hcl, imds, report, vtpm};
 use tokio_rustls::rustls::pki_types::CertificateDer;
 // use openssl::pkey::{PKey, Public};
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use reqwest::Client;
 use serde::Serialize;
+use thiserror::Error;
 
 use crate::attestation::{compute_report_input, AttestationError};
 
@@ -15,12 +18,13 @@ use crate::attestation::{compute_report_input, AttestationError};
 pub async fn create_azure_attestation(
     cert_chain: &[CertificateDer<'_>],
     exporter: [u8; 32],
-) -> Result<Vec<u8>, AttestationError> {
+) -> Result<Vec<u8>, MaaError> {
     let maa_endpoint = "todo".to_string();
     let aad_access_token = "todo".to_string();
-    let input_data = compute_report_input(cert_chain, exporter)?;
+    let input_data = compute_report_input(cert_chain, exporter)
+        .map_err(|e| MaaError::InputData(e.to_string()))?;
 
-    let td_report = report::get_report().unwrap();
+    let td_report = report::get_report()?;
 
     // let mrtd = td_report.tdinfo.mrtd;
     // let rtmr0 = td_report.tdinfo.rtrm[0];
@@ -29,10 +33,10 @@ pub async fn create_azure_attestation(
     // let rtmr3 = td_report.tdinfo.rtrm[3];
 
     // This makes a request to Azure Instance metadata service and gives us a binary response
-    let td_quote_bytes = imds::get_td_quote(&td_report).unwrap();
+    let td_quote_bytes = imds::get_td_quote(&td_report)?;
 
-    let hcl_report_bytes = vtpm::get_report_with_report_data(&input_data).unwrap();
-    let hcl_report = hcl::HclReport::new(hcl_report_bytes).unwrap();
+    let hcl_report_bytes = vtpm::get_report_with_report_data(&input_data)?;
+    let hcl_report = hcl::HclReport::new(hcl_report_bytes)?;
     let hcl_var_data = hcl_report.var_data();
 
     // let bytes = vtpm::get_report().unwrap();
@@ -61,10 +65,8 @@ pub async fn create_azure_attestation(
         }),
         nonce: Some("my-app-nonce-or-session-id".to_string()),
     };
-    let body_bytes = serde_json::to_vec(&body).unwrap();
-    let jwt_token = call_tdxvm_attestation(maa_endpoint, aad_access_token, body_bytes)
-        .await
-        .unwrap();
+    let body_bytes = serde_json::to_vec(&body)?;
+    let jwt_token = call_tdxvm_attestation(maa_endpoint, aad_access_token, body_bytes).await?;
     Ok(jwt_token.as_bytes().to_vec())
 }
 
@@ -73,7 +75,7 @@ async fn call_tdxvm_attestation(
     maa_endpoint: String,
     aad_access_token: String,
     body_bytes: Vec<u8>,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, MaaError> {
     let url = format!("{}/attest/TdxVm?api-version=2025-06-01", maa_endpoint);
 
     let client = Client::new();
@@ -89,7 +91,7 @@ async fn call_tdxvm_attestation(
     let text = res.text().await?;
 
     if !status.is_success() {
-        return Err(format!("MAA attestation failed: {status} {text}").into());
+        return Err(MaaError::MaaProvider(status, text));
     }
 
     #[derive(serde::Deserialize)]
@@ -105,9 +107,10 @@ pub async fn verify_azure_attestation(
     input: Vec<u8>,
     cert_chain: &[CertificateDer<'_>],
     exporter: [u8; 32],
-) -> Result<super::measurements::Measurements, AttestationError> {
-    let _input_data = compute_report_input(cert_chain, exporter)?;
-    let token = String::from_utf8(input).unwrap();
+) -> Result<super::measurements::Measurements, MaaError> {
+    let _input_data = compute_report_input(cert_chain, exporter)
+        .map_err(|e| MaaError::InputData(e.to_string()))?;
+    let token = String::from_utf8(input)?;
 
     decode_jwt(&token).await.unwrap();
 
@@ -139,6 +142,28 @@ struct TdxVmRequest<'a> {
     runtime_data: Option<RuntimeData<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     nonce: Option<String>,
+}
+
+#[derive(Error, Debug)]
+pub enum MaaError {
+    #[error("Failed to build input data: {0}")]
+    InputData(String),
+    #[error("Report: {0}")]
+    Report(#[from] az_tdx_vtpm::report::ReportError),
+    #[error("IMDS: {0}")]
+    Imds(#[from] imds::ImdsError),
+    #[error("vTPM report: {0}")]
+    VtpmReport(#[from] az_tdx_vtpm::vtpm::ReportError),
+    #[error("HCL: {0}")]
+    Hcl(#[from] hcl::HclError),
+    #[error("JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("HTTP Client: {0}")]
+    HttpClient(#[from] reqwest::Error),
+    #[error("MAA provider response: {0} - {1}")]
+    MaaProvider(http::StatusCode, String),
+    #[error("Token is bad UTF8: {0}")]
+    BadUtf8(#[from] FromUtf8Error),
 }
 
 #[cfg(test)]
