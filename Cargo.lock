@@ -175,6 +175,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
+ "tss-esapi",
  "webpki-roots",
  "x509-parser",
 ]

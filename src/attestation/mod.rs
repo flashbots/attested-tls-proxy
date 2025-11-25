@@ -1,6 +1,7 @@
 pub mod azure;
 pub mod dcap;
 pub mod measurements;
+pub mod nv_index;
 
 use measurements::{MeasurementRecord, Measurements};
 use parity_scale_codec::{Decode, Encode};
