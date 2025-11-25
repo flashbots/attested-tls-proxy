@@ -1,4 +1,4 @@
-use crate::attestation::{AttestationError, AttestationType, AttestationVerifier};
+use crate::attestation::{AttestationError, AttestationType};
 use std::{collections::HashMap, path::PathBuf};
 
 use dcap_qvl::quote::Report;
@@ -9,11 +9,14 @@ use thiserror::Error;
 /// Measurements determined by the CVM platform
 #[derive(Clone, PartialEq, Debug)]
 pub struct PlatformMeasurements {
+    /// MRTD register value
     pub mrtd: [u8; 48],
+    /// RTMR0 register value
     pub rtmr0: [u8; 48],
 }
 
 impl PlatformMeasurements {
+    /// Given a quote from the dcap_qvl library, extract the platform measurements
     pub fn from_dcap_qvl_quote(quote: &dcap_qvl::quote::Quote) -> Result<Self, AttestationError> {
         let report = match quote.report {
             Report::TD10(report) => report,
@@ -36,15 +39,19 @@ impl PlatformMeasurements {
     }
 }
 
-/// Measurements determined by the CVM image
+/// Measurements determined by the CVM image or application
 #[derive(Clone, PartialEq, Debug)]
 pub struct CvmImageMeasurements {
+    /// RTMR1 register value
     pub rtmr1: [u8; 48],
+    /// RTMR2 register value
     pub rtmr2: [u8; 48],
+    /// RTMR3 register value
     pub rtmr3: [u8; 48],
 }
 
 impl CvmImageMeasurements {
+    /// Given a quote from the dcap_qvl library, extract the CVM image / application measurements
     pub fn from_dcap_qvl_quote(quote: &dcap_qvl::quote::Quote) -> Result<Self, AttestationError> {
         let report = match quote.report {
             Report::TD10(report) => report,
@@ -69,6 +76,7 @@ impl CvmImageMeasurements {
     }
 }
 
+/// A full set of measurement register values
 #[derive(Debug, Clone, PartialEq)]
 pub struct Measurements {
     pub platform: PlatformMeasurements,
@@ -76,6 +84,7 @@ pub struct Measurements {
 }
 
 impl Measurements {
+    /// Convert to the JSON format used in HTTP headers
     pub fn to_header_format(&self) -> Result<HeaderValue, MeasurementFormatError> {
         let mut measurements_map = HashMap::new();
         measurements_map.insert(0, hex::encode(self.platform.mrtd));
@@ -88,6 +97,7 @@ impl Measurements {
         )?)?)
     }
 
+    /// Parse the JSON used in HTTP headers
     pub fn from_header_format(input: &str) -> Result<Self, MeasurementFormatError> {
         let measurements_map: HashMap<u32, String> = serde_json::from_str(input)?;
         let measurements_map: HashMap<u32, [u8; 48]> = measurements_map
@@ -126,6 +136,7 @@ impl Measurements {
     }
 }
 
+/// An error when converting measurements / to or from HTTP header format
 #[derive(Error, Debug)]
 pub enum MeasurementFormatError {
     #[error("JSON: {0}")]
@@ -144,17 +155,21 @@ pub enum MeasurementFormatError {
     BadLength,
 }
 
+/// An accepted measurement value given in the measurements file
 #[derive(Clone, Debug)]
 pub struct MeasurementRecord {
+    /// An identifier, for example the name and version of the corresponding OS image
     pub measurement_id: String,
+    /// The associated attestation platform
     pub attestation_type: AttestationType,
+    /// The expected measurement register values
     pub measurements: Measurements,
 }
 
 /// Given the path to a JSON file containing measurements, return a [Vec<MeasurementRecord>]
 pub async fn get_measurements_from_file(
     measurement_file: PathBuf,
-) -> Result<AttestationVerifier, MeasurementFormatError> {
+) -> Result<Vec<MeasurementRecord>, MeasurementFormatError> {
     #[derive(Debug, Deserialize)]
     struct MeasurementRecordSimple {
         measurement_id: String,
@@ -202,10 +217,7 @@ pub async fn get_measurements_from_file(
         });
     }
 
-    Ok(AttestationVerifier {
-        accepted_measurements: measurements,
-        pccs_url: None,
-    })
+    Ok(measurements)
 }
 
 #[cfg(test)]

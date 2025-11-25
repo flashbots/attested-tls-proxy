@@ -49,9 +49,12 @@ enum CliCommand {
         /// Optional path to file containing JSON measurements to be enforced on the server
         #[arg(long)]
         server_measurements: Option<PathBuf>,
-        #[arg(long)]
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
+        #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
+        /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
+        #[arg(long)]
+        pccs_url: Option<String>,
         // TODO missing:
         // Name:    "dev-dummy-dcap",
         // EnvVars: []string{"DEV_DUMMY_DCAP"},
@@ -81,6 +84,9 @@ enum CliCommand {
         /// Optional path to file containing JSON measurements to be enforced on the client
         #[arg(long)]
         client_measurements: Option<PathBuf>,
+        /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
+        #[arg(long)]
+        pccs_url: Option<String>,
         // TODO missing:
         // Name:    "listen-addr-healthcheck",
         // EnvVars: []string{"LISTEN_ADDR_HEALTHCHECK"},
@@ -98,6 +104,9 @@ enum CliCommand {
         /// Optional path to file containing JSON measurements to be enforced on the server
         #[arg(long)]
         server_measurements: Option<PathBuf>,
+        /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
+        #[arg(long)]
+        pccs_url: Option<String>,
     },
 }
 
@@ -132,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
             client_attestation_type,
             server_measurements,
             tls_ca_certificate,
+            pccs_url,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
@@ -153,9 +163,10 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let attestation_verifier = match server_measurements {
-                Some(server_measurements) => {
-                    get_measurements_from_file(server_measurements).await?
-                }
+                Some(server_measurements) => AttestationVerifier {
+                    accepted_measurements: get_measurements_from_file(server_measurements).await?,
+                    pccs_url,
+                },
                 None => AttestationVerifier::do_not_verify(),
             };
 
@@ -199,6 +210,7 @@ async fn main() -> anyhow::Result<()> {
             client_auth,
             server_attestation_type,
             client_measurements,
+            pccs_url,
         } => {
             let tls_cert_and_chain =
                 load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
@@ -210,9 +222,10 @@ async fn main() -> anyhow::Result<()> {
             let local_attestation_generator = server_attestation_type.get_quote_generator()?;
 
             let attestation_verifier = match client_measurements {
-                Some(client_measurements) => {
-                    get_measurements_from_file(client_measurements).await?
-                }
+                Some(client_measurements) => AttestationVerifier {
+                    accepted_measurements: get_measurements_from_file(client_measurements).await?,
+                    pccs_url,
+                },
                 None => AttestationVerifier::do_not_verify(),
             };
 
@@ -235,11 +248,13 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::GetTlsCert {
             server,
             server_measurements,
+            pccs_url,
         } => {
             let attestation_verifier = match server_measurements {
-                Some(server_measurements) => {
-                    get_measurements_from_file(server_measurements).await?
-                }
+                Some(server_measurements) => AttestationVerifier {
+                    accepted_measurements: get_measurements_from_file(server_measurements).await?,
+                    pccs_url,
+                },
                 None => AttestationVerifier::do_not_verify(),
             };
             let cert_chain = get_tls_cert(server, attestation_verifier).await?;
