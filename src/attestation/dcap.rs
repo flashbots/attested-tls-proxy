@@ -13,7 +13,7 @@ use dcap_qvl::{
 use tokio_rustls::rustls::pki_types::CertificateDer;
 
 /// For fetching collateral directly from Intel, if no PCCS is specified
-const PCS_URL: &str = "https://api.trustedservices.intel.com";
+pub const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
 /// Quote generation using configfs_tsm
 pub async fn create_dcap_attestation(

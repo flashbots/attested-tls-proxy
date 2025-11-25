@@ -199,6 +199,7 @@ impl AttestationVerifier {
                     attestation_payload.attestation,
                     cert_chain,
                     exporter,
+                    self.pccs_url.clone(),
                 )
                 .await?
             }
