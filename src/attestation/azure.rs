@@ -11,7 +11,10 @@ use tokio_rustls::rustls::pki_types::CertificateDer;
 use crate::attestation::{
     self, compute_report_input,
     measurements::{CvmImageMeasurements, Measurements, PlatformMeasurements},
+    nv_index,
 };
+
+const TPM_AK_CERT_IDX: u32 = 0x1C101D0;
 
 pub async fn create_azure_attestation(
     cert_chain: &[CertificateDer<'_>],
@@ -27,11 +30,14 @@ pub async fn create_azure_attestation(
 
     let hcl_report_bytes = vtpm::get_report_with_report_data(&input_data)?;
 
-    // let quote_b64 = ;
-    // let runtime_b64 = BASE64_URL_SAFE.encode(hcl_var_data);
+    let ak_certificate_der = read_ak_certificate_from_tpm()?;
 
     let tpm_attestation = TpmAttest {
-        ak_pub: vtpm::get_ak_pub()?,
+        ak_certificate_pem: pem_rfc7468::encode_string(
+            "CERTIFICATE",
+            pem_rfc7468::LineEnding::default(),
+            &ak_certificate_der,
+        )?,
         quote: vtpm::get_quote(&input_data)?,
         event_log: Vec::new(),
         instance_info: None,
@@ -94,7 +100,6 @@ pub async fn verify_azure_attestation(
         .unwrap();
 
     let hcl_report = hcl::HclReport::new(hcl_report_bytes)?;
-    //
     let var_data_hash = hcl_report.var_data_sha256();
     let hcl_ak_pub = hcl_report.ak_pub()?;
     let td_report: az_tdx_vtpm::tdx::TdReport = hcl_report.try_into()?;
@@ -105,6 +110,10 @@ pub async fn verify_azure_attestation(
     let pub_key = PKey::public_key_from_der(&hcl_ak_pub_der).unwrap();
     vtpm_quote.verify(&pub_key, &input_data)?;
     let _pcrs = vtpm_quote.pcrs_sha256();
+
+    // TODO parse AK certificate
+    // Check that AK public key matches that from TPM quote
+    // Verify AK certificate against microsoft root cert
 
     Ok(Measurements {
         platform: PlatformMeasurements::from_dcap_qvl_quote(&quote).unwrap(),
@@ -124,19 +133,23 @@ struct AttestationDocument {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TpmAttest {
-    /// vTPM Attestation Key (AK) public key
-    // TODO do we need this? it is already given in HCL report
-    pub ak_pub: vtpm::PublicKey,
+struct TpmAttest {
+    /// Attestation Key certificate from vTPM
+    ak_certificate_pem: String,
     /// vTPM quotes over the selected PCR bank(s).
-    pub quote: vtpm::Quote,
+    quote: vtpm::Quote,
     /// Raw TCG event log bytes (UEFI + IMA)
     ///
     /// `/sys/kernel/security/ima/ascii_runtime_measurements`,
     /// `/sys/kernel/security/tpm0/binary_bios_measurements`,
-    pub event_log: Vec<u8>,
+    event_log: Vec<u8>,
     /// Optional platform / instance metadata used to bind or verify the AK
-    pub instance_info: Option<Vec<u8>>,
+    instance_info: Option<Vec<u8>>,
+}
+
+fn read_ak_certificate_from_tpm() -> Result<Vec<u8>, tss_esapi::Error> {
+    let mut context = nv_index::get_session_context()?;
+    Ok(nv_index::read_nv_index(&mut context, TPM_AK_CERT_IDX)?)
 }
 
 #[derive(Error, Debug)]
@@ -165,6 +178,10 @@ pub enum MaaError {
     AkPub(#[from] vtpm::AKPubError),
     #[error("vTPM quote could not be verified: {0}")]
     TpmQuoteVerify(#[from] vtpm::VerifyError),
+    #[error("vTPM read: {0}")]
+    TssEsapi(#[from] tss_esapi::Error),
+    #[error("PEM encode: {0}")]
+    Pem(#[from] pem_rfc7468::Error),
 }
 
 #[cfg(test)]
