@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "dummy-attestation-server"]
+
 [package]
 name = "attested-tls-proxy"
 version = "0.1.0"

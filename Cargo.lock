@@ -656,6 +656,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "dummy-attestation-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "attested-tls-proxy",
+ "axum",
+ "clap",
+ "configfs-tsm",
+ "hex",
+ "parity-scale-codec",
+ "rcgen",
+ "reqwest",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
+ "webpki-roots",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
