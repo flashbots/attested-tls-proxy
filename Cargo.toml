@@ -34,6 +34,8 @@ josekit = "0.10.3"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 parity-scale-codec = "3.7.5"
+openssl = "0.10.75"
+tss-esapi = "7.6.0"
 
 [dev-dependencies]
 rcgen = "0.14.5"

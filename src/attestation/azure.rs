@@ -2,145 +2,154 @@
 use std::string::FromUtf8Error;
 
 use az_tdx_vtpm::{hcl, imds, report, vtpm};
-use tokio_rustls::rustls::pki_types::CertificateDer;
-// use openssl::pkey::{PKey, Public};
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
-use reqwest::Client;
-use serde::Serialize;
+use openssl::pkey::PKey;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio_rustls::rustls::pki_types::CertificateDer;
 
-use crate::attestation::{compute_report_input, AttestationError};
+use crate::attestation::{
+    self, compute_report_input,
+    measurements::{CvmImageMeasurements, Measurements, PlatformMeasurements},
+    nv_index,
+};
 
-// #[derive(Clone)]
-// pub struct MaaGenerator {
-// }
+const TPM_AK_CERT_IDX: u32 = 0x1C101D0;
 
 pub async fn create_azure_attestation(
     cert_chain: &[CertificateDer<'_>],
     exporter: [u8; 32],
 ) -> Result<Vec<u8>, MaaError> {
-    let maa_endpoint = "todo".to_string();
-    let aad_access_token = "todo".to_string();
     let input_data = compute_report_input(cert_chain, exporter)
         .map_err(|e| MaaError::InputData(e.to_string()))?;
 
     let td_report = report::get_report()?;
 
-    // let mrtd = td_report.tdinfo.mrtd;
-    // let rtmr0 = td_report.tdinfo.rtrm[0];
-    // let rtmr1 = td_report.tdinfo.rtrm[1];
-    // let rtmr2 = td_report.tdinfo.rtrm[2];
-    // let rtmr3 = td_report.tdinfo.rtrm[3];
-
     // This makes a request to Azure Instance metadata service and gives us a binary response
     let td_quote_bytes = imds::get_td_quote(&td_report)?;
 
     let hcl_report_bytes = vtpm::get_report_with_report_data(&input_data)?;
-    let hcl_report = hcl::HclReport::new(hcl_report_bytes)?;
-    let hcl_var_data = hcl_report.var_data();
 
-    // let bytes = vtpm::get_report().unwrap();
-    // let hcl_report = hcl::HclReport::new(bytes).unwrap();
-    // let var_data_hash = hcl_report.var_data_sha256();
-    // let _ak_pub = hcl_report.ak_pub().unwrap();
-    //
-    // let td_report: tdx::TdReport = hcl_report.try_into().unwrap();
-    // assert!(var_data_hash == td_report.report_mac.reportdata[..32]);
+    let ak_certificate_der = read_ak_certificate_from_tpm()?;
 
-    // let nonce = "a nonce".as_bytes();
-    //
-    // let tpm_quote = vtpm::get_quote(nonce).unwrap();
-    // let der = ak_pub.key.try_to_der().unwrap();
-    // let pub_key = PKey::public_key_from_der(&der).unwrap();
-    // tpm_quote.verify(&pub_key, nonce).unwrap();
-
-    let quote_b64 = BASE64_URL_SAFE.encode(&td_quote_bytes);
-    let runtime_b64 = BASE64_URL_SAFE.encode(hcl_var_data);
-
-    let tdx_vm_request = TdxVmRequest {
-        quote: quote_b64,
-        runtime_data: Some(RuntimeData {
-            data: runtime_b64,
-            data_type: "Binary",
-        }),
-        nonce: Some("my-app-nonce-or-session-id".to_string()), // TODO
+    let tpm_attestation = TpmAttest {
+        ak_certificate_pem: pem_rfc7468::encode_string(
+            "CERTIFICATE",
+            pem_rfc7468::LineEnding::default(),
+            &ak_certificate_der,
+        )?,
+        quote: vtpm::get_quote(&input_data)?,
+        event_log: Vec::new(),
+        instance_info: None,
     };
-    let jwt_token = call_tdxvm_attestation(maa_endpoint, aad_access_token, &tdx_vm_request).await?;
-    Ok(jwt_token.as_bytes().to_vec())
-}
 
-/// Get a signed JWT from the azure API
-async fn call_tdxvm_attestation(
-    maa_endpoint: String,
-    aad_access_token: String,
-    tdx_vm_request: &TdxVmRequest<'_>,
-) -> Result<String, MaaError> {
-    let url = format!("{}/attest/TdxVm?api-version=2025-06-01", maa_endpoint);
+    let attestation_document = AttestationDocument {
+        tdx_quote_base64: BASE64_URL_SAFE.encode(&td_quote_bytes),
+        hcl_report_base64: BASE64_URL_SAFE.encode(&hcl_report_bytes),
+        tpm_attestation,
+    };
 
-    let client = Client::new();
-    let res = client
-        .post(&url)
-        .bearer_auth(&aad_access_token)
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_vec(tdx_vm_request)?)
-        .send()
-        .await?;
-
-    let status = res.status();
-    let text = res.text().await?;
-
-    if !status.is_success() {
-        return Err(MaaError::MaaProvider(status, text));
-    }
-
-    #[derive(serde::Deserialize)]
-    struct AttestationResponse {
-        token: String,
-    }
-
-    let parsed: AttestationResponse = serde_json::from_str(&text)?;
-    Ok(parsed.token) // Microsoft-signed JWT
+    Ok(serde_json::to_vec(&attestation_document)?)
 }
 
 pub async fn verify_azure_attestation(
     input: Vec<u8>,
     cert_chain: &[CertificateDer<'_>],
     exporter: [u8; 32],
+    pccs_url: Option<String>,
 ) -> Result<super::measurements::Measurements, MaaError> {
-    let _input_data = compute_report_input(cert_chain, exporter)
+    let input_data = compute_report_input(cert_chain, exporter)
         .map_err(|e| MaaError::InputData(e.to_string()))?;
-    let token = String::from_utf8(input)?;
 
-    decode_jwt(&token).await.unwrap();
+    let attestation_document: AttestationDocument = serde_json::from_slice(&input)?;
 
-    todo!()
+    // Verify TDX quote (same as with DCAP) - TODO deduplicate this code
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let tdx_quote_bytes = BASE64_URL_SAFE
+        .decode(attestation_document.tdx_quote_base64)
+        .unwrap();
+
+    let quote = dcap_qvl::quote::Quote::parse(&tdx_quote_bytes).unwrap();
+
+    let ca = quote.ca().unwrap();
+    let fmspc = hex::encode_upper(quote.fmspc().unwrap());
+    let collateral = dcap_qvl::collateral::get_collateral_for_fmspc(
+        &pccs_url
+            .clone()
+            .unwrap_or(attestation::dcap::PCS_URL.to_string()),
+        fmspc,
+        ca,
+        false, // Indicates not SGX
+    )
+    .await
+    .unwrap();
+
+    let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now).unwrap();
+
+    // Check that hcl_report_bytes (hashed?) matches TDX quote report data
+    // if get_quote_input_data(quote.report) != quote_input {
+    //     return Err(AttestationError::InputMismatch);
+    // }
+
+    let hcl_report_bytes = BASE64_URL_SAFE
+        .decode(attestation_document.hcl_report_base64)
+        .unwrap();
+
+    let hcl_report = hcl::HclReport::new(hcl_report_bytes)?;
+    let var_data_hash = hcl_report.var_data_sha256();
+    let hcl_ak_pub = hcl_report.ak_pub()?;
+    let td_report: az_tdx_vtpm::tdx::TdReport = hcl_report.try_into()?;
+    assert!(var_data_hash == td_report.report_mac.reportdata[..32]);
+
+    let vtpm_quote = attestation_document.tpm_attestation.quote;
+    let hcl_ak_pub_der = hcl_ak_pub.key.try_to_der().unwrap();
+    let pub_key = PKey::public_key_from_der(&hcl_ak_pub_der).unwrap();
+    vtpm_quote.verify(&pub_key, &input_data)?;
+    let _pcrs = vtpm_quote.pcrs_sha256();
+
+    // TODO parse AK certificate
+    // Check that AK public key matches that from TPM quote
+    // Verify AK certificate against microsoft root cert
+
+    Ok(Measurements {
+        platform: PlatformMeasurements::from_dcap_qvl_quote(&quote).unwrap(),
+        cvm_image: CvmImageMeasurements::from_dcap_qvl_quote(&quote).unwrap(),
+    })
 }
 
-async fn decode_jwt(token: &str) -> Result<(), AttestationError> {
-    // Parse payload (claims) without verification (TODO this will be swapped out once we have the
-    // key-getting logic)
-    let parts: Vec<&str> = token.split('.').collect();
-    let claims_json = BASE64_URL_SAFE.decode(parts[1]).unwrap();
-
-    let claims: serde_json::Value = serde_json::from_slice(&claims_json).unwrap();
-    println!("{claims}");
-    Ok(())
+/// The attestation evidence payload that gets sent over the channel
+#[derive(Debug, Serialize, Deserialize)]
+struct AttestationDocument {
+    /// TDX quote from the IMDS
+    tdx_quote_base64: String,
+    /// Serialized HCL report
+    hcl_report_base64: String,
+    /// vTPM related evidence
+    tpm_attestation: TpmAttest,
 }
 
-#[derive(Serialize)]
-struct RuntimeData<'a> {
-    data: String, // base64url of VarData bytes
-    #[serde(rename = "dataType")]
-    data_type: &'a str, // "Binary" in our case
+#[derive(Debug, Serialize, Deserialize)]
+struct TpmAttest {
+    /// Attestation Key certificate from vTPM
+    ak_certificate_pem: String,
+    /// vTPM quotes over the selected PCR bank(s).
+    quote: vtpm::Quote,
+    /// Raw TCG event log bytes (UEFI + IMA)
+    ///
+    /// `/sys/kernel/security/ima/ascii_runtime_measurements`,
+    /// `/sys/kernel/security/tpm0/binary_bios_measurements`,
+    event_log: Vec<u8>,
+    /// Optional platform / instance metadata used to bind or verify the AK
+    instance_info: Option<Vec<u8>>,
 }
 
-#[derive(Serialize)]
-struct TdxVmRequest<'a> {
-    quote: String, // base64 (TDX quote)
-    #[serde(rename = "runtimeData", skip_serializing_if = "Option::is_none")]
-    runtime_data: Option<RuntimeData<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    nonce: Option<String>,
+fn read_ak_certificate_from_tpm() -> Result<Vec<u8>, tss_esapi::Error> {
+    let mut context = nv_index::get_session_context()?;
+    nv_index::read_nv_index(&mut context, TPM_AK_CERT_IDX)
 }
 
 #[derive(Error, Debug)]
@@ -163,6 +172,16 @@ pub enum MaaError {
     MaaProvider(http::StatusCode, String),
     #[error("Token is bad UTF8: {0}")]
     BadUtf8(#[from] FromUtf8Error),
+    #[error("vTPM quote: {0}")]
+    VtpmQuote(#[from] vtpm::QuoteError),
+    #[error("AK public key: {0}")]
+    AkPub(#[from] vtpm::AKPubError),
+    #[error("vTPM quote could not be verified: {0}")]
+    TpmQuoteVerify(#[from] vtpm::VerifyError),
+    #[error("vTPM read: {0}")]
+    TssEsapi(#[from] tss_esapi::Error),
+    #[error("PEM encode: {0}")]
+    Pem(#[from] pem_rfc7468::Error),
 }
 
 #[cfg(test)]

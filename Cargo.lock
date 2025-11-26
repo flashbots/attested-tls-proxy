@@ -159,6 +159,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "josekit",
+ "openssl",
  "parity-scale-codec",
  "pem-rfc7468",
  "rand_core 0.6.4",
@@ -174,6 +175,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
+ "tss-esapi",
  "webpki-roots",
  "x509-parser",
 ]
