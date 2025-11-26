@@ -32,22 +32,22 @@ enum CliCommand {
     /// Run a proxy client
     Client {
         /// Socket address to listen on
-        #[arg(short, long, default_value = "0.0.0.0:0")]
+        #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
         /// The path to a PEM encoded private key for client authentication
-        #[arg(long)]
+        #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: Option<PathBuf>,
         /// The path to a PEM encoded certificate chain for client authentication
-        #[arg(long)]
+        #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: Option<PathBuf>,
         /// Type of attestaion to present (dafaults to none)
         /// If other than None, a TLS key and certicate must also be given
-        #[arg(long)]
+        #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
         client_attestation_type: Option<String>,
         /// Optional path to file containing JSON measurements to be enforced on the server
-        #[arg(long)]
+        #[arg(long, env = "SERVER_MEASUREMENTS")]
         server_measurements: Option<PathBuf>,
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
@@ -63,15 +63,15 @@ enum CliCommand {
     /// Run a proxy server
     Server {
         /// Socket address to listen on
-        #[arg(short, long, default_value = "0.0.0.0:0")]
+        #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
         /// Socket address of the target service to forward traffic to
         target_addr: SocketAddr,
         /// The path to a PEM encoded private key
-        #[arg(long)]
+        #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: PathBuf,
         /// The path to a PEM encoded certificate chain
-        #[arg(long)]
+        #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: PathBuf,
         /// Whether to use client authentication. If the client is running in a CVM this must be
         /// enabled.
@@ -82,7 +82,7 @@ enum CliCommand {
         #[arg(long)]
         server_attestation_type: Option<String>,
         /// Optional path to file containing JSON measurements to be enforced on the client
-        #[arg(long)]
+        #[arg(long, env = "CLIENT_MEASUREMENTS")]
         client_measurements: Option<PathBuf>,
         /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
         #[arg(long)]

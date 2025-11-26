@@ -28,7 +28,7 @@ use tokio_rustls::{
     TlsAcceptor, TlsConnector,
 };
 
-use crate::attestation::{AttesationPayload, AttestationVerifier};
+use crate::attestation::{AttestationExchangeMessage, AttestationVerifier};
 
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility.
 /// When adding more supported versions, note that ordering is important. ALPN will pick the first
@@ -223,14 +223,14 @@ impl ProxyServer {
         let mut buf = vec![0; length];
         tls_stream.read_exact(&mut buf).await?;
 
-        let remote_attestation_payload = AttesationPayload::decode(&mut &buf[..])?;
-        let remote_attestation_type = remote_attestation_payload.attestation_type;
+        let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
+        let remote_attestation_type = remote_attestation_message.attestation_type;
 
         // If we expect an attestaion from the client, verify it and get measurements
         let measurements = if attestation_verifier.has_remote_attestion() {
             attestation_verifier
                 .verify_attestation(
-                    remote_attestation_payload,
+                    remote_attestation_message,
                     &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
                     exporter,
                 )
@@ -621,12 +621,12 @@ impl ProxyClient {
         let mut buf = vec![0; length];
         tls_stream.read_exact(&mut buf).await?;
 
-        let remote_attestation_payload = AttesationPayload::decode(&mut &buf[..])?;
-        let remote_attestation_type = remote_attestation_payload.attestation_type;
+        let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
+        let remote_attestation_type = remote_attestation_message.attestation_type;
 
         // Verify the remote attestation against our accepted measurements
         let measurements = attestation_verifier
-            .verify_attestation(remote_attestation_payload, &remote_cert_chain, exporter)
+            .verify_attestation(remote_attestation_message, &remote_cert_chain, exporter)
             .await?;
 
         // If we are in a CVM, provide an attestation
@@ -636,7 +636,7 @@ impl ProxyClient {
                 .await?
                 .encode()
         } else {
-            AttesationPayload::without_attestation().encode()
+            AttestationExchangeMessage::without_attestation().encode()
         };
 
         // Send our attestation (or zero bytes) prefixed with length
@@ -718,10 +718,10 @@ async fn get_tls_cert_with_config(
     let mut buf = vec![0; length];
     tls_stream.read_exact(&mut buf).await?;
 
-    let remote_attestation_payload = AttesationPayload::decode(&mut &buf[..])?;
+    let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
 
     let _measurements = attestation_verifier
-        .verify_attestation(remote_attestation_payload, &remote_cert_chain, exporter)
+        .verify_attestation(remote_attestation_message, &remote_cert_chain, exporter)
         .await?;
 
     Ok(remote_cert_chain)
