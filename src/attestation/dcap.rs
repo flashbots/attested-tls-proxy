@@ -1,6 +1,5 @@
 //! Data Center Attestation Primitives (DCAP) evidence generation and verification
 use crate::attestation::{
-    compute_report_input,
     measurements::{CvmImageMeasurements, Measurements, PlatformMeasurements},
     AttestationError,
 };
@@ -10,29 +9,21 @@ use dcap_qvl::{
     collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
 };
-use tokio_rustls::rustls::pki_types::CertificateDer;
 
 /// For fetching collateral directly from Intel, if no PCCS is specified
 pub const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
 /// Quote generation using configfs_tsm
-pub async fn create_dcap_attestation(
-    cert_chain: &[CertificateDer<'_>],
-    exporter: [u8; 32],
-) -> Result<Vec<u8>, AttestationError> {
-    let quote_input = compute_report_input(cert_chain, exporter)?;
-
-    Ok(generate_quote(quote_input)?)
+pub async fn create_dcap_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, AttestationError> {
+    Ok(generate_quote(input_data)?)
 }
 
 /// Verify a DCAP TDX quote, and return the measurement values
 pub async fn verify_dcap_attestation(
     input: Vec<u8>,
-    cert_chain: &[CertificateDer<'_>],
-    exporter: [u8; 32],
+    expected_input_data: [u8; 64],
     pccs_url: Option<String>,
 ) -> Result<Measurements, AttestationError> {
-    let quote_input = compute_report_input(cert_chain, exporter)?;
     let (platform_measurements, image_measurements) = if cfg!(not(test)) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -55,14 +46,14 @@ pub async fn verify_dcap_attestation(
             PlatformMeasurements::from_dcap_qvl_quote(&quote)?,
             CvmImageMeasurements::from_dcap_qvl_quote(&quote)?,
         );
-        if get_quote_input_data(quote.report) != quote_input {
+        if get_quote_input_data(quote.report) != expected_input_data {
             return Err(AttestationError::InputMismatch);
         }
         measurements
     } else {
         // In tests we use mock quotes which will fail to verify
         let quote = tdx_quote::Quote::from_bytes(&input)?;
-        if quote.report_input_data() != quote_input {
+        if quote.report_input_data() != expected_input_data {
             return Err(AttestationError::InputMismatch);
         }
 

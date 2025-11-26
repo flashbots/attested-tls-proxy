@@ -11,11 +11,8 @@ use std::{
     time::SystemTimeError,
 };
 
-use sha2::{Digest, Sha256};
 use tdx_quote::QuoteParseError;
 use thiserror::Error;
-use tokio_rustls::rustls::pki_types::CertificateDer;
-use x509_parser::prelude::*;
 
 /// This is the type sent over the channel to provide an attestation
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
@@ -103,30 +100,24 @@ impl AttestationGenerator {
     /// Generate an attestation exchange message
     pub async fn generate_attestation(
         &self,
-        cert_chain: &[CertificateDer<'_>],
-        exporter: [u8; 32],
+        input_data: [u8; 64],
     ) -> Result<AttestationExchangeMessage, AttestationError> {
         Ok(AttestationExchangeMessage {
             attestation_type: self.attestation_type,
-            attestation: self
-                .generate_attestation_bytes(cert_chain, exporter)
-                .await?,
+            attestation: self.generate_attestation_bytes(input_data).await?,
         })
     }
 
     /// Generate attestation evidence bytes based on attestation type
     async fn generate_attestation_bytes(
         &self,
-        cert_chain: &[CertificateDer<'_>],
-        exporter: [u8; 32],
+        input_data: [u8; 64],
     ) -> Result<Vec<u8>, AttestationError> {
         match self.attestation_type {
             AttestationType::None => Ok(Vec::new()),
-            AttestationType::AzureTdx => {
-                Ok(azure::create_azure_attestation(cert_chain, exporter).await?)
-            }
+            AttestationType::AzureTdx => Ok(azure::create_azure_attestation(input_data).await?),
             AttestationType::Dummy => Err(AttestationError::AttestationTypeNotSupported),
-            _ => dcap::create_dcap_attestation(cert_chain, exporter).await,
+            _ => dcap::create_dcap_attestation(input_data).await,
         }
     }
 }
@@ -179,8 +170,7 @@ impl AttestationVerifier {
     pub async fn verify_attestation(
         &self,
         attestation_exchange_message: AttestationExchangeMessage,
-        cert_chain: &[CertificateDer<'_>],
-        exporter: [u8; 32],
+        expected_input_data: [u8; 64],
     ) -> Result<Option<Measurements>, AttestationError> {
         let attestation_type = attestation_exchange_message.attestation_type;
 
@@ -198,8 +188,7 @@ impl AttestationVerifier {
             AttestationType::AzureTdx => {
                 azure::verify_azure_attestation(
                     attestation_exchange_message.attestation,
-                    cert_chain,
-                    exporter,
+                    expected_input_data,
                     self.pccs_url.clone(),
                 )
                 .await?
@@ -210,8 +199,7 @@ impl AttestationVerifier {
             _ => {
                 dcap::verify_dcap_attestation(
                     attestation_exchange_message.attestation,
-                    cert_chain,
-                    exporter,
+                    expected_input_data,
                     self.pccs_url.clone(),
                 )
                 .await?
@@ -231,33 +219,6 @@ impl AttestationVerifier {
     pub fn has_remote_attestion(&self) -> bool {
         !self.accepted_measurements.is_empty()
     }
-}
-
-/// Given a certificate chain and an exporter (session key material), build the quote input value
-/// SHA256(pki) || exporter
-pub fn compute_report_input(
-    cert_chain: &[CertificateDer<'_>],
-    exporter: [u8; 32],
-) -> Result<[u8; 64], AttestationError> {
-    let mut quote_input = [0u8; 64];
-    let pki_hash = get_pki_hash_from_certificate_chain(cert_chain)?;
-    quote_input[..32].copy_from_slice(&pki_hash);
-    quote_input[32..].copy_from_slice(&exporter);
-    Ok(quote_input)
-}
-
-/// Given a certificate chain, get the [Sha256] hash of the public key of the leaf certificate
-fn get_pki_hash_from_certificate_chain(
-    cert_chain: &[CertificateDer<'_>],
-) -> Result<[u8; 32], AttestationError> {
-    let leaf_certificate = cert_chain.first().ok_or(AttestationError::NoCertificate)?;
-    let (_, cert) = parse_x509_certificate(leaf_certificate.as_ref())?;
-    let public_key = &cert.tbs_certificate.subject_pki;
-    let key_bytes = public_key.subject_public_key.as_ref();
-
-    let mut hasher = Sha256::new();
-    hasher.update(key_bytes);
-    Ok(hasher.finalize().into())
 }
 
 /// An error when generating or verifying an attestation

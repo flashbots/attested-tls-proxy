@@ -8,10 +8,12 @@ use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::service_fn, Response};
 use hyper_util::rt::TokioIo;
 use parity_scale_codec::{Decode, Encode};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 use tracing::{error, warn};
+use x509_parser::parse_x509_certificate;
 
 #[cfg(test)]
 mod test_helpers;
@@ -86,9 +88,11 @@ impl ProxyServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
+        println!("here");
         if attestation_verifier.has_remote_attestion() && !client_auth {
             return Err(ProxyError::NoClientAuth);
         }
+        println!("here2");
 
         let mut server_config = if client_auth {
             let root_store =
@@ -200,12 +204,14 @@ impl ProxyServer {
             None, // context
         )?;
 
+        let input_data = compute_report_input(&cert_chain, exporter)?;
+
         // Get the TLS certficate chain of the client, if there is one
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
         // If we are in a CVM, generate an attestation
         let attestation = attestation_generator
-            .generate_attestation(&cert_chain, exporter)
+            .generate_attestation(input_data)
             .await?
             .encode();
 
@@ -228,12 +234,13 @@ impl ProxyServer {
 
         // If we expect an attestaion from the client, verify it and get measurements
         let measurements = if attestation_verifier.has_remote_attestion() {
+            let remote_input_data = compute_report_input(
+                &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
+                exporter,
+            )?;
+
             attestation_verifier
-                .verify_attestation(
-                    remote_attestation_message,
-                    &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
-                    exporter,
-                )
+                .verify_attestation(remote_attestation_message, remote_input_data)
                 .await?
         } else {
             None
@@ -613,6 +620,8 @@ impl ProxyClient {
             .ok_or(ProxyError::NoCertificate)?
             .to_owned();
 
+        let remote_input_data = compute_report_input(&remote_cert_chain, exporter)?;
+
         // Read a length prefixed attestation from the proxy-server
         let mut length_bytes = [0; 4];
         tls_stream.read_exact(&mut length_bytes).await?;
@@ -626,13 +635,16 @@ impl ProxyClient {
 
         // Verify the remote attestation against our accepted measurements
         let measurements = attestation_verifier
-            .verify_attestation(remote_attestation_message, &remote_cert_chain, exporter)
+            .verify_attestation(remote_attestation_message, remote_input_data)
             .await?;
 
         // If we are in a CVM, provide an attestation
         let attestation = if attestation_generator.attestation_type != AttestationType::None {
+            println!("fff");
+            let local_input_data =
+                compute_report_input(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?;
             attestation_generator
-                .generate_attestation(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)
+                .generate_attestation(local_input_data)
                 .await?
                 .encode()
         } else {
@@ -720,11 +732,40 @@ async fn get_tls_cert_with_config(
 
     let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
 
+    let remote_input_data = compute_report_input(&remote_cert_chain, exporter)?;
+
     let _measurements = attestation_verifier
-        .verify_attestation(remote_attestation_message, &remote_cert_chain, exporter)
+        .verify_attestation(remote_attestation_message, remote_input_data)
         .await?;
 
     Ok(remote_cert_chain)
+}
+
+/// Given a certificate chain and an exporter (session key material), build the quote input value
+/// SHA256(pki) || exporter
+pub fn compute_report_input(
+    cert_chain: &[CertificateDer<'_>],
+    exporter: [u8; 32],
+) -> Result<[u8; 64], AttestationError> {
+    let mut quote_input = [0u8; 64];
+    let pki_hash = get_pki_hash_from_certificate_chain(cert_chain)?;
+    quote_input[..32].copy_from_slice(&pki_hash);
+    quote_input[32..].copy_from_slice(&exporter);
+    Ok(quote_input)
+}
+
+/// Given a certificate chain, get the [Sha256] hash of the public key of the leaf certificate
+fn get_pki_hash_from_certificate_chain(
+    cert_chain: &[CertificateDer<'_>],
+) -> Result<[u8; 32], AttestationError> {
+    let leaf_certificate = cert_chain.first().ok_or(AttestationError::NoCertificate)?;
+    let (_, cert) = parse_x509_certificate(leaf_certificate.as_ref())?;
+    let public_key = &cert.tbs_certificate.subject_pki;
+    let key_bytes = public_key.subject_public_key.as_ref();
+
+    let mut hasher = Sha256::new();
+    hasher.update(key_bytes);
+    Ok(hasher.finalize().into())
 }
 
 /// An error when running a proxy client or server

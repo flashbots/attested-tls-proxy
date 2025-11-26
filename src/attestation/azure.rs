@@ -6,23 +6,16 @@ use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use openssl::pkey::PKey;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio_rustls::rustls::pki_types::CertificateDer;
 
 use crate::attestation::{
-    self, compute_report_input,
+    self,
     measurements::{CvmImageMeasurements, Measurements, PlatformMeasurements},
     nv_index,
 };
 
 const TPM_AK_CERT_IDX: u32 = 0x1C101D0;
 
-pub async fn create_azure_attestation(
-    cert_chain: &[CertificateDer<'_>],
-    exporter: [u8; 32],
-) -> Result<Vec<u8>, MaaError> {
-    let input_data = compute_report_input(cert_chain, exporter)
-        .map_err(|e| MaaError::InputData(e.to_string()))?;
-
+pub async fn create_azure_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, MaaError> {
     let td_report = report::get_report()?;
 
     // This makes a request to Azure Instance metadata service and gives us a binary response
@@ -54,13 +47,9 @@ pub async fn create_azure_attestation(
 
 pub async fn verify_azure_attestation(
     input: Vec<u8>,
-    cert_chain: &[CertificateDer<'_>],
-    exporter: [u8; 32],
+    expected_input_data: [u8; 64],
     pccs_url: Option<String>,
 ) -> Result<super::measurements::Measurements, MaaError> {
-    let input_data = compute_report_input(cert_chain, exporter)
-        .map_err(|e| MaaError::InputData(e.to_string()))?;
-
     let attestation_document: AttestationDocument = serde_json::from_slice(&input)?;
 
     // Verify TDX quote (same as with DCAP) - TODO deduplicate this code
@@ -108,7 +97,7 @@ pub async fn verify_azure_attestation(
     let vtpm_quote = attestation_document.tpm_attestation.quote;
     let hcl_ak_pub_der = hcl_ak_pub.key.try_to_der().unwrap();
     let pub_key = PKey::public_key_from_der(&hcl_ak_pub_der).unwrap();
-    vtpm_quote.verify(&pub_key, &input_data)?;
+    vtpm_quote.verify(&pub_key, &expected_input_data)?;
     let _pcrs = vtpm_quote.pcrs_sha256();
 
     // TODO parse AK certificate
