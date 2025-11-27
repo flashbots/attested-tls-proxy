@@ -17,6 +17,7 @@ struct SharedState {
     attestation_generator: AttestationGenerator,
 }
 
+/// An HTTP server which produces test attestations
 pub async fn dummy_attestation_server(
     listener: TcpListener,
     attestation_generator: AttestationGenerator,
@@ -32,6 +33,8 @@ pub async fn dummy_attestation_server(
     Ok(())
 }
 
+/// Handler for the GET `/attest/{input_data}` route
+/// Input data should be 64 bytes hex
 async fn get_attest(
     State(shared_state): State<SharedState>,
     Path(input_data): Path<String>,
@@ -49,6 +52,7 @@ async fn get_attest(
     Ok((StatusCode::OK, attestation))
 }
 
+/// A client helper which makes a request to `/attest`
 pub async fn dummy_attestation_client(
     server_addr: SocketAddr,
     attestation_verifier: AttestationVerifier,
@@ -58,11 +62,9 @@ pub async fn dummy_attestation_client(
         "http://{server_addr}/attest/{}",
         hex::encode(input_data)
     ))
-    .await
-    .unwrap()
+    .await?
     .bytes()
-    .await
-    .unwrap();
+    .await?;
 
     let remote_attestation_message = AttestationExchangeMessage::decode(&mut &response[..])?;
     let remote_attestation_type = remote_attestation_message.attestation_type;
