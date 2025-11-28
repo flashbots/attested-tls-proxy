@@ -20,11 +20,9 @@ struct Cli {
     /// Log in JSON format
     #[arg(long, global = true)]
     log_json: bool,
-    // TODO still missing
-    // Name:    "log-dcap-quote",
-    // EnvVars: []string{"LOG_DCAP_QUOTE"},
-    // Value:   false,
-    // Usage:   "log dcap quotes to folder quotes/",
+    /// Log DCAP quotes to folder `quotes/`
+    #[arg(long, global = true)]
+    log_dcap_quote: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -132,6 +130,10 @@ async fn main() -> anyhow::Result<()> {
         subscriber.pretty().init();
     }
 
+    if cli.log_dcap_quote {
+        tokio::fs::create_dir_all("quotes").await?;
+    }
+
     match cli.command {
         CliCommand::Client {
             listen_addr,
@@ -166,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(server_measurements) => AttestationVerifier {
                     accepted_measurements: get_measurements_from_file(server_measurements).await?,
                     pccs_url,
+                    log_dcap_quote: cli.log_dcap_quote,
                 },
                 None => AttestationVerifier::do_not_verify(),
             };
@@ -225,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(client_measurements) => AttestationVerifier {
                     accepted_measurements: get_measurements_from_file(client_measurements).await?,
                     pccs_url,
+                    log_dcap_quote: cli.log_dcap_quote,
                 },
                 None => AttestationVerifier::do_not_verify(),
             };
@@ -254,6 +258,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(server_measurements) => AttestationVerifier {
                     accepted_measurements: get_measurements_from_file(server_measurements).await?,
                     pccs_url,
+                    log_dcap_quote: cli.log_dcap_quote,
                 },
                 None => AttestationVerifier::do_not_verify(),
             };

@@ -1208,6 +1208,7 @@ mod tests {
                 },
             }],
             pccs_url: None,
+            log_dcap_quote: false,
         };
 
         let proxy_client_result = ProxyClient::new_with_tls_config(

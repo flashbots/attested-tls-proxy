@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
     sync::Arc,
-    time::SystemTimeError,
+    time::{SystemTime, SystemTimeError, UNIX_EPOCH},
 };
 
 use configfs_tsm::QuoteGenerationError;
@@ -148,6 +148,8 @@ pub struct AttestationVerifier {
     pub accepted_measurements: Vec<MeasurementRecord>,
     /// A PCCS service to use - defaults to Intel PCS
     pub pccs_url: Option<String>,
+    /// Whether to log quotes to a file
+    pub log_dcap_quote: bool,
 }
 
 impl AttestationVerifier {
@@ -156,6 +158,7 @@ impl AttestationVerifier {
         Self {
             accepted_measurements: Vec::new(),
             pccs_url: None,
+            log_dcap_quote: false,
         }
     }
 
@@ -179,6 +182,7 @@ impl AttestationVerifier {
                 },
             }],
             pccs_url: None,
+            log_dcap_quote: false,
         }
     }
 
@@ -190,6 +194,11 @@ impl AttestationVerifier {
         exporter: [u8; 32],
     ) -> Result<Option<Measurements>, AttestationError> {
         let attestation_type = attestation_exchange_message.attestation_type;
+        tracing::debug!("Verifing {attestation_type} attestation");
+
+        if self.log_dcap_quote {
+            log_attestation(&attestation_exchange_message).await;
+        }
 
         let measurements = match attestation_type {
             AttestationType::DcapTdx => {
@@ -222,6 +231,7 @@ impl AttestationVerifier {
             .find(|a| a.attestation_type == attestation_type && a.measurements == measurements)
             .ok_or(AttestationError::MeasurementsNotAccepted)?;
 
+        tracing::debug!("Verification successful");
         Ok(Some(measurements))
     }
 
@@ -382,6 +392,21 @@ fn get_pki_hash_from_certificate_chain(
     let mut hasher = Sha256::new();
     hasher.update(key_bytes);
     Ok(hasher.finalize().into())
+}
+
+/// Write attestation data to a log file
+async fn log_attestation(attestation: &AttestationExchangeMessage) {
+    if attestation.attestation_type != AttestationType::None {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_nanos();
+
+        let filename = format!("quotes/{}-{}", attestation.attestation_type, timestamp);
+        if let Err(err) = tokio::fs::write(&filename, attestation.attestation.clone()).await {
+            tracing::warn!("Failed to write {filename}: {err}");
+        }
+    }
 }
 
 /// An error when generating or verifying an attestation
