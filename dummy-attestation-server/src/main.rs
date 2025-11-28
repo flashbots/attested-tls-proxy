@@ -20,6 +20,9 @@ struct Cli {
     /// Log in JSON format
     #[arg(long, global = true)]
     log_json: bool,
+    /// Log DCAP quotes to folder `quotes/`
+    #[arg(long, global = true)]
+    log_dcap_quote: bool,
 }
 #[derive(Subcommand, Debug, Clone)]
 enum CliCommand {
@@ -62,6 +65,10 @@ async fn main() -> anyhow::Result<()> {
         subscriber.pretty().init();
     }
 
+    if cli.log_dcap_quote {
+        tokio::fs::create_dir_all("quotes").await?;
+    }
+
     match cli.command {
         CliCommand::Server {
             listen_addr,
@@ -88,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(server_measurements) => AttestationVerifier {
                     accepted_measurements: get_measurements_from_file(server_measurements).await?,
                     pccs_url: None,
+                    log_dcap_quote: cli.log_dcap_quote,
                 },
                 None => AttestationVerifier::do_not_verify(),
             };
@@ -95,8 +103,6 @@ async fn main() -> anyhow::Result<()> {
             let attestation_message =
                 dummy_attestation_client(server_addr, attestation_verifier).await?;
 
-            let encoded_attestation_message = attestation_message.encode();
-            std::fs::write("attestation_message.bin", encoded_attestation_message)?;
             println!("{attestation_message:?}")
         }
     }
