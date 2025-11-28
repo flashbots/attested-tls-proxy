@@ -6,7 +6,7 @@ use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
     attestation::{measurements::get_measurements_from_file, AttestationType, AttestationVerifier},
-    get_tls_cert, ProxyClient, ProxyServer, TlsCertAndKey,
+    get_tls_cert, AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -187,7 +187,9 @@ async fn main() -> anyhow::Result<()> {
                 None => None,
             };
 
-            let client_attestation_generator = client_attestation_type.get_quote_generator()?;
+            let client_attestation_generator = AttestationGenerator {
+                attestation_type: client_attestation_type,
+            };
 
             let client = ProxyClient::new(
                 tls_cert_and_chain,
@@ -222,7 +224,9 @@ async fn main() -> anyhow::Result<()> {
                 serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
             )?;
 
-            let local_attestation_generator = server_attestation_type.get_quote_generator()?;
+            let local_attestation_generator = AttestationGenerator {
+                attestation_type: server_attestation_type,
+            };
 
             let attestation_verifier = match client_measurements {
                 Some(client_measurements) => AttestationVerifier {

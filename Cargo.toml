@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "dummy-attestation-server"]
+
 [package]
 name = "attested-tls-proxy"
 version = "0.1.0"
@@ -26,12 +29,17 @@ http-body-util = "0.1.3"
 bytes = "1.10.1"
 http = "1.3.1"
 serde_json = "1.0.145"
+az-tdx-vtpm = "0.7.4"
 serde = "1.0.228"
+base64 = "0.22.1"
+reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
+josekit = "0.10.3"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 parity-scale-codec = "3.7.5"
+openssl = "0.10.75"
+tss-esapi = "7.6.0"
 
 [dev-dependencies]
 rcgen = "0.14.5"
 axum = "0.8.6"
-reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
