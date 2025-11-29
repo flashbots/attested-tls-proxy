@@ -1,10 +1,9 @@
 pub mod measurements;
 
-use measurements::{CvmImageMeasurements, MeasurementRecord, Measurements, PlatformMeasurements};
+use measurements::{CvmImageMeasurements, Measurements, PlatformMeasurements};
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     fmt::{self, Display, Formatter},
     sync::Arc,
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
@@ -20,6 +19,8 @@ use tdx_quote::QuoteParseError;
 use thiserror::Error;
 use tokio_rustls::rustls::pki_types::CertificateDer;
 use x509_parser::prelude::*;
+
+use crate::attestation::measurements::MeasurementPolicy;
 
 /// For fetching collateral directly from intel, if no PCCS is specified
 const PCS_URL: &str = "https://api.trustedservices.intel.com";
@@ -139,79 +140,6 @@ pub trait QuoteGenerator: Send + Sync + 'static {
     ) -> Result<Vec<u8>, AttestationError>;
 }
 
-#[derive(Clone, Debug)]
-pub struct MeasurementPolicy {
-    pub accepted_measurements: HashMap<AttestationType, Option<Vec<MeasurementRecord>>>,
-}
-
-impl MeasurementPolicy {
-    /// This will only allow no attestation - and will reject it if one is given
-    pub fn expect_none() -> Self {
-        Self {
-            accepted_measurements: HashMap::from([(AttestationType::None, None)]),
-        }
-    }
-
-    /// Accept any attestation type with any measurements
-    pub fn accept_anything() -> Self {
-        Self {
-            accepted_measurements: HashMap::from([
-                (AttestationType::None, None),
-                (AttestationType::Dummy, None),
-                (AttestationType::DcapTdx, None),
-                (AttestationType::QemuTdx, None),
-                (AttestationType::AzureTdx, None),
-                (AttestationType::GcpTdx, None),
-            ]),
-        }
-    }
-
-    /// Expect mock measurements used in tests
-    #[cfg(test)]
-    pub fn mock() -> Self {
-        Self {
-            accepted_measurements: HashMap::from([(
-                AttestationType::DcapTdx,
-                Some(vec![MeasurementRecord {
-                    measurement_id: "test".to_string(),
-                    measurements: Measurements {
-                        platform: PlatformMeasurements {
-                            mrtd: [0; 48],
-                            rtmr0: [0; 48],
-                        },
-                        cvm_image: CvmImageMeasurements {
-                            rtmr1: [0; 48],
-                            rtmr2: [0; 48],
-                            rtmr3: [0; 48],
-                        },
-                    },
-                }]),
-            )]),
-        }
-    }
-
-    pub fn check_measurement(
-        &self,
-        attestation_type: AttestationType,
-        measurements: &Measurements,
-    ) -> bool {
-        match self.accepted_measurements.get(&attestation_type) {
-            Some(Some(measurement_set)) => measurement_set
-                .iter()
-                .find(|a| &a.measurements == measurements)
-                .is_some(),
-            Some(None) => true,
-            None => false,
-        }
-    }
-
-    pub fn has_remote_attestion(&self) -> bool {
-        !self
-            .accepted_measurements
-            .contains_key(&AttestationType::None)
-    }
-}
-
 /// Allows remote attestations to be verified
 #[derive(Clone, Debug)]
 pub struct AttestationVerifier {
@@ -284,13 +212,9 @@ impl AttestationVerifier {
             }
         };
 
-        // look through all our accepted measurements
-        if !self
-            .measurement_policy
-            .check_measurement(attestation_type, &measurements)
-        {
-            return Err(AttestationError::MeasurementsNotAccepted);
-        }
+        // Do a measurement / attestation type policy check
+        self.measurement_policy
+            .check_measurement(attestation_type, &measurements)?;
 
         tracing::debug!("Verification successful");
         Ok(Some(measurements))
