@@ -177,6 +177,13 @@ impl MeasurementPolicy {
         }
     }
 
+    /// Allow any measurements with the given attestation type
+    pub fn single_attestation_type(attestation_type: AttestationType) -> Self {
+        Self {
+            accepted_measurements: HashMap::from([(attestation_type, None)]),
+        }
+    }
+
     /// Accept any attestation type with any measurements
     pub fn accept_anything() -> Self {
         Self {
@@ -236,6 +243,7 @@ impl MeasurementPolicy {
         }
     }
 
+    /// Whether or not we require attestation
     pub fn has_remote_attestion(&self) -> bool {
         !self
             .accepted_measurements
