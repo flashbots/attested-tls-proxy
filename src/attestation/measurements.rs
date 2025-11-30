@@ -1,3 +1,4 @@
+//! Measurements and policy for enforcing them when validating a remote attestation
 use crate::attestation::{AttestationError, AttestationType};
 use std::{collections::HashMap, path::PathBuf};
 
@@ -164,9 +165,15 @@ pub struct MeasurementRecord {
     pub measurements: Measurements,
 }
 
+/// Represents the measurement policy
+///
+/// This is a set of acceptable attestation types (CVM platforms) which may or may not enforce
+/// acceptable measurement values for each attestation type
 #[derive(Clone, Debug)]
 pub struct MeasurementPolicy {
-    pub accepted_measurements: HashMap<AttestationType, Option<Vec<MeasurementRecord>>>,
+    /// A map of accepted attestation types to accepted measurement values
+    /// A value of None means accept any measurement value for this measurement type
+    pub(crate) accepted_measurements: HashMap<AttestationType, Option<Vec<MeasurementRecord>>>,
 }
 
 impl MeasurementPolicy {
@@ -256,6 +263,7 @@ impl MeasurementPolicy {
         Self::from_json_bytes(measurements_json).await
     }
 
+    /// Parse from JSON
     pub async fn from_json_bytes(json_bytes: Vec<u8>) -> Result<Self, MeasurementFormatError> {
         #[derive(Debug, Deserialize)]
         struct MeasurementRecordSimple {
