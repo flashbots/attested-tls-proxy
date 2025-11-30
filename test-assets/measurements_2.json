@@ -1,6 +1,5 @@
 [
     {
-        "measurement_id": "dcap-tdx-example",
         "attestation_type": "dcap-tdx"
     }
 ]
