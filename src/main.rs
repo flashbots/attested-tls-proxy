@@ -5,7 +5,7 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
-    attestation::{measurements::get_measurements_from_file, AttestationType, AttestationVerifier},
+    attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
     get_tls_cert, ProxyClient, ProxyServer, TlsCertAndKey,
 };
 
@@ -166,11 +166,11 @@ async fn main() -> anyhow::Result<()> {
 
             let attestation_verifier = match server_measurements {
                 Some(server_measurements) => AttestationVerifier {
-                    accepted_measurements: get_measurements_from_file(server_measurements).await?,
+                    measurement_policy: MeasurementPolicy::from_file(server_measurements).await?,
                     pccs_url,
                     log_dcap_quote: cli.log_dcap_quote,
                 },
-                None => AttestationVerifier::do_not_verify(),
+                None => AttestationVerifier::expect_none(),
             };
 
             let client_attestation_type: AttestationType = serde_json::from_value(
@@ -226,11 +226,11 @@ async fn main() -> anyhow::Result<()> {
 
             let attestation_verifier = match client_measurements {
                 Some(client_measurements) => AttestationVerifier {
-                    accepted_measurements: get_measurements_from_file(client_measurements).await?,
+                    measurement_policy: MeasurementPolicy::from_file(client_measurements).await?,
                     pccs_url,
                     log_dcap_quote: cli.log_dcap_quote,
                 },
-                None => AttestationVerifier::do_not_verify(),
+                None => AttestationVerifier::expect_none(),
             };
 
             let server = ProxyServer::new(
@@ -256,11 +256,11 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let attestation_verifier = match server_measurements {
                 Some(server_measurements) => AttestationVerifier {
-                    accepted_measurements: get_measurements_from_file(server_measurements).await?,
+                    measurement_policy: MeasurementPolicy::from_file(server_measurements).await?,
                     pccs_url,
                     log_dcap_quote: cli.log_dcap_quote,
                 },
-                None => AttestationVerifier::do_not_verify(),
+                None => AttestationVerifier::expect_none(),
             };
             let cert_chain = get_tls_cert(server, attestation_verifier).await?;
             println!("{}", certs_to_pem_string(&cert_chain)?);

@@ -1,6 +1,6 @@
 pub mod measurements;
 
-use measurements::{CvmImageMeasurements, MeasurementRecord, Measurements, PlatformMeasurements};
+use measurements::{CvmImageMeasurements, Measurements, PlatformMeasurements};
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -19,6 +19,8 @@ use tdx_quote::QuoteParseError;
 use thiserror::Error;
 use tokio_rustls::rustls::pki_types::CertificateDer;
 use x509_parser::prelude::*;
+
+use crate::attestation::measurements::MeasurementPolicy;
 
 /// For fetching collateral directly from intel, if no PCCS is specified
 const PCS_URL: &str = "https://api.trustedservices.intel.com";
@@ -141,11 +143,10 @@ pub trait QuoteGenerator: Send + Sync + 'static {
 /// Allows remote attestations to be verified
 #[derive(Clone, Debug)]
 pub struct AttestationVerifier {
-    /// The measurement values we accept
-    ///
+    /// The measurement policy with accepted values and attestation types
+    pub measurement_policy: MeasurementPolicy,
     /// If this is empty, anything will be accepted - but measurements are always injected into HTTP
     /// headers, so that they can be verified upstream
-    pub accepted_measurements: Vec<MeasurementRecord>,
     /// A PCCS service to use - defaults to Intel PCS
     pub pccs_url: Option<String>,
     /// Whether to log quotes to a file
@@ -154,9 +155,9 @@ pub struct AttestationVerifier {
 
 impl AttestationVerifier {
     /// Create an [AttestationVerifier] which will allow no remote attestation
-    pub fn do_not_verify() -> Self {
+    pub fn expect_none() -> Self {
         Self {
-            accepted_measurements: Vec::new(),
+            measurement_policy: MeasurementPolicy::expect_none(),
             pccs_url: None,
             log_dcap_quote: false,
         }
@@ -166,21 +167,7 @@ impl AttestationVerifier {
     #[cfg(test)]
     pub fn mock() -> Self {
         Self {
-            accepted_measurements: vec![MeasurementRecord {
-                attestation_type: AttestationType::DcapTdx,
-                measurement_id: "test".to_string(),
-                measurements: Measurements {
-                    platform: PlatformMeasurements {
-                        mrtd: [0; 48],
-                        rtmr0: [0; 48],
-                    },
-                    cvm_image: CvmImageMeasurements {
-                        rtmr1: [0; 48],
-                        rtmr2: [0; 48],
-                        rtmr3: [0; 48],
-                    },
-                },
-            }],
+            measurement_policy: MeasurementPolicy::mock(),
             pccs_url: None,
             log_dcap_quote: false,
         }
@@ -225,11 +212,9 @@ impl AttestationVerifier {
             }
         };
 
-        // look through all our accepted measurements
-        self.accepted_measurements
-            .iter()
-            .find(|a| a.attestation_type == attestation_type && a.measurements == measurements)
-            .ok_or(AttestationError::MeasurementsNotAccepted)?;
+        // Do a measurement / attestation type policy check
+        self.measurement_policy
+            .check_measurement(attestation_type, &measurements)?;
 
         tracing::debug!("Verification successful");
         Ok(Some(measurements))
@@ -237,7 +222,7 @@ impl AttestationVerifier {
 
     /// Whether we allow no remote attestation
     pub fn has_remote_attestion(&self) -> bool {
-        !self.accepted_measurements.is_empty()
+        self.measurement_policy.has_remote_attestion()
     }
 }
 
