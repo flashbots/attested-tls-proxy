@@ -305,6 +305,8 @@ pub async fn get_measurements_from_file(
                     }
                 })
                 .or_insert_with(|| Some(vec![measurement_record]));
+        } else {
+            measurement_policy.entry(attestation_type).or_insert(None);
         };
     }
 
@@ -317,10 +319,64 @@ pub async fn get_measurements_from_file(
 mod tests {
     use super::*;
 
+    fn mock_measurements() -> Measurements {
+        Measurements {
+            platform: PlatformMeasurements {
+                mrtd: [0; 48],
+                rtmr0: [0; 48],
+            },
+            cvm_image: CvmImageMeasurements {
+                rtmr1: [0; 48],
+                rtmr2: [0; 48],
+                rtmr3: [0; 48],
+            },
+        }
+    }
+
     #[tokio::test]
     async fn test_read_measurements_file() {
-        get_measurements_from_file("test-assets/measurements.json".into())
-            .await
+        let specific_measurements =
+            get_measurements_from_file("test-assets/measurements.json".into())
+                .await
+                .unwrap();
+
+        assert!(specific_measurements
+            .accepted_measurements
+            .get(&AttestationType::DcapTdx)
+            .unwrap()
+            .is_some());
+
+        // Will not match mock measurements
+        assert!(matches!(
+            specific_measurements
+                .check_measurement(AttestationType::DcapTdx, &mock_measurements())
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_read_measurements_file_non_specific() {
+        let mock_measurements = mock_measurements();
+        // This specifies a particular attestation type, but not specific measurements
+        let allowed_attestation_type =
+            get_measurements_from_file("test-assets/measurements_2.json".into())
+                .await
+                .unwrap();
+
+        allowed_attestation_type
+            .check_measurement(AttestationType::DcapTdx, &mock_measurements)
+            .unwrap();
+
+        assert!(allowed_attestation_type
+            .accepted_measurements
+            .get(&AttestationType::DcapTdx)
+            .unwrap()
+            .is_none());
+
+        // Will match mock measurements
+        allowed_attestation_type
+            .check_measurement(AttestationType::DcapTdx, &mock_measurements)
             .unwrap();
     }
 }
