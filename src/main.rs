@@ -114,15 +114,14 @@ enum CliCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let level_filter = if cli.log_debug {
-        LevelFilter::DEBUG
-    } else {
-        LevelFilter::WARN
-    };
+    let crate_name = env!("CARGO_PKG_NAME");
 
     let env_filter = tracing_subscriber::EnvFilter::builder()
-        .with_default_directive(level_filter.into())
-        .from_env_lossy();
+        .with_default_directive(LevelFilter::WARN.into()) // global default
+        .parse_lossy(format!(
+            "{crate_name}={}",
+            if cli.log_debug { "debug" } else { "warn" }
+        ));
 
     let subscriber = tracing_subscriber::fmt::Subscriber::builder().with_env_filter(env_filter);
 
