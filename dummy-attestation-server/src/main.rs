@@ -1,6 +1,5 @@
 use attested_tls_proxy::attestation::{
-    measurements::get_measurements_from_file, AttestationGenerator, AttestationType,
-    AttestationVerifier,
+    measurements::MeasurementPolicy, AttestationGenerator, AttestationType, AttestationVerifier,
 };
 use clap::{Parser, Subcommand};
 use dummy_attestation_server::{dummy_attestation_client, dummy_attestation_server};
@@ -36,9 +35,9 @@ enum CliCommand {
     Client {
         /// Socket address of a dummy attestation server
         server_addr: SocketAddr,
-        /// Optional path to file containing JSON measurements to be enforced on the server
-        #[arg(long, env = "SERVER_MEASUREMENTS")]
-        server_measurements: Option<PathBuf>,
+        /// Optional path to file containing JSON measurements to be enforced on the remote party
+        #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
+        measurements_file: Option<PathBuf>,
     },
 }
 
@@ -88,15 +87,17 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Client {
             server_addr,
-            server_measurements,
+            measurements_file,
         } => {
-            let attestation_verifier = match server_measurements {
-                Some(server_measurements) => AttestationVerifier {
-                    accepted_measurements: get_measurements_from_file(server_measurements).await?,
-                    pccs_url: None,
-                    log_dcap_quote: cli.log_dcap_quote,
-                },
-                None => AttestationVerifier::do_not_verify(),
+            let measurement_policy = match measurements_file {
+                Some(measurements_file) => MeasurementPolicy::from_file(measurements_file).await?,
+                None => MeasurementPolicy::accept_anything(),
+            };
+
+            let attestation_verifier = AttestationVerifier {
+                measurement_policy,
+                pccs_url: None,
+                log_dcap_quote: cli.log_dcap_quote,
             };
 
             let attestation_message =

@@ -117,7 +117,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        dummy_attestation_client(server_addr, AttestationVerifier::do_not_verify())
+        dummy_attestation_client(server_addr, AttestationVerifier::expect_none())
             .await
             .unwrap();
     }

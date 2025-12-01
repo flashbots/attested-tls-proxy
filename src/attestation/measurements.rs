@@ -1,3 +1,4 @@
+//! Measurements and policy for enforcing them when validating a remote attestation
 use crate::attestation::{AttestationError, AttestationType};
 use std::{collections::HashMap, path::PathBuf};
 
@@ -160,74 +161,249 @@ pub enum MeasurementFormatError {
 pub struct MeasurementRecord {
     /// An identifier, for example the name and version of the corresponding OS image
     pub measurement_id: String,
-    /// The associated attestation platform
-    pub attestation_type: AttestationType,
     /// The expected measurement register values
     pub measurements: Measurements,
 }
 
-/// Given the path to a JSON file containing measurements, return a [Vec<MeasurementRecord>]
-pub async fn get_measurements_from_file(
-    measurement_file: PathBuf,
-) -> Result<Vec<MeasurementRecord>, MeasurementFormatError> {
-    #[derive(Debug, Deserialize)]
-    struct MeasurementRecordSimple {
-        measurement_id: String,
-        attestation_type: String,
-        measurements: HashMap<String, MeasurementEntry>,
+/// Represents the measurement policy
+///
+/// This is a set of acceptable attestation types (CVM platforms) which may or may not enforce
+/// acceptable measurement values for each attestation type
+#[derive(Clone, Debug)]
+pub struct MeasurementPolicy {
+    /// A map of accepted attestation types to accepted measurement values
+    /// A value of None means accept any measurement value for this measurement type
+    pub(crate) accepted_measurements: HashMap<AttestationType, Option<Vec<MeasurementRecord>>>,
+}
+
+impl MeasurementPolicy {
+    /// This will only allow no attestation - and will reject it if one is given
+    pub fn expect_none() -> Self {
+        Self {
+            accepted_measurements: HashMap::from([(AttestationType::None, None)]),
+        }
     }
 
-    #[derive(Debug, Deserialize)]
-    struct MeasurementEntry {
-        expected: String,
+    /// Allow any measurements with the given attestation type
+    pub fn single_attestation_type(attestation_type: AttestationType) -> Self {
+        Self {
+            accepted_measurements: HashMap::from([(attestation_type, None)]),
+        }
     }
 
-    let measurements_json = tokio::fs::read(measurement_file).await?;
-    let measurements_simple: Vec<MeasurementRecordSimple> =
-        serde_json::from_slice(&measurements_json)?;
-    let mut measurements = Vec::new();
-    for measurement in measurements_simple {
-        measurements.push(MeasurementRecord {
-            measurement_id: measurement.measurement_id,
-            attestation_type: serde_json::from_value(serde_json::Value::String(
-                measurement.attestation_type,
-            ))
-            .map_err(|_| MeasurementFormatError::AttestationTypeNotValid)?,
-            measurements: Measurements {
-                platform: PlatformMeasurements {
-                    mrtd: hex::decode(&measurement.measurements["0"].expected)?
-                        .try_into()
-                        .map_err(|_| MeasurementFormatError::BadLength)?,
-                    rtmr0: hex::decode(&measurement.measurements["1"].expected)?
-                        .try_into()
-                        .map_err(|_| MeasurementFormatError::BadLength)?,
-                },
-                cvm_image: CvmImageMeasurements {
-                    rtmr1: hex::decode(&measurement.measurements["2"].expected)?
-                        .try_into()
-                        .map_err(|_| MeasurementFormatError::BadLength)?,
-                    rtmr2: hex::decode(&measurement.measurements["3"].expected)?
-                        .try_into()
-                        .map_err(|_| MeasurementFormatError::BadLength)?,
-                    rtmr3: hex::decode(&measurement.measurements["4"].expected)?
-                        .try_into()
-                        .map_err(|_| MeasurementFormatError::BadLength)?,
-                },
-            },
-        });
+    /// Accept any attestation type with any measurements
+    pub fn accept_anything() -> Self {
+        Self {
+            accepted_measurements: HashMap::from([
+                (AttestationType::None, None),
+                (AttestationType::Dummy, None),
+                (AttestationType::DcapTdx, None),
+                (AttestationType::QemuTdx, None),
+                (AttestationType::AzureTdx, None),
+                (AttestationType::GcpTdx, None),
+            ]),
+        }
     }
 
-    Ok(measurements)
+    /// Expect mock measurements used in tests
+    #[cfg(test)]
+    pub fn mock() -> Self {
+        Self {
+            accepted_measurements: HashMap::from([(
+                AttestationType::DcapTdx,
+                Some(vec![MeasurementRecord {
+                    measurement_id: "test".to_string(),
+                    measurements: Measurements {
+                        platform: PlatformMeasurements {
+                            mrtd: [0; 48],
+                            rtmr0: [0; 48],
+                        },
+                        cvm_image: CvmImageMeasurements {
+                            rtmr1: [0; 48],
+                            rtmr2: [0; 48],
+                            rtmr3: [0; 48],
+                        },
+                    },
+                }]),
+            )]),
+        }
+    }
+
+    /// Given an attestation type and set of measurements, check whether they are acceptable
+    pub fn check_measurement(
+        &self,
+        attestation_type: AttestationType,
+        measurements: &Measurements,
+    ) -> Result<(), AttestationError> {
+        match self.accepted_measurements.get(&attestation_type) {
+            Some(Some(measurement_set)) => {
+                if measurement_set
+                    .iter()
+                    .any(|a| &a.measurements == measurements)
+                {
+                    Ok(())
+                } else {
+                    Err(AttestationError::MeasurementsNotAccepted)
+                }
+            }
+            Some(None) => Ok(()),
+            None => Err(AttestationError::AttestationTypeNotAccepted),
+        }
+    }
+
+    /// Whether or not we require attestation
+    pub fn has_remote_attestion(&self) -> bool {
+        !self
+            .accepted_measurements
+            .contains_key(&AttestationType::None)
+    }
+
+    /// Given the path to a JSON file containing measurements, return a [MeasurementPolicy]
+    pub async fn from_file(measurement_file: PathBuf) -> Result<Self, MeasurementFormatError> {
+        let measurements_json = tokio::fs::read(measurement_file).await?;
+        Self::from_json_bytes(measurements_json).await
+    }
+
+    /// Parse from JSON
+    pub async fn from_json_bytes(json_bytes: Vec<u8>) -> Result<Self, MeasurementFormatError> {
+        #[derive(Debug, Deserialize)]
+        struct MeasurementRecordSimple {
+            measurement_id: Option<String>,
+            attestation_type: String,
+            measurements: Option<HashMap<String, MeasurementEntry>>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct MeasurementEntry {
+            expected: String,
+        }
+
+        let measurements_simple: Vec<MeasurementRecordSimple> =
+            serde_json::from_slice(&json_bytes)?;
+
+        let mut measurement_policy = HashMap::new();
+
+        for measurement in measurements_simple {
+            let attestation_type =
+                serde_json::from_value(serde_json::Value::String(measurement.attestation_type))
+                    .unwrap();
+
+            if let Some(measurements) = measurement.measurements {
+                let measurement_record = MeasurementRecord {
+                    measurement_id: measurement.measurement_id.unwrap_or_default(),
+                    measurements: Measurements {
+                        platform: PlatformMeasurements {
+                            mrtd: hex::decode(&measurements["0"].expected)?
+                                .try_into()
+                                .map_err(|_| MeasurementFormatError::BadLength)?,
+                            rtmr0: hex::decode(&measurements["1"].expected)?
+                                .try_into()
+                                .map_err(|_| MeasurementFormatError::BadLength)?,
+                        },
+                        cvm_image: CvmImageMeasurements {
+                            rtmr1: hex::decode(&measurements["2"].expected)?
+                                .try_into()
+                                .map_err(|_| MeasurementFormatError::BadLength)?,
+                            rtmr2: hex::decode(&measurements["3"].expected)?
+                                .try_into()
+                                .map_err(|_| MeasurementFormatError::BadLength)?,
+                            rtmr3: hex::decode(&measurements["4"].expected)?
+                                .try_into()
+                                .map_err(|_| MeasurementFormatError::BadLength)?,
+                        },
+                    },
+                };
+
+                measurement_policy
+                    .entry(attestation_type)
+                    .and_modify(|maybe_vec: &mut Option<Vec<MeasurementRecord>>| {
+                        match maybe_vec.as_mut() {
+                            Some(vec) => vec.push(measurement_record.clone()),
+                            None => *maybe_vec = Some(vec![measurement_record.clone()]),
+                        }
+                    })
+                    .or_insert_with(|| Some(vec![measurement_record]));
+            } else {
+                measurement_policy.entry(attestation_type).or_insert(None);
+            };
+        }
+
+        Ok(MeasurementPolicy {
+            accepted_measurements: measurement_policy,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn mock_measurements() -> Measurements {
+        Measurements {
+            platform: PlatformMeasurements {
+                mrtd: [0; 48],
+                rtmr0: [0; 48],
+            },
+            cvm_image: CvmImageMeasurements {
+                rtmr1: [0; 48],
+                rtmr2: [0; 48],
+                rtmr3: [0; 48],
+            },
+        }
+    }
+
     #[tokio::test]
     async fn test_read_measurements_file() {
-        get_measurements_from_file("test-assets/measurements.json".into())
-            .await
+        let specific_measurements =
+            MeasurementPolicy::from_file("test-assets/measurements.json".into())
+                .await
+                .unwrap();
+
+        assert!(specific_measurements
+            .accepted_measurements
+            .get(&AttestationType::DcapTdx)
+            .unwrap()
+            .is_some());
+
+        // Will not match mock measurements
+        assert!(matches!(
+            specific_measurements
+                .check_measurement(AttestationType::DcapTdx, &mock_measurements())
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
+
+        // Will not match another attestation type
+        assert!(matches!(
+            specific_measurements
+                .check_measurement(AttestationType::None, &mock_measurements())
+                .unwrap_err(),
+            AttestationError::AttestationTypeNotAccepted
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_read_measurements_file_non_specific() {
+        let mock_measurements = mock_measurements();
+        // This specifies a particular attestation type, but not specific measurements
+        let allowed_attestation_type =
+            MeasurementPolicy::from_file("test-assets/measurements_2.json".into())
+                .await
+                .unwrap();
+
+        allowed_attestation_type
+            .check_measurement(AttestationType::DcapTdx, &mock_measurements)
+            .unwrap();
+
+        assert!(allowed_attestation_type
+            .accepted_measurements
+            .get(&AttestationType::DcapTdx)
+            .unwrap()
+            .is_none());
+
+        // Will match mock measurements
+        allowed_attestation_type
+            .check_measurement(AttestationType::DcapTdx, &mock_measurements)
             .unwrap();
     }
 }

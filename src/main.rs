@@ -5,7 +5,7 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
-    attestation::{measurements::get_measurements_from_file, AttestationType, AttestationVerifier},
+    attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
     get_tls_cert, AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey,
 };
 
@@ -14,6 +14,15 @@ use attested_tls_proxy::{
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
+    /// Optional path to file containing JSON measurements to be enforced on the remote party
+    #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
+    measurements_file: Option<PathBuf>,
+    /// If no measurements file is specified, a single attestion type to allow
+    #[arg(long, global = true)]
+    allowed_remote_attestation_type: Option<String>,
+    /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
+    #[arg(long, global = true)]
+    pccs_url: Option<String>,
     /// Log debug messages
     #[arg(long, global = true)]
     log_debug: bool,
@@ -34,25 +43,19 @@ enum CliCommand {
         listen_addr: SocketAddr,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
+        /// Type of attestation to present (dafaults to none)
+        /// If other than None, a TLS key and certicate must also be given
+        #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
+        client_attestation_type: Option<String>,
         /// The path to a PEM encoded private key for client authentication
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: Option<PathBuf>,
         /// The path to a PEM encoded certificate chain for client authentication
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: Option<PathBuf>,
-        /// Type of attestaion to present (dafaults to none)
-        /// If other than None, a TLS key and certicate must also be given
-        #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
-        client_attestation_type: Option<String>,
-        /// Optional path to file containing JSON measurements to be enforced on the server
-        #[arg(long, env = "SERVER_MEASUREMENTS")]
-        server_measurements: Option<PathBuf>,
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
-        /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
-        #[arg(long)]
-        pccs_url: Option<String>,
         // TODO missing:
         // Name:    "dev-dummy-dcap",
         // EnvVars: []string{"DEV_DUMMY_DCAP"},
@@ -65,6 +68,10 @@ enum CliCommand {
         listen_addr: SocketAddr,
         /// Socket address of the target service to forward traffic to
         target_addr: SocketAddr,
+        /// Type of attestation to present (dafaults to none)
+        /// If other than None, a TLS key and certicate must also be given
+        #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
+        server_attestation_type: Option<String>,
         /// The path to a PEM encoded private key
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: PathBuf,
@@ -75,16 +82,6 @@ enum CliCommand {
         /// enabled.
         #[arg(long)]
         client_auth: bool,
-        /// Type of attestaion to present (dafaults to none)
-        /// If other than None, a TLS key and certicate must also be given
-        #[arg(long)]
-        server_attestation_type: Option<String>,
-        /// Optional path to file containing JSON measurements to be enforced on the client
-        #[arg(long, env = "CLIENT_MEASUREMENTS")]
-        client_measurements: Option<PathBuf>,
-        /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
-        #[arg(long)]
-        pccs_url: Option<String>,
         // TODO missing:
         // Name:    "listen-addr-healthcheck",
         // EnvVars: []string{"LISTEN_ADDR_HEALTHCHECK"},
@@ -99,18 +96,17 @@ enum CliCommand {
     GetTlsCert {
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         server: String,
-        /// Optional path to file containing JSON measurements to be enforced on the server
-        #[arg(long)]
-        server_measurements: Option<PathBuf>,
-        /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
-        #[arg(long)]
-        pccs_url: Option<String>,
     },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    ensure!(
+        cli.allowed_remote_attestation_type.is_some() != cli.measurements_file.is_some(),
+        "Exactly one of --measurements-file or --allowed-remote-attestation-type must be provided"
+    );
 
     let level_filter = if cli.log_debug {
         LevelFilter::DEBUG
@@ -134,16 +130,32 @@ async fn main() -> anyhow::Result<()> {
         tokio::fs::create_dir_all("quotes").await?;
     }
 
+    let measurement_policy = match cli.measurements_file {
+        Some(server_measurements) => MeasurementPolicy::from_file(server_measurements).await?,
+        None => {
+            let allowed_server_attestation_type: AttestationType = serde_json::from_value(
+                serde_json::Value::String(cli.allowed_remote_attestation_type.ok_or(anyhow!(
+                    "Either a measurements file or an allowed attestation type must be provided"
+                ))?),
+            )?;
+            MeasurementPolicy::single_attestation_type(allowed_server_attestation_type)
+        }
+    };
+
+    let attestation_verifier = AttestationVerifier {
+        measurement_policy,
+        pccs_url: cli.pccs_url,
+        log_dcap_quote: cli.log_dcap_quote,
+    };
+
     match cli.command {
         CliCommand::Client {
             listen_addr,
             target_addr,
+            client_attestation_type,
             tls_private_key_path,
             tls_certificate_path,
-            client_attestation_type,
-            server_measurements,
             tls_ca_certificate,
-            pccs_url,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
@@ -162,15 +174,6 @@ async fn main() -> anyhow::Result<()> {
                     "Certificate chain given but no private key"
                 );
                 None
-            };
-
-            let attestation_verifier = match server_measurements {
-                Some(server_measurements) => AttestationVerifier {
-                    accepted_measurements: get_measurements_from_file(server_measurements).await?,
-                    pccs_url,
-                    log_dcap_quote: cli.log_dcap_quote,
-                },
-                None => AttestationVerifier::do_not_verify(),
             };
 
             let client_attestation_type: AttestationType = serde_json::from_value(
@@ -214,8 +217,6 @@ async fn main() -> anyhow::Result<()> {
             tls_certificate_path,
             client_auth,
             server_attestation_type,
-            client_measurements,
-            pccs_url,
         } => {
             let tls_cert_and_chain =
                 load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
@@ -226,15 +227,6 @@ async fn main() -> anyhow::Result<()> {
 
             let local_attestation_generator = AttestationGenerator {
                 attestation_type: server_attestation_type,
-            };
-
-            let attestation_verifier = match client_measurements {
-                Some(client_measurements) => AttestationVerifier {
-                    accepted_measurements: get_measurements_from_file(client_measurements).await?,
-                    pccs_url,
-                    log_dcap_quote: cli.log_dcap_quote,
-                },
-                None => AttestationVerifier::do_not_verify(),
             };
 
             let server = ProxyServer::new(
@@ -253,19 +245,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        CliCommand::GetTlsCert {
-            server,
-            server_measurements,
-            pccs_url,
-        } => {
-            let attestation_verifier = match server_measurements {
-                Some(server_measurements) => AttestationVerifier {
-                    accepted_measurements: get_measurements_from_file(server_measurements).await?,
-                    pccs_url,
-                    log_dcap_quote: cli.log_dcap_quote,
-                },
-                None => AttestationVerifier::do_not_verify(),
-            };
+        CliCommand::GetTlsCert { server } => {
             let cert_chain = get_tls_cert(server, attestation_verifier).await?;
             println!("{}", certs_to_pem_string(&cert_chain)?);
         }

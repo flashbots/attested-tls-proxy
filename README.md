@@ -26,11 +26,11 @@ One or both of the proxy-client and proxy-server may be running in a confidentia
 
 ### Measurements File
 
-Accepted measurements for the remote party are specified in a JSON file containing an array of objects, each of which specifies an accepted attestation type and set of measurements.
+Accepted measurements for the remote party can be specified in a JSON file containing an array of objects, each of which specifies an accepted attestation type and set of measurements.
 
 This aims to match the formatting used by `cvm-reverse-proxy`.
 
-These object have the following fields:
+These objects have the following fields:
 - `measurement_id` - a name used to describe the entry. For example the name and version of the CVM OS image that these measurements correspond to.
 - `attestation_type` - a string containing one of the attestation types (confidential computing platforms) described below. 
 - `measurements` - an object with fields referring to the five measurement registers. Field names are the same as for the measurement headers (see below).
@@ -63,7 +63,9 @@ Example:
 ]
 ```
 
-If a path to this file is not given or it contains an empty array, **any** attestation type and **any** measurements will be accepted, **including no attestation**. The measurements can still be checked up-stream by the source client or target service using header injection described below. But it is then up to these external programs to reject unacceptable configurations. 
+The only mandatory field is `attestation_type`. If an attestation type is specified, but no measurements, *any* measurements will be accepted for this attestation type. The measurements can still be checked up-stream by the source client or target service using header injection described below. But it is then up to these external programs to reject unacceptable measurements. 
+
+If a measurements file is not provided, a single allowed attestation type **must** be specified using the `--allowed-remote-attestation-type` option. This may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified. 
 
 ### Measurement Headers
 

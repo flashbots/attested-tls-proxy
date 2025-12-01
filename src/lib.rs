@@ -854,8 +854,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::attestation::measurements::{
-        CvmImageMeasurements, MeasurementRecord, PlatformMeasurements,
+        CvmImageMeasurements, MeasurementPolicy, MeasurementRecord, PlatformMeasurements,
     };
 
     use super::*;
@@ -880,7 +882,7 @@ mod tests {
             AttestationGenerator {
                 attestation_type: AttestationType::DcapTdx,
             },
-            AttestationVerifier::do_not_verify(),
+            AttestationVerifier::expect_none(),
         )
         .await
         .unwrap();
@@ -977,7 +979,7 @@ mod tests {
             AttestationGenerator {
                 attestation_type: AttestationType::DcapTdx,
             },
-            AttestationVerifier::do_not_verify(),
+            AttestationVerifier::expect_none(),
             Some(client_cert_chain),
         )
         .await
@@ -1139,7 +1141,7 @@ mod tests {
             AttestationGenerator {
                 attestation_type: AttestationType::DcapTdx,
             },
-            AttestationVerifier::do_not_verify(),
+            AttestationVerifier::expect_none(),
         )
         .await
         .unwrap();
@@ -1178,7 +1180,7 @@ mod tests {
             AttestationGenerator {
                 attestation_type: AttestationType::None,
             },
-            AttestationVerifier::do_not_verify(),
+            AttestationVerifier::expect_none(),
         )
         .await
         .unwrap();
@@ -1224,7 +1226,7 @@ mod tests {
             AttestationGenerator {
                 attestation_type: AttestationType::DcapTdx,
             },
-            AttestationVerifier::do_not_verify(),
+            AttestationVerifier::expect_none(),
         )
         .await
         .unwrap();
@@ -1236,21 +1238,25 @@ mod tests {
         });
 
         let attestation_verifier = AttestationVerifier {
-            accepted_measurements: vec![MeasurementRecord {
-                attestation_type: AttestationType::DcapTdx,
-                measurement_id: "test".to_string(),
-                measurements: Measurements {
-                    platform: PlatformMeasurements {
-                        mrtd: [0; 48],
-                        rtmr0: [0; 48],
-                    },
-                    cvm_image: CvmImageMeasurements {
-                        rtmr1: [1; 48], // This differs from the mock measurements given
-                        rtmr2: [0; 48],
-                        rtmr3: [0; 48],
-                    },
-                },
-            }],
+            measurement_policy: MeasurementPolicy {
+                accepted_measurements: HashMap::from([(
+                    AttestationType::DcapTdx,
+                    Some(vec![MeasurementRecord {
+                        measurement_id: "test".to_string(),
+                        measurements: Measurements {
+                            platform: PlatformMeasurements {
+                                mrtd: [0; 48],
+                                rtmr0: [0; 48],
+                            },
+                            cvm_image: CvmImageMeasurements {
+                                rtmr1: [1; 48], // This differs from the mock measurements given
+                                rtmr2: [0; 48],
+                                rtmr3: [0; 48],
+                            },
+                        },
+                    }]),
+                )]),
+            },
             pccs_url: None,
             log_dcap_quote: false,
         };
