@@ -15,7 +15,6 @@ It has three subcommands:
 
 ### How it works
 
-
 This works as follows:
 1. The source HTTP client (eg: curl or a web browser) makes an HTTP request to a proxy-client instance running locally.
 2. The proxy-client forwards the request to a proxy-server instance over a remote-attested TLS channel.
@@ -139,3 +138,10 @@ Following a successful attestation exchange, the client can make HTTP requests u
 
 As described above, the server will inject measurement data into the request headers before forwarding them to the target service, and the client will inject measurement data into the response headers before forwarding them to the source client.
 
+### CLI differences from `cvm-reverse-proxy`
+
+This aims to have a similar command line interface to `cvm-reverse-proxy` but there are some differences:
+
+- The measurements file path is specified with `--measurements-file` rather than `--server-measurements` or `--client-measurements`.
+- If no measurements file is specified, `--allowed-remote-attestation-type` must be given.
+- `--log-dcap-quote` logs all attestation data (not only DCAP), but [currently] only remote attestation data, not locally-generated data.
