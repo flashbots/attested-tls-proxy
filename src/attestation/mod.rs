@@ -96,9 +96,58 @@ impl Display for AttestationType {
 #[derive(Clone)]
 pub struct AttestationGenerator {
     pub attestation_type: AttestationType,
+    dummy_dcap_url: Option<String>,
 }
 
 impl AttestationGenerator {
+    pub fn new(
+        attestation_type: AttestationType,
+        dummy_dcap_url: Option<String>,
+    ) -> Result<Self, AttestationError> {
+        match attestation_type {
+            AttestationType::Dummy => Self::new_dummy(dummy_dcap_url),
+            _ => Self::new_not_dummy(attestation_type),
+        }
+    }
+
+    pub fn with_no_attestation() -> Self {
+        Self {
+            attestation_type: AttestationType::None,
+            dummy_dcap_url: None,
+        }
+    }
+
+    pub fn new_not_dummy(attestation_type: AttestationType) -> Result<Self, AttestationError> {
+        if attestation_type == AttestationType::Dummy {
+            return Err(AttestationError::DummyUrl);
+        }
+
+        Ok(Self {
+            attestation_type,
+            dummy_dcap_url: None,
+        })
+    }
+
+    pub fn new_dummy(dummy_dcap_url: Option<String>) -> Result<Self, AttestationError> {
+        match dummy_dcap_url {
+            Some(url) => {
+                let url = if url.starts_with("http://") || url.starts_with("https://") {
+                    url.to_string()
+                } else {
+                    format!("http://{}", url.trim_start_matches("http://"))
+                };
+
+                let url = url.strip_suffix('/').unwrap_or(&url).to_string();
+
+                Ok(Self {
+                    attestation_type: AttestationType::Dummy,
+                    dummy_dcap_url: Some(url),
+                })
+            }
+            None => Err(AttestationError::DummyUrl),
+        }
+    }
+
     /// Generate an attestation exchange message
     pub async fn generate_attestation(
         &self,
@@ -118,9 +167,30 @@ impl AttestationGenerator {
         match self.attestation_type {
             AttestationType::None => Ok(Vec::new()),
             AttestationType::AzureTdx => Ok(azure::create_azure_attestation(input_data).await?),
-            AttestationType::Dummy => Err(AttestationError::AttestationTypeNotSupported),
+            AttestationType::Dummy => self.generate_dummy_attestation(input_data).await,
             _ => dcap::create_dcap_attestation(input_data).await,
         }
+    }
+
+    async fn generate_dummy_attestation(
+        &self,
+        input_data: [u8; 64],
+    ) -> Result<Vec<u8>, AttestationError> {
+        let url = format!(
+            "{}/attest/{}",
+            self.dummy_dcap_url
+                .clone()
+                .ok_or(AttestationError::DummyUrl)?,
+            hex::encode(input_data)
+        );
+
+        Ok(reqwest::get(url)
+            .await
+            .map_err(|err| AttestationError::DummyServer(err.to_string()))?
+            .bytes()
+            .await
+            .map_err(|err| AttestationError::DummyServer(err.to_string()))?
+            .to_vec())
     }
 }
 
@@ -266,4 +336,8 @@ pub enum AttestationError {
     MeasurementsNotAccepted,
     #[error("MAA: {0}")]
     Maa(#[from] azure::MaaError),
+    #[error("Dummy attestation type requires dummy service URL")]
+    DummyUrl,
+    #[error("Dummy server: {0}")]
+    DummyServer(String),
 }

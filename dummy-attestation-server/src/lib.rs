@@ -98,16 +98,11 @@ impl IntoResponse for ServerError {
 
 #[cfg(test)]
 mod tests {
-
-    use attested_tls_proxy::attestation::AttestationType;
-
     use super::*;
 
     #[tokio::test]
     async fn test_dummy_server() {
-        let attestation_generator = AttestationGenerator {
-            attestation_type: AttestationType::None,
-        };
+        let attestation_generator = AttestationGenerator::with_no_attestation();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let server_addr = listener.local_addr().unwrap();

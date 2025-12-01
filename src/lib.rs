@@ -879,9 +879,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            AttestationGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            },
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -897,9 +895,7 @@ mod tests {
             client_config,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
-            AttestationGenerator {
-                attestation_type: AttestationType::None,
-            },
+            AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
         )
@@ -957,9 +953,7 @@ mod tests {
             server_tls_server_config,
             "127.0.0.1:0",
             target_addr,
-            AttestationGenerator {
-                attestation_type: AttestationType::None,
-            },
+            AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
         )
         .await
@@ -976,9 +970,7 @@ mod tests {
             client_tls_client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            AttestationGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            },
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
             Some(client_cert_chain),
         )
@@ -1041,9 +1033,7 @@ mod tests {
             server_tls_server_config,
             "127.0.0.1:0",
             target_addr,
-            AttestationGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            },
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::mock(),
         )
         .await
@@ -1060,9 +1050,7 @@ mod tests {
             client_tls_client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            AttestationGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            },
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::mock(),
             Some(client_cert_chain),
         )
@@ -1138,9 +1126,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            AttestationGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            },
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1177,9 +1163,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            AttestationGenerator {
-                attestation_type: AttestationType::None,
-            },
+            AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1195,9 +1179,7 @@ mod tests {
             client_config,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
-            AttestationGenerator {
-                attestation_type: AttestationType::None,
-            },
+            AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
         )
@@ -1223,9 +1205,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            AttestationGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            },
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1265,9 +1245,7 @@ mod tests {
             client_config,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
-            AttestationGenerator {
-                attestation_type: AttestationType::None,
-            },
+            AttestationGenerator::with_no_attestation(),
             attestation_verifier,
             None,
         )

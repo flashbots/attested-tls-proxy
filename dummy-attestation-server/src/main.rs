@@ -76,9 +76,8 @@ async fn main() -> anyhow::Result<()> {
                 serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
             )?;
 
-            let attestation_generator = AttestationGenerator {
-                attestation_type: server_attestation_type,
-            };
+            let attestation_generator =
+                AttestationGenerator::new_not_dummy(server_attestation_type)?;
 
             let listener = TcpListener::bind(listen_addr).await?;
 
