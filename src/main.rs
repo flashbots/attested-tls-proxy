@@ -15,21 +15,10 @@ struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
     /// Optional path to file containing JSON measurements to be enforced on the remote party
-    #[arg(
-        long,
-        global = true,
-        required_unless_present = "allowed_remote_attestation_type",
-        conflicts_with = "allowed_remote_attestation_type",
-        env = "MEASUREMENTS_FILE"
-    )]
+    #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
     measurements_file: Option<PathBuf>,
     /// If no measurements file is specified, a single attestion type to allow
-    #[arg(
-        long,
-        global = true,
-        required_unless_present = "measurements_file",
-        conflicts_with = "measurements_file"
-    )]
+    #[arg(long, global = true)]
     allowed_remote_attestation_type: Option<String>,
     /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
     #[arg(long, global = true)]
@@ -113,6 +102,11 @@ enum CliCommand {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    ensure!(
+        cli.allowed_remote_attestation_type.is_some() != cli.measurements_file.is_some(),
+        "Exactly one of --measurements-file or --allowed-remote-attestation-type must be provided"
+    );
 
     let level_filter = if cli.log_debug {
         LevelFilter::DEBUG
