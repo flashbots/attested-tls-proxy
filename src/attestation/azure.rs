@@ -199,7 +199,7 @@ mod tests {
     async fn test_verify() {
         // Will pass if now = 1764621240 seconds
         let attestation_bytes: &'static [u8] =
-            include_bytes!("../../test-assets/azure-tdx-1764620247665812984");
+            include_bytes!("../../test-assets/azure-tdx-1764662251380464271");
         verify_azure_attestation(attestation_bytes.to_vec(), [0; 64], None)
             .await
             .unwrap();
