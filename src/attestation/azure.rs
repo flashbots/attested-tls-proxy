@@ -3,6 +3,7 @@ use std::string::FromUtf8Error;
 
 use az_tdx_vtpm::{hcl, imds, report, vtpm};
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
+use num_bigint::BigUint;
 use openssl::pkey::PKey;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -136,12 +137,13 @@ async fn verify_azure_attestation_with_given_timestamp(
     // Check runtime data
     let claims: HclRuntimeClaims = serde_json::from_slice(runtime_data_raw)?;
 
-    // TODO check that this matches the AK
-    let _ak_jwk = claims
+    let ak_jwk = claims
         .keys
         .iter()
         .find(|k| k.kid == "HCLAkPub")
         .expect("Missing HCLAkPub JWK entry");
+
+    let ak_from_claims = RsaPubKey::from_jwk(ak_jwk).unwrap();
 
     let td_report: az_tdx_vtpm::tdx::TdReport = hcl_report.try_into()?;
     assert!(var_data_hash == td_report.report_mac.reportdata[..32]);
@@ -162,10 +164,12 @@ async fn verify_azure_attestation_with_given_timestamp(
     .unwrap();
 
     let (_, ak_certificate) = X509Certificate::from_der(&ak_certificate_der).unwrap();
-    // Check that AK public key matches that from TPM quote
-    if !cert_pubkey_matches(&ak_certificate, &pub_key) {
-        panic!("does not match");
-    }
+
+    // Check that AK public key matches that from TPM quote and HCL claims
+    let ak_from_certificate = RsaPubKey::from_certificate(&ak_certificate).unwrap();
+    let ak_from_hcl = RsaPubKey::from_openssl_pubkey(&pub_key).unwrap();
+    assert!(ak_from_claims == ak_from_hcl);
+    assert!(ak_from_claims == ak_from_certificate);
 
     // TODO Verify AK certificate against microsoft root cert
     // TODO Do basic certificate checks (validity, time)
@@ -203,32 +207,51 @@ fn read_ak_certificate_from_tpm() -> Result<Vec<u8>, tss_esapi::Error> {
     nv_index::read_nv_index(&mut context, TPM_AK_CERT_IDX)
 }
 
-fn cert_pubkey_matches(cert: &X509Certificate<'_>, key: &PKey<openssl::pkey::Public>) -> bool {
-    use num_bigint::BigUint;
-    // 1. Extract RSA public key from cert
-    let spki = cert.public_key();
-    let rsa_from_cert = match spki.parsed() {
-        Ok(x509_parser::public_key::PublicKey::RSA(rsa)) => rsa,
-        _ => return false,
-    };
-
-    // rsa_from_cert.modulus and exponent are &[u8] big-endian
-    let n_cert = BigUint::from_bytes_be(rsa_from_cert.modulus);
-    let e_cert = BigUint::from_bytes_be(rsa_from_cert.exponent);
-
-    // 2. Extract RSA public key from OpenSSL key
-    let rsa_from_pkey = match key.rsa() {
-        Ok(r) => r,
-        Err(_) => return false,
-    };
-
-    // OpenSSL’s Rsa struct returns BigNum, convert to bytes
-    let n_pkey = BigUint::from_bytes_be(&rsa_from_pkey.n().to_vec());
-    let e_pkey = BigUint::from_bytes_be(&rsa_from_pkey.e().to_vec());
-
-    // 3. Compare integer values
-    n_cert == n_pkey && e_cert == e_pkey
+#[derive(Debug, PartialEq)]
+struct RsaPubKey {
+    n: BigUint,
+    e: BigUint,
 }
+
+impl RsaPubKey {
+    fn from_jwk(jwk: &Jwk) -> anyhow::Result<Self> {
+        if jwk.kty != "RSA" {
+            anyhow::bail!("JWK is not RSA (kty = {})", jwk.kty);
+        }
+
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let n_bytes = URL_SAFE_NO_PAD.decode(jwk.n.clone().unwrap())?;
+        let e_bytes = URL_SAFE_NO_PAD.decode(jwk.e.clone().unwrap())?;
+
+        Ok(Self {
+            n: BigUint::from_bytes_be(&n_bytes),
+            e: BigUint::from_bytes_be(&e_bytes),
+        })
+    }
+
+    fn from_certificate(cert: &X509Certificate) -> anyhow::Result<Self> {
+        let spki = cert.public_key();
+        let rsa_from_cert = match spki.parsed() {
+            Ok(x509_parser::public_key::PublicKey::RSA(rsa)) => rsa,
+            _ => return Err(anyhow::anyhow!("Not rsa")),
+        };
+
+        Ok(Self {
+            n: BigUint::from_bytes_be(rsa_from_cert.modulus),
+            e: BigUint::from_bytes_be(rsa_from_cert.exponent),
+        })
+    }
+
+    fn from_openssl_pubkey(key: &PKey<openssl::pkey::Public>) -> anyhow::Result<Self> {
+        let rsa_from_pkey = key.rsa()?;
+
+        Ok(Self {
+            n: BigUint::from_bytes_be(&rsa_from_pkey.n().to_vec()),
+            e: BigUint::from_bytes_be(&rsa_from_pkey.e().to_vec()),
+        })
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum MaaError {
     #[error("Failed to build input data: {0}")]
@@ -285,12 +308,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_verify() {
-        let now = 1764621240;
         let attestation_bytes: &'static [u8] =
             include_bytes!("../../test-assets/azure-tdx-1764662251380464271");
+
+        // To avoid this test stopping working when the certificate is no longer valid
+        let now = 1764621240;
+
         verify_azure_attestation_with_given_timestamp(
             attestation_bytes.to_vec(),
-            [0; 64],
+            [0; 64], // Input data
             None,
             now,
         )
