@@ -1,5 +1,5 @@
 use tss_esapi::{
-    handles::NvIndexHandle,
+    handles::{NvIndexHandle, NvIndexTpmHandle},
     interface_types::{resource_handles::NvAuth, session_handles::AuthSession},
     structures::MaxNvBuffer,
     tcti_ldr::{DeviceConfig, TctiNameConf},
@@ -15,7 +15,9 @@ pub fn get_session_context() -> Result<Context, tss_esapi::Error> {
 }
 
 pub fn read_nv_index(ctx: &mut Context, index: u32) -> Result<Vec<u8>, tss_esapi::Error> {
-    let handle = NvIndexHandle::from(index);
+    let nv_tpm_handle = NvIndexTpmHandle::new(index)?;
+    let esys_handle = ctx.tr_from_tpm_public(nv_tpm_handle.into())?;
+    let handle = NvIndexHandle::from(esys_handle);
     let size = ctx
         .nv_read_public(handle)?
         .0

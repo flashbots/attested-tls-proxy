@@ -13,7 +13,7 @@ use crate::attestation::{
     nv_index,
 };
 
-// const TPM_AK_CERT_IDX: u32 = 0x1C101D0;
+const TPM_AK_CERT_IDX: u32 = 0x1C101D0;
 
 pub async fn create_azure_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, MaaError> {
     let td_report = report::get_report()?;
@@ -23,15 +23,14 @@ pub async fn create_azure_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, M
 
     let hcl_report_bytes = vtpm::get_report_with_report_data(&input_data)?;
 
-    // let ak_certificate_der = read_ak_certificate_from_tpm()?;
+    let ak_certificate_der = read_ak_certificate_from_tpm()?;
 
     let tpm_attestation = TpmAttest {
-        ak_certificate_pem: "TODO".to_string(),
-        // ak_certificate_pem: pem_rfc7468::encode_string(
-        //     "CERTIFICATE",
-        //     pem_rfc7468::LineEnding::default(),
-        //     &ak_certificate_der,
-        // )?,
+        ak_certificate_pem: pem_rfc7468::encode_string(
+            "CERTIFICATE",
+            pem_rfc7468::LineEnding::default(),
+            &ak_certificate_der,
+        )?,
         quote: vtpm::get_quote(&input_data[..32])?,
         event_log: Vec::new(),
         instance_info: None,
@@ -137,10 +136,10 @@ struct TpmAttest {
     instance_info: Option<Vec<u8>>,
 }
 
-// fn read_ak_certificate_from_tpm() -> Result<Vec<u8>, tss_esapi::Error> {
-//     let mut context = nv_index::get_session_context()?;
-//     nv_index::read_nv_index(&mut context, TPM_AK_CERT_IDX)
-// }
+fn read_ak_certificate_from_tpm() -> Result<Vec<u8>, tss_esapi::Error> {
+    let mut context = nv_index::get_session_context()?;
+    nv_index::read_nv_index(&mut context, TPM_AK_CERT_IDX)
+}
 
 #[derive(Error, Debug)]
 pub enum MaaError {
