@@ -159,6 +159,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "josekit",
+ "num-bigint",
  "openssl",
  "parity-scale-codec",
  "pem-rfc7468",

@@ -16,6 +16,33 @@ use crate::attestation::{
 
 const TPM_AK_CERT_IDX: u32 = 0x1C101D0;
 
+/// The attestation evidence payload that gets sent over the channel
+#[derive(Debug, Serialize, Deserialize)]
+struct AttestationDocument {
+    /// TDX quote from the IMDS
+    tdx_quote_base64: String,
+    /// Serialized HCL report
+    hcl_report_base64: String,
+    /// vTPM related evidence
+    tpm_attestation: TpmAttest,
+}
+
+/// TPM related components of the attestation document
+#[derive(Debug, Serialize, Deserialize)]
+struct TpmAttest {
+    /// Attestation Key certificate from vTPM
+    ak_certificate_pem: String,
+    /// vTPM quotes over the selected PCR bank(s).
+    quote: vtpm::Quote,
+    /// Raw TCG event log bytes (UEFI + IMA) [currently not used]
+    ///
+    /// `/sys/kernel/security/ima/ascii_runtime_measurements`,
+    /// `/sys/kernel/security/tpm0/binary_bios_measurements`,
+    event_log: Vec<u8>,
+    /// Optional platform / instance metadata used to bind or verify the AK
+    instance_info: Option<Vec<u8>>,
+}
+
 pub async fn create_azure_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, MaaError> {
     let td_report = report::get_report()?;
 
@@ -103,6 +130,19 @@ async fn verify_azure_attestation_with_given_timestamp(
     let hcl_report = hcl::HclReport::new(hcl_report_bytes)?;
     let var_data_hash = hcl_report.var_data_sha256();
     let hcl_ak_pub = hcl_report.ak_pub()?;
+
+    let runtime_data_raw = hcl_report.var_data();
+
+    // Check runtime data
+    let claims: HclRuntimeClaims = serde_json::from_slice(runtime_data_raw)?;
+
+    // TODO check that this matches the AK
+    let _ak_jwk = claims
+        .keys
+        .iter()
+        .find(|k| k.kid == "HCLAkPub")
+        .expect("Missing HCLAkPub JWK entry");
+
     let td_report: az_tdx_vtpm::tdx::TdReport = hcl_report.try_into()?;
     assert!(var_data_hash == td_report.report_mac.reportdata[..32]);
 
@@ -120,13 +160,15 @@ async fn verify_azure_attestation_with_given_timestamp(
             .as_bytes(),
     )
     .unwrap();
+
     let (_, ak_certificate) = X509Certificate::from_der(&ak_certificate_der).unwrap();
+    // Check that AK public key matches that from TPM quote
     if !cert_pubkey_matches(&ak_certificate, &pub_key) {
         panic!("does not match");
     }
-    // TODO Check that AK public key matches that from TPM quote
 
     // TODO Verify AK certificate against microsoft root cert
+    // TODO Do basic certificate checks (validity, time)
 
     Ok(Measurements {
         platform: PlatformMeasurements::from_dcap_qvl_quote(&quote).unwrap(),
@@ -134,59 +176,59 @@ async fn verify_azure_attestation_with_given_timestamp(
     })
 }
 
-/// The attestation evidence payload that gets sent over the channel
-#[derive(Debug, Serialize, Deserialize)]
-struct AttestationDocument {
-    /// TDX quote from the IMDS
-    tdx_quote_base64: String,
-    /// Serialized HCL report
-    hcl_report_base64: String,
-    /// vTPM related evidence
-    tpm_attestation: TpmAttest,
+#[derive(Debug, Deserialize)]
+pub struct Jwk {
+    #[allow(unused)]
+    pub kty: String,
+    pub kid: String,
+    #[allow(unused)]
+    pub n: Option<String>,
+    #[allow(unused)]
+    pub e: Option<String>,
+    // other fields ignored
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct TpmAttest {
-    /// Attestation Key certificate from vTPM
-    ak_certificate_pem: String,
-    /// vTPM quotes over the selected PCR bank(s).
-    quote: vtpm::Quote,
-    /// Raw TCG event log bytes (UEFI + IMA)
-    ///
-    /// `/sys/kernel/security/ima/ascii_runtime_measurements`,
-    /// `/sys/kernel/security/tpm0/binary_bios_measurements`,
-    event_log: Vec<u8>,
-    /// Optional platform / instance metadata used to bind or verify the AK
-    instance_info: Option<Vec<u8>>,
+#[derive(Debug, serde::Deserialize)]
+struct HclRuntimeClaims {
+    keys: Vec<Jwk>,
+    #[allow(unused)]
+    #[serde(rename = "vm-configuration")]
+    vm_config: Option<serde_json::Value>,
+    #[allow(unused)]
+    #[serde(rename = "user-data")]
+    user_data: Option<serde_json::Value>,
 }
-
 fn read_ak_certificate_from_tpm() -> Result<Vec<u8>, tss_esapi::Error> {
     let mut context = nv_index::get_session_context()?;
     nv_index::read_nv_index(&mut context, TPM_AK_CERT_IDX)
 }
 
 fn cert_pubkey_matches(cert: &X509Certificate<'_>, key: &PKey<openssl::pkey::Public>) -> bool {
-    // Extract the SubjectPublicKeyInfo from x509_parser
-    let spki_der = cert
-        .tbs_certificate
-        .subject_pki
-        .subject_public_key
-        .data
-        .clone();
+    use num_bigint::BigUint;
+    // 1. Extract RSA public key from cert
+    let spki = cert.public_key();
+    let rsa_from_cert = match spki.parsed() {
+        Ok(x509_parser::public_key::PublicKey::RSA(rsa)) => rsa,
+        _ => return false,
+    };
 
-    // Parse it into an OpenSSL PKey
-    let cert_pkey = match PKey::public_key_from_der(&spki_der) {
-        Ok(k) => k,
+    // rsa_from_cert.modulus and exponent are &[u8] big-endian
+    let n_cert = BigUint::from_bytes_be(rsa_from_cert.modulus);
+    let e_cert = BigUint::from_bytes_be(rsa_from_cert.exponent);
+
+    // 2. Extract RSA public key from OpenSSL key
+    let rsa_from_pkey = match key.rsa() {
+        Ok(r) => r,
         Err(_) => return false,
     };
 
-    // Compare canonicalized DER encodings of both
-    match (cert_pkey.public_key_to_der(), key.public_key_to_der()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => panic!("encoding failed"),
-    }
-}
+    // OpenSSL’s Rsa struct returns BigNum, convert to bytes
+    let n_pkey = BigUint::from_bytes_be(&rsa_from_pkey.n().to_vec());
+    let e_pkey = BigUint::from_bytes_be(&rsa_from_pkey.e().to_vec());
 
+    // 3. Compare integer values
+    n_cert == n_pkey && e_cert == e_pkey
+}
 #[derive(Error, Debug)]
 pub enum MaaError {
     #[error("Failed to build input data: {0}")]
