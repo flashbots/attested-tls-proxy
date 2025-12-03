@@ -1,17 +1,19 @@
 pub mod attestation;
 
+pub use attestation::AttestationGenerator;
 use attestation::{measurements::Measurements, AttestationError, AttestationType};
-pub use attestation::{DcapTdxQuoteGenerator, NoQuoteGenerator, QuoteGenerator};
 use bytes::Bytes;
 use http::HeaderValue;
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::service_fn, Response};
 use hyper_util::rt::TokioIo;
 use parity_scale_codec::{Decode, Encode};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 use tracing::{error, warn};
+use x509_parser::parse_x509_certificate;
 
 #[cfg(test)]
 mod test_helpers;
@@ -66,7 +68,7 @@ pub struct ProxyServer {
     /// The underlying TCP listener
     listener: TcpListener,
     /// Quote generation type to use (including none)
-    local_quote_generator: Arc<dyn QuoteGenerator>,
+    attestation_generator: AttestationGenerator,
     /// Verifier for remote attestation (including none)
     attestation_verifier: AttestationVerifier,
     /// The certificate chain
@@ -82,13 +84,15 @@ impl ProxyServer {
         cert_and_key: TlsCertAndKey,
         local: impl ToSocketAddrs,
         target: SocketAddr,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
+        attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
+        println!("here");
         if attestation_verifier.has_remote_attestion() && !client_auth {
             return Err(ProxyError::NoClientAuth);
         }
+        println!("here2");
 
         let mut server_config = if client_auth {
             let root_store =
@@ -114,7 +118,7 @@ impl ProxyServer {
             server_config.into(),
             local,
             target,
-            local_quote_generator,
+            attestation_generator,
             attestation_verifier,
         )
         .await
@@ -128,7 +132,7 @@ impl ProxyServer {
         server_config: Arc<ServerConfig>,
         local: impl ToSocketAddrs,
         target: SocketAddr,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
+        attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
         let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
@@ -136,7 +140,7 @@ impl ProxyServer {
 
         Ok(Self {
             listener,
-            local_quote_generator,
+            attestation_generator,
             attestation_verifier,
             acceptor,
             target,
@@ -151,7 +155,7 @@ impl ProxyServer {
         let acceptor = self.acceptor.clone();
         let target = self.target;
         let cert_chain = self.cert_chain.clone();
-        let local_quote_generator = self.local_quote_generator.clone();
+        let attestation_generator = self.attestation_generator.clone();
         let attestation_verifier = self.attestation_verifier.clone();
         tokio::spawn(async move {
             if let Err(err) = Self::handle_connection(
@@ -159,7 +163,7 @@ impl ProxyServer {
                 acceptor,
                 target,
                 cert_chain,
-                local_quote_generator,
+                attestation_generator,
                 attestation_verifier,
             )
             .await
@@ -182,7 +186,7 @@ impl ProxyServer {
         acceptor: TlsAcceptor,
         target: SocketAddr,
         cert_chain: Vec<CertificateDer<'static>>,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
+        attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<(), ProxyError> {
         // Do TLS handshake
@@ -200,16 +204,16 @@ impl ProxyServer {
             None, // context
         )?;
 
+        let input_data = compute_report_input(&cert_chain, exporter)?;
+
         // Get the TLS certficate chain of the client, if there is one
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
         // If we are in a CVM, generate an attestation
-        let attestation = AttestationExchangeMessage::from_attestation_generator(
-            &cert_chain,
-            exporter,
-            local_quote_generator,
-        )?
-        .encode();
+        let attestation = attestation_generator
+            .generate_attestation(input_data)
+            .await?
+            .encode();
 
         // Write our attestation to the channel, with length prefix
         let attestation_length_prefix = length_prefix(&attestation);
@@ -230,12 +234,13 @@ impl ProxyServer {
 
         // If we expect an attestaion from the client, verify it and get measurements
         let measurements = if attestation_verifier.has_remote_attestion() {
+            let remote_input_data = compute_report_input(
+                &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
+                exporter,
+            )?;
+
             attestation_verifier
-                .verify_attestation(
-                    remote_attestation_message,
-                    &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
-                    exporter,
-                )
+                .verify_attestation(remote_attestation_message, remote_input_data)
                 .await?
         } else {
             None
@@ -343,13 +348,12 @@ impl ProxyClient {
         cert_and_key: Option<TlsCertAndKey>,
         address: impl ToSocketAddrs,
         server_name: String,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
+        attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
     ) -> Result<Self, ProxyError> {
         // If we will provide attestation, we must also use client auth
-        if local_quote_generator.attestation_type() != AttestationType::None
-            && cert_and_key.is_none()
+        if attestation_generator.attestation_type != AttestationType::None && cert_and_key.is_none()
         {
             return Err(ProxyError::NoClientAuth);
         }
@@ -387,7 +391,7 @@ impl ProxyClient {
             client_config.into(),
             address,
             server_name,
-            local_quote_generator,
+            attestation_generator,
             attestation_verifier,
             cert_and_key.map(|c| c.cert_chain),
         )
@@ -401,7 +405,7 @@ impl ProxyClient {
         client_config: Arc<ClientConfig>,
         local: impl ToSocketAddrs,
         target_name: String,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
+        attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, ProxyError> {
@@ -425,7 +429,7 @@ impl ProxyClient {
             connector.clone(),
             target.clone(),
             cert_chain.clone(),
-            local_quote_generator.clone(),
+            attestation_generator.clone(),
             attestation_verifier.clone(),
         )
         .await?;
@@ -481,7 +485,7 @@ impl ProxyClient {
                             connector.clone(),
                             target.clone(),
                             cert_chain.clone(),
-                            local_quote_generator.clone(),
+                            attestation_generator.clone(),
                             attestation_verifier.clone(),
                         )
                         .await;
@@ -551,7 +555,7 @@ impl ProxyClient {
         connector: TlsConnector,
         target: String,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
+        attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> (Http2Sender, Option<Measurements>, AttestationType) {
         let mut delay = Duration::from_secs(1);
@@ -562,7 +566,7 @@ impl ProxyClient {
                 connector.clone(),
                 target.clone(),
                 cert_chain.clone(),
-                local_quote_generator.clone(),
+                attestation_generator.clone(),
                 attestation_verifier.clone(),
             )
             .await
@@ -586,7 +590,7 @@ impl ProxyClient {
         connector: TlsConnector,
         target: String,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
-        local_quote_generator: Arc<dyn QuoteGenerator>,
+        attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<(Http2Sender, Option<Measurements>, AttestationType), ProxyError> {
         // Make a TCP client connection and TLS handshake
@@ -616,6 +620,8 @@ impl ProxyClient {
             .ok_or(ProxyError::NoCertificate)?
             .to_owned();
 
+        let remote_input_data = compute_report_input(&remote_cert_chain, exporter)?;
+
         // Read a length prefixed attestation from the proxy-server
         let mut length_bytes = [0; 4];
         tls_stream.read_exact(&mut length_bytes).await?;
@@ -629,17 +635,18 @@ impl ProxyClient {
 
         // Verify the remote attestation against our accepted measurements
         let measurements = attestation_verifier
-            .verify_attestation(remote_attestation_message, &remote_cert_chain, exporter)
+            .verify_attestation(remote_attestation_message, remote_input_data)
             .await?;
 
         // If we are in a CVM, provide an attestation
-        let attestation = if local_quote_generator.attestation_type() != AttestationType::None {
-            AttestationExchangeMessage::from_attestation_generator(
-                &cert_chain.ok_or(ProxyError::NoClientAuth)?,
-                exporter,
-                local_quote_generator,
-            )?
-            .encode()
+        let attestation = if attestation_generator.attestation_type != AttestationType::None {
+            println!("fff");
+            let local_input_data =
+                compute_report_input(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?;
+            attestation_generator
+                .generate_attestation(local_input_data)
+                .await?
+                .encode()
         } else {
             AttestationExchangeMessage::without_attestation().encode()
         };
@@ -725,11 +732,40 @@ async fn get_tls_cert_with_config(
 
     let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
 
+    let remote_input_data = compute_report_input(&remote_cert_chain, exporter)?;
+
     let _measurements = attestation_verifier
-        .verify_attestation(remote_attestation_message, &remote_cert_chain, exporter)
+        .verify_attestation(remote_attestation_message, remote_input_data)
         .await?;
 
     Ok(remote_cert_chain)
+}
+
+/// Given a certificate chain and an exporter (session key material), build the quote input value
+/// SHA256(pki) || exporter
+pub fn compute_report_input(
+    cert_chain: &[CertificateDer<'_>],
+    exporter: [u8; 32],
+) -> Result<[u8; 64], AttestationError> {
+    let mut quote_input = [0u8; 64];
+    let pki_hash = get_pki_hash_from_certificate_chain(cert_chain)?;
+    quote_input[..32].copy_from_slice(&pki_hash);
+    quote_input[32..].copy_from_slice(&exporter);
+    Ok(quote_input)
+}
+
+/// Given a certificate chain, get the [Sha256] hash of the public key of the leaf certificate
+fn get_pki_hash_from_certificate_chain(
+    cert_chain: &[CertificateDer<'_>],
+) -> Result<[u8; 32], AttestationError> {
+    let leaf_certificate = cert_chain.first().ok_or(AttestationError::NoCertificate)?;
+    let (_, cert) = parse_x509_certificate(leaf_certificate.as_ref())?;
+    let public_key = &cert.tbs_certificate.subject_pki;
+    let key_bytes = public_key.subject_public_key.as_ref();
+
+    let mut hasher = Sha256::new();
+    hasher.update(key_bytes);
+    Ok(hasher.finalize().into())
 }
 
 /// An error when running a proxy client or server
@@ -843,9 +879,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            Arc::new(DcapTdxQuoteGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            }),
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -861,7 +895,7 @@ mod tests {
             client_config,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
-            Arc::new(NoQuoteGenerator),
+            AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
         )
@@ -919,7 +953,7 @@ mod tests {
             server_tls_server_config,
             "127.0.0.1:0",
             target_addr,
-            Arc::new(NoQuoteGenerator),
+            AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
         )
         .await
@@ -936,9 +970,7 @@ mod tests {
             client_tls_client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            Arc::new(DcapTdxQuoteGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            }),
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
             Some(client_cert_chain),
         )
@@ -1001,9 +1033,7 @@ mod tests {
             server_tls_server_config,
             "127.0.0.1:0",
             target_addr,
-            Arc::new(DcapTdxQuoteGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            }),
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::mock(),
         )
         .await
@@ -1020,9 +1050,7 @@ mod tests {
             client_tls_client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            Arc::new(DcapTdxQuoteGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            }),
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::mock(),
             Some(client_cert_chain),
         )
@@ -1098,9 +1126,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            Arc::new(DcapTdxQuoteGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            }),
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1137,7 +1163,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            Arc::new(NoQuoteGenerator),
+            AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1153,7 +1179,7 @@ mod tests {
             client_config,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
-            Arc::new(NoQuoteGenerator),
+            AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
         )
@@ -1179,9 +1205,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr,
-            Arc::new(DcapTdxQuoteGenerator {
-                attestation_type: AttestationType::DcapTdx,
-            }),
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1221,7 +1245,7 @@ mod tests {
             client_config,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
-            Arc::new(NoQuoteGenerator),
+            AttestationGenerator::with_no_attestation(),
             attestation_verifier,
             None,
         )
