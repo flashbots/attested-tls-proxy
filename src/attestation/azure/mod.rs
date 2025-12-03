@@ -6,7 +6,7 @@ use std::string::FromUtf8Error;
 use az_tdx_vtpm::{hcl, imds, report, vtpm};
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use num_bigint::BigUint;
-use openssl::pkey::PKey;
+use openssl::{error::ErrorStack, pkey::PKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use x509_parser::prelude::*;
@@ -98,14 +98,12 @@ async fn verify_azure_attestation_with_given_timestamp(
     let attestation_document: AttestationDocument = serde_json::from_slice(&input)?;
 
     // Verify TDX quote (same as with DCAP) - TODO deduplicate this code
-    let tdx_quote_bytes = BASE64_URL_SAFE
-        .decode(attestation_document.tdx_quote_base64)
-        .unwrap();
+    let tdx_quote_bytes = BASE64_URL_SAFE.decode(attestation_document.tdx_quote_base64)?;
 
-    let quote = dcap_qvl::quote::Quote::parse(&tdx_quote_bytes).unwrap();
+    let quote = dcap_qvl::quote::Quote::parse(&tdx_quote_bytes)?;
 
-    let ca = quote.ca().unwrap();
-    let fmspc = hex::encode_upper(quote.fmspc().unwrap());
+    let ca = quote.ca()?;
+    let fmspc = hex::encode_upper(quote.fmspc()?);
     let collateral = dcap_qvl::collateral::get_collateral_for_fmspc(
         &pccs_url
             .clone()
@@ -114,18 +112,14 @@ async fn verify_azure_attestation_with_given_timestamp(
         ca,
         false, // Indicates not SGX
     )
-    .await
-    .unwrap();
+    .await?;
 
-    let _verified_report = dcap_qvl::verify::verify(&tdx_quote_bytes, &collateral, now).unwrap();
+    let _verified_report = dcap_qvl::verify::verify(&tdx_quote_bytes, &collateral, now)?;
 
-    let hcl_report_bytes = BASE64_URL_SAFE
-        .decode(attestation_document.hcl_report_base64)
-        .unwrap();
+    let hcl_report_bytes = BASE64_URL_SAFE.decode(attestation_document.hcl_report_base64)?;
 
     let hcl_report = hcl::HclReport::new(hcl_report_bytes)?;
     let var_data_hash = hcl_report.var_data_sha256();
-    println!("var data {}", hex::encode(var_data_hash));
 
     // Check that HCL var data hash matches TDX quote report data
     let mut expected_tdx_input_data = [0u8; 64];
@@ -144,16 +138,21 @@ async fn verify_azure_attestation_with_given_timestamp(
         .keys
         .iter()
         .find(|k| k.kid == "HCLAkPub")
-        .expect("Missing HCLAkPub JWK entry");
+        .ok_or(MaaError::ClaimsMissingHCLAkPub)?;
 
-    let ak_from_claims = RsaPubKey::from_jwk(ak_jwk).unwrap();
+    let ak_from_claims = RsaPubKey::from_jwk(ak_jwk)?;
 
     let td_report: az_tdx_vtpm::tdx::TdReport = hcl_report.try_into()?;
-    assert!(var_data_hash == td_report.report_mac.reportdata[..32]);
+    if var_data_hash != td_report.report_mac.reportdata[..32] {
+        return Err(MaaError::TdReportInputMismatch);
+    }
 
     let vtpm_quote = attestation_document.tpm_attestation.quote;
-    let hcl_ak_pub_der = hcl_ak_pub.key.try_to_der().unwrap();
-    let pub_key = PKey::public_key_from_der(&hcl_ak_pub_der).unwrap();
+    let hcl_ak_pub_der = hcl_ak_pub
+        .key
+        .try_to_der()
+        .map_err(|_| MaaError::JwkConversion)?;
+    let pub_key = PKey::public_key_from_der(&hcl_ak_pub_der)?;
     vtpm_quote.verify(&pub_key, &expected_input_data[..32])?;
     let _pcrs = vtpm_quote.pcrs_sha256();
 
@@ -163,26 +162,31 @@ async fn verify_azure_attestation_with_given_timestamp(
             .tpm_attestation
             .ak_certificate_pem
             .as_bytes(),
-    )
-    .unwrap();
+    )?;
 
-    let (remaining_bytes, ak_certificate) = X509Certificate::from_der(&ak_certificate_der).unwrap();
+    let (remaining_bytes, ak_certificate) = X509Certificate::from_der(&ak_certificate_der)?;
 
     let leaf_len = ak_certificate_der.len() - remaining_bytes.len();
     let ak_certificate_der_without_trailing_data = &ak_certificate_der[..leaf_len];
 
     // Check that AK public key matches that from TPM quote and HCL claims
-    let ak_from_certificate = RsaPubKey::from_certificate(&ak_certificate).unwrap();
-    let ak_from_hcl = RsaPubKey::from_openssl_pubkey(&pub_key).unwrap();
-    assert!(ak_from_claims == ak_from_hcl);
-    assert!(ak_from_claims == ak_from_certificate);
+    let ak_from_certificate = RsaPubKey::from_certificate(&ak_certificate)?;
+    let ak_from_hcl = RsaPubKey::from_openssl_pubkey(&pub_key)?;
+    if ak_from_claims != ak_from_hcl {
+        return Err(MaaError::AkFromClaimsNotEqualAkFromHcl);
+    }
+    if ak_from_claims != ak_from_certificate {
+        return Err(MaaError::AkFromClaimsNotEqualAkFromCertificate);
+    }
 
     // Verify the AK certificate against microsoft root cert
-    verify_ak_cert_with_azure_roots(ak_certificate_der_without_trailing_data, now).unwrap();
+    verify_ak_cert_with_azure_roots(ak_certificate_der_without_trailing_data, now)?;
 
     Ok(Measurements {
-        platform: PlatformMeasurements::from_dcap_qvl_quote(&quote).unwrap(),
-        cvm_image: CvmImageMeasurements::from_dcap_qvl_quote(&quote).unwrap(),
+        platform: PlatformMeasurements::from_dcap_qvl_quote(&quote)
+            .map_err(|_| MaaError::CannotExtractMeasurementsFromQuote)?,
+        cvm_image: CvmImageMeasurements::from_dcap_qvl_quote(&quote)
+            .map_err(|_| MaaError::CannotExtractMeasurementsFromQuote)?,
     })
 }
 
@@ -218,14 +222,14 @@ struct RsaPubKey {
 }
 
 impl RsaPubKey {
-    fn from_jwk(jwk: &Jwk) -> anyhow::Result<Self> {
+    fn from_jwk(jwk: &Jwk) -> Result<Self, MaaError> {
         if jwk.kty != "RSA" {
-            anyhow::bail!("JWK is not RSA (kty = {})", jwk.kty);
+            return Err(MaaError::NotRsa);
         }
 
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        let n_bytes = URL_SAFE_NO_PAD.decode(jwk.n.clone().unwrap())?;
-        let e_bytes = URL_SAFE_NO_PAD.decode(jwk.e.clone().unwrap())?;
+        let n_bytes = URL_SAFE_NO_PAD.decode(jwk.n.clone().ok_or(MaaError::JwkParse)?)?;
+        let e_bytes = URL_SAFE_NO_PAD.decode(jwk.e.clone().ok_or(MaaError::JwkParse)?)?;
 
         Ok(Self {
             n: BigUint::from_bytes_be(&n_bytes),
@@ -233,11 +237,11 @@ impl RsaPubKey {
         })
     }
 
-    fn from_certificate(cert: &X509Certificate) -> anyhow::Result<Self> {
+    fn from_certificate(cert: &X509Certificate) -> Result<Self, MaaError> {
         let spki = cert.public_key();
         let rsa_from_cert = match spki.parsed() {
             Ok(x509_parser::public_key::PublicKey::RSA(rsa)) => rsa,
-            _ => return Err(anyhow::anyhow!("Not rsa")),
+            _ => return Err(MaaError::NotRsa),
         };
 
         Ok(Self {
@@ -246,7 +250,7 @@ impl RsaPubKey {
         })
     }
 
-    fn from_openssl_pubkey(key: &PKey<openssl::pkey::Public>) -> anyhow::Result<Self> {
+    fn from_openssl_pubkey(key: &PKey<openssl::pkey::Public>) -> Result<Self, MaaError> {
         let rsa_from_pkey = key.rsa()?;
 
         Ok(Self {
@@ -288,6 +292,48 @@ pub enum MaaError {
     Pem(#[from] pem_rfc7468::Error),
     #[error("TDX quote input does not match hashed HCL var data")]
     TdxQuoteInputMismatch,
+    #[error("TD report input does not match hashed HCL var data")]
+    TdReportInputMismatch,
+    #[error("Base64 decode: {0}")]
+    Base64(#[from] base64::DecodeError),
+    #[error("Attestation Key from HCL runtime claims does not match that from HCL report")]
+    AkFromClaimsNotEqualAkFromHcl,
+    #[error("Attestation Key from HCL runtime claims does not match that from attestation key certificate")]
+    AkFromClaimsNotEqualAkFromCertificate,
+    #[error("WebPKI: {0}")]
+    WebPki(#[from] webpki::Error),
+    #[error("Certificate chain is empty")]
+    NoCertificate,
+    #[error("X509 parse: {0}")]
+    X509Parse(#[from] x509_parser::asn1_rs::Err<x509_parser::error::X509Error>),
+    #[error("X509: {0}")]
+    X509(#[from] x509_parser::error::X509Error),
+    #[error("Quote input is not as expected")]
+    InputMismatch,
+    #[error("Configuration mismatch - expected no remote attestation")]
+    AttestationGivenWhenNoneExpected,
+    #[error("Configfs-tsm quote generation: {0}")]
+    QuoteGeneration(#[from] configfs_tsm::QuoteGenerationError),
+    #[error("SGX quote given when TDX quote expected")]
+    SgxNotSupported,
+    #[error("Platform measurements do not match any accepted values")]
+    UnacceptablePlatformMeasurements,
+    #[error("OS image measurements do not match any accepted values")]
+    UnacceptableOsImageMeasurements,
+    #[error("DCAP quote verification: {0}")]
+    DcapQvl(#[from] anyhow::Error),
+    #[error("Cannot convert JSON web key to der")]
+    JwkConversion,
+    #[error("OpenSSL: {0}")]
+    OpenSSL(#[from] ErrorStack),
+    #[error("Cannot extract measurements from quote")]
+    CannotExtractMeasurementsFromQuote,
+    #[error("Expected AK key to be RSA")]
+    NotRsa,
+    #[error("JSON web key has missing field")]
+    JwkParse,
+    #[error("HCL runtime claims is missing HCLAkPub field")]
+    ClaimsMissingHCLAkPub,
 }
 
 #[cfg(test)]

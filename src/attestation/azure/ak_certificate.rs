@@ -1,5 +1,5 @@
 //! Generation and verification of AK certificates from the vTPM
-use crate::attestation::nv_index;
+use crate::attestation::{azure::MaaError, nv_index};
 use std::time::Duration;
 use tokio_rustls::rustls::pki_types::{CertificateDer, TrustAnchor, UnixTime};
 use webpki::EndEntityCert;
@@ -119,27 +119,24 @@ PBiY3N8BfK8EBOYbLvzo0qn2n3SAmPhYX3Ag6vbbIHd4Qc8DQKHRV0PB8D3jPGmD
 -----END CERTIFICATE-----";
 
 /// Verify an AK certificate against azure root CA
-pub fn verify_ak_cert_with_azure_roots(ak_cert_der: &[u8], now_secs: u64) -> Result<(), String> {
+pub fn verify_ak_cert_with_azure_roots(ak_cert_der: &[u8], now_secs: u64) -> Result<(), MaaError> {
     let ak_cert_der: CertificateDer = ak_cert_der.into();
-    let end_entity_cert = EndEntityCert::try_from(&ak_cert_der)
-        .map_err(|e| format!("Failed to parse AK cert as EndEntityCert: {e:?}"))?;
+    let end_entity_cert = EndEntityCert::try_from(&ak_cert_der)?;
 
     let roots = azure_root_anchors();
     let intermediates = azure_intermediate_chain();
 
     let now = UnixTime::since_unix_epoch(Duration::from_secs(now_secs));
 
-    end_entity_cert
-        .verify_for_usage(
-            webpki::ALL_VERIFICATION_ALGS,
-            &roots,
-            &intermediates,
-            now,
-            AnyEku,
-            None,
-            None,
-        )
-        .map_err(|e| format!("AK cert chain verification failed: {e:?}"))?;
+    end_entity_cert.verify_for_usage(
+        webpki::ALL_VERIFICATION_ALGS,
+        &roots,
+        &intermediates,
+        now,
+        AnyEku,
+        None,
+        None,
+    )?;
 
     Ok(())
 }
