@@ -1,7 +1,9 @@
-use attested_tls_proxy::attestation::AttestationType;
+use attested_tls_proxy::attestation::{
+    measurements::MeasurementPolicy, AttestationGenerator, AttestationType, AttestationVerifier,
+};
 use clap::{Parser, Subcommand};
 use dummy_attestation_server::{dummy_attestation_client, dummy_attestation_server};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::TcpListener;
 use tracing::level_filters::LevelFilter;
 
@@ -16,6 +18,9 @@ struct Cli {
     /// Log in JSON format
     #[arg(long, global = true)]
     log_json: bool,
+    /// Log DCAP quotes to folder `quotes/`
+    #[arg(long, global = true)]
+    log_dcap_quote: bool,
 }
 #[derive(Subcommand, Debug, Clone)]
 enum CliCommand {
@@ -30,6 +35,9 @@ enum CliCommand {
     Client {
         /// Socket address of a dummy attestation server
         server_addr: SocketAddr,
+        /// Optional path to file containing JSON measurements to be enforced on the remote party
+        #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
+        measurements_file: Option<PathBuf>,
     },
 }
 
@@ -55,6 +63,10 @@ async fn main() -> anyhow::Result<()> {
         subscriber.pretty().init();
     }
 
+    if cli.log_dcap_quote {
+        tokio::fs::create_dir_all("quotes").await?;
+    }
+
     match cli.command {
         CliCommand::Server {
             listen_addr,
@@ -64,12 +76,34 @@ async fn main() -> anyhow::Result<()> {
                 serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
             )?;
 
-            let attestation_generator = server_attestation_type.get_quote_generator()?;
+            let attestation_generator =
+                AttestationGenerator::new_not_dummy(server_attestation_type)?;
 
             let listener = TcpListener::bind(listen_addr).await?;
+
+            println!("Listening on {}", listener.local_addr()?);
             dummy_attestation_server(listener, attestation_generator).await?;
         }
-        CliCommand::Client { server_addr } => dummy_attestation_client(server_addr).await?,
+        CliCommand::Client {
+            server_addr,
+            measurements_file,
+        } => {
+            let measurement_policy = match measurements_file {
+                Some(measurements_file) => MeasurementPolicy::from_file(measurements_file).await?,
+                None => MeasurementPolicy::accept_anything(),
+            };
+
+            let attestation_verifier = AttestationVerifier {
+                measurement_policy,
+                pccs_url: None,
+                log_dcap_quote: cli.log_dcap_quote,
+            };
+
+            let attestation_message =
+                dummy_attestation_client(server_addr, attestation_verifier).await?;
+
+            println!("{attestation_message:?}")
+        }
     }
 
     Ok(())
