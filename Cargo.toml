@@ -34,8 +34,10 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 parity-scale-codec = "3.7.5"
 reqwest = "0.12.23"
+axum = "0.8.6"
+tower-http = { version = "0.6.7", features = ["fs"] }
 
 [dev-dependencies]
 rcgen = "0.14.5"
-axum = "0.8.6"
 reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
+tempfile = "3.23.0"
