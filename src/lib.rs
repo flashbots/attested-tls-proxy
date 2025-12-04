@@ -1,4 +1,5 @@
 pub mod attestation;
+pub mod attested_get;
 pub mod file_server;
 
 pub use attestation::AttestationGenerator;
