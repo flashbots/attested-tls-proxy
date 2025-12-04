@@ -9,6 +9,7 @@ use dcap_qvl::{
     collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
 };
+use thiserror::Error;
 
 /// For fetching collateral directly from Intel, if no PCCS is specified
 pub const PCS_URL: &str = "https://api.trustedservices.intel.com";
@@ -23,7 +24,7 @@ pub async fn verify_dcap_attestation(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
-) -> Result<Measurements, AttestationError> {
+) -> Result<Measurements, DcapVerificationError> {
     let (platform_measurements, image_measurements) = if cfg!(not(test)) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -47,14 +48,14 @@ pub async fn verify_dcap_attestation(
             CvmImageMeasurements::from_dcap_qvl_quote(&quote)?,
         );
         if get_quote_input_data(quote.report) != expected_input_data {
-            return Err(AttestationError::InputMismatch);
+            return Err(DcapVerificationError::InputMismatch);
         }
         measurements
     } else {
         // In tests we use mock quotes which will fail to verify
         let quote = tdx_quote::Quote::from_bytes(&input)?;
         if quote.report_input_data() != expected_input_data {
-            return Err(AttestationError::InputMismatch);
+            return Err(DcapVerificationError::InputMismatch);
         }
 
         (
@@ -96,4 +97,33 @@ pub fn get_quote_input_data(report: Report) -> [u8; 64] {
         Report::TD15(r) => r.base.report_data,
         Report::SgxEnclave(r) => r.report_data,
     }
+}
+
+/// An error when generating or verifying an attestation
+#[derive(Error, Debug)]
+pub enum DcapVerificationError {
+    // #[error("Certificate chain is empty")]
+    // NoCertificate,
+    // #[error("X509 parse: {0}")]
+    // X509Parse(#[from] x509_parser::asn1_rs::Err<x509_parser::error::X509Error>),
+    // #[error("X509: {0}")]
+    // X509(#[from] x509_parser::error::X509Error),
+    #[error("Quote input is not as expected")]
+    InputMismatch,
+    // #[error("Configuration mismatch - expected no remote attestation")]
+    // AttestationGivenWhenNoneExpected,
+    // #[error("Configfs-tsm quote generation: {0}")]
+    // QuoteGeneration(#[from] configfs_tsm::QuoteGenerationError),
+    #[error("SGX quote given when TDX quote expected")]
+    SgxNotSupported,
+    // #[error("Platform measurements do not match any accepted values")]
+    // UnacceptablePlatformMeasurements,
+    // #[error("OS image measurements do not match any accepted values")]
+    // UnacceptableOsImageMeasurements,
+    #[error("System Time: {0}")]
+    SystemTime(#[from] std::time::SystemTimeError),
+    #[error("DCAP quote verification: {0}")]
+    DcapQvl(#[from] anyhow::Error),
+    #[error("Quote parse: {0}")]
+    QuoteParse(#[from] tdx_quote::QuoteParseError),
 }

@@ -2,7 +2,6 @@
 mod ak_certificate;
 mod nv_index;
 use ak_certificate::{read_ak_certificate_from_tpm, verify_ak_cert_with_azure_roots};
-use std::string::FromUtf8Error;
 
 use az_tdx_vtpm::{hcl, imds, report, vtpm};
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
@@ -12,11 +11,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use x509_parser::prelude::*;
 
-use crate::attestation::{
-    self,
-    dcap::get_quote_input_data,
-    measurements::{CvmImageMeasurements, Measurements, PlatformMeasurements},
-};
+use crate::attestation::dcap::verify_dcap_attestation;
 
 /// The attestation evidence payload that gets sent over the channel
 #[derive(Debug, Serialize, Deserialize)]
@@ -100,25 +95,6 @@ async fn verify_azure_attestation_with_given_timestamp(
 ) -> Result<super::measurements::Measurements, MaaError> {
     let attestation_document: AttestationDocument = serde_json::from_slice(&input)?;
 
-    // Verify TDX quote (same as with DCAP) - TODO deduplicate this code
-    let tdx_quote_bytes = BASE64_URL_SAFE.decode(attestation_document.tdx_quote_base64)?;
-
-    let quote = dcap_qvl::quote::Quote::parse(&tdx_quote_bytes)?;
-
-    let ca = quote.ca()?;
-    let fmspc = hex::encode_upper(quote.fmspc()?);
-    let collateral = dcap_qvl::collateral::get_collateral_for_fmspc(
-        &pccs_url
-            .clone()
-            .unwrap_or(attestation::dcap::PCS_URL.to_string()),
-        fmspc,
-        ca,
-        false, // Indicates not SGX
-    )
-    .await?;
-
-    let _verified_report = dcap_qvl::verify::verify(&tdx_quote_bytes, &collateral, now)?;
-
     let hcl_report_bytes = BASE64_URL_SAFE.decode(attestation_document.hcl_report_base64)?;
 
     let hcl_report = hcl::HclReport::new(hcl_report_bytes)?;
@@ -127,9 +103,11 @@ async fn verify_azure_attestation_with_given_timestamp(
     // Check that HCL var data hash matches TDX quote report data
     let mut expected_tdx_input_data = [0u8; 64];
     expected_tdx_input_data[..32].copy_from_slice(&var_data_hash);
-    if get_quote_input_data(quote.report.clone()) != expected_tdx_input_data {
-        return Err(MaaError::TdxQuoteInputMismatch);
-    }
+
+    // Do DCAP verification
+    let tdx_quote_bytes = BASE64_URL_SAFE.decode(attestation_document.tdx_quote_base64)?;
+    let measurements =
+        verify_dcap_attestation(tdx_quote_bytes, expected_tdx_input_data, pccs_url).await?;
 
     let hcl_ak_pub = hcl_report.ak_pub()?;
 
@@ -191,12 +169,7 @@ async fn verify_azure_attestation_with_given_timestamp(
     // Verify the AK certificate against microsoft root cert
     verify_ak_cert_with_azure_roots(ak_certificate_der_without_trailing_data, now)?;
 
-    Ok(Measurements {
-        platform: PlatformMeasurements::from_dcap_qvl_quote(&quote)
-            .map_err(|_| MaaError::CannotExtractMeasurementsFromQuote)?,
-        cvm_image: CvmImageMeasurements::from_dcap_qvl_quote(&quote)
-            .map_err(|_| MaaError::CannotExtractMeasurementsFromQuote)?,
-    })
+    Ok(measurements)
 }
 
 /// JSON Web Key used in [HclRuntimeClaims]
@@ -272,8 +245,6 @@ impl RsaPubKey {
 
 #[derive(Error, Debug)]
 pub enum MaaError {
-    #[error("Failed to build input data: {0}")]
-    InputData(String),
     #[error("Report: {0}")]
     Report(#[from] az_tdx_vtpm::report::ReportError),
     #[error("IMDS: {0}")]
@@ -284,12 +255,6 @@ pub enum MaaError {
     Hcl(#[from] hcl::HclError),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("HTTP Client: {0}")]
-    HttpClient(#[from] reqwest::Error),
-    #[error("MAA provider response: {0} - {1}")]
-    MaaProvider(http::StatusCode, String),
-    #[error("Token is bad UTF8: {0}")]
-    BadUtf8(#[from] FromUtf8Error),
     #[error("vTPM quote: {0}")]
     VtpmQuote(#[from] vtpm::QuoteError),
     #[error("AK public key: {0}")]
@@ -300,8 +265,6 @@ pub enum MaaError {
     TssEsapi(#[from] tss_esapi::Error),
     #[error("PEM encode: {0}")]
     Pem(#[from] pem_rfc7468::Error),
-    #[error("TDX quote input does not match hashed HCL var data")]
-    TdxQuoteInputMismatch,
     #[error("TD report input does not match hashed HCL var data")]
     TdReportInputMismatch,
     #[error("Base64 decode: {0}")]
@@ -312,27 +275,11 @@ pub enum MaaError {
     AkFromClaimsNotEqualAkFromCertificate,
     #[error("WebPKI: {0}")]
     WebPki(#[from] webpki::Error),
-    #[error("Certificate chain is empty")]
-    NoCertificate,
     #[error("X509 parse: {0}")]
     X509Parse(#[from] x509_parser::asn1_rs::Err<x509_parser::error::X509Error>),
     #[error("X509: {0}")]
     X509(#[from] x509_parser::error::X509Error),
-    #[error("Quote input is not as expected")]
-    InputMismatch,
-    #[error("Configuration mismatch - expected no remote attestation")]
-    AttestationGivenWhenNoneExpected,
-    #[error("Configfs-tsm quote generation: {0}")]
-    QuoteGeneration(#[from] configfs_tsm::QuoteGenerationError),
-    #[error("SGX quote given when TDX quote expected")]
-    SgxNotSupported,
-    #[error("Platform measurements do not match any accepted values")]
-    UnacceptablePlatformMeasurements,
-    #[error("OS image measurements do not match any accepted values")]
-    UnacceptableOsImageMeasurements,
-    #[error("DCAP quote verification: {0}")]
-    DcapQvl(#[from] anyhow::Error),
-    #[error("Cannot convert JSON web key to der")]
+    #[error("Cannot encode JSON web key as DER")]
     JwkConversion,
     #[error("OpenSSL: {0}")]
     OpenSSL(#[from] ErrorStack),
@@ -344,6 +291,8 @@ pub enum MaaError {
     JwkParse,
     #[error("HCL runtime claims is missing HCLAkPub field")]
     ClaimsMissingHCLAkPub,
+    #[error("DCAP verification: {0}")]
+    DcapVerification(#[from] crate::attestation::dcap::DcapVerificationError),
 }
 
 #[cfg(test)]
@@ -352,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_decode_hcl() {
-        // from cvm-reverse-proxy/internal/attestation/azure/tdx/testdata/hclreport.bin
+        // From cvm-reverse-proxy/internal/attestation/azure/tdx/testdata/hclreport.bin
         let hcl_bytes: &'static [u8] = include_bytes!("../../../test-assets/hclreport.bin");
 
         let hcl_report = hcl::HclReport::new(hcl_bytes.to_vec()).unwrap();

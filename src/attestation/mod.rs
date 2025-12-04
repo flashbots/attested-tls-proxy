@@ -8,13 +8,12 @@ use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
-    time::{SystemTime, SystemTimeError, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use tdx_quote::QuoteParseError;
 use thiserror::Error;
 
-use crate::attestation::measurements::MeasurementPolicy;
+use crate::attestation::{dcap::DcapVerificationError, measurements::MeasurementPolicy};
 
 /// This is the type sent over the channel to provide an attestation
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
@@ -332,24 +331,12 @@ pub enum AttestationError {
     X509Parse(#[from] x509_parser::asn1_rs::Err<x509_parser::error::X509Error>),
     #[error("X509: {0}")]
     X509(#[from] x509_parser::error::X509Error),
-    #[error("Quote input is not as expected")]
-    InputMismatch,
     #[error("Configuration mismatch - expected no remote attestation")]
     AttestationGivenWhenNoneExpected,
     #[error("Configfs-tsm quote generation: {0}")]
     QuoteGeneration(#[from] configfs_tsm::QuoteGenerationError),
-    #[error("SGX quote given when TDX quote expected")]
-    SgxNotSupported,
-    #[error("Platform measurements do not match any accepted values")]
-    UnacceptablePlatformMeasurements,
-    #[error("OS image measurements do not match any accepted values")]
-    UnacceptableOsImageMeasurements,
-    #[error("System Time: {0}")]
-    SystemTime(#[from] SystemTimeError),
-    #[error("DCAP quote verification: {0}")]
-    DcapQvl(#[from] anyhow::Error),
-    #[error("Quote parse: {0}")]
-    QuoteParse(#[from] QuoteParseError),
+    #[error("DCAP verification: {0}")]
+    DcapVerification(#[from] DcapVerificationError),
     #[error("Attestation type not supported")]
     AttestationTypeNotSupported,
     #[error("Attestation type not accepted")]
