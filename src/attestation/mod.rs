@@ -1,3 +1,5 @@
+#[cfg(feature = "azure")]
+pub mod azure;
 pub mod dcap;
 pub mod measurements;
 
@@ -6,13 +8,12 @@ use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
-    time::{SystemTime, SystemTimeError, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use tdx_quote::QuoteParseError;
 use thiserror::Error;
 
-use crate::attestation::measurements::MeasurementPolicy;
+use crate::attestation::{dcap::DcapVerificationError, measurements::MeasurementPolicy};
 
 /// This is the type sent over the channel to provide an attestation
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
@@ -164,7 +165,17 @@ impl AttestationGenerator {
     ) -> Result<Vec<u8>, AttestationError> {
         match self.attestation_type {
             AttestationType::None => Ok(Vec::new()),
-            AttestationType::AzureTdx => Err(AttestationError::AttestationTypeNotSupported),
+            AttestationType::AzureTdx => {
+                #[cfg(feature = "azure")]
+                {
+                    Ok(azure::create_azure_attestation(input_data).await?)
+                }
+                #[cfg(not(feature = "azure"))]
+                {
+                    tracing::error!("Attempted to generate an azure attestation but the `azure` feature not enabled");
+                    Err(AttestationError::AttestationTypeNotSupported)
+                }
+            }
             AttestationType::Dummy => self.generate_dummy_attestation(input_data).await,
             _ => dcap::create_dcap_attestation(input_data).await,
         }
@@ -250,7 +261,19 @@ impl AttestationVerifier {
                 }
             }
             AttestationType::AzureTdx => {
-                return Err(AttestationError::AttestationTypeNotSupported);
+                #[cfg(feature = "azure")]
+                {
+                    azure::verify_azure_attestation(
+                        attestation_exchange_message.attestation,
+                        expected_input_data,
+                        self.pccs_url.clone(),
+                    )
+                    .await?
+                }
+                #[cfg(not(feature = "azure"))]
+                {
+                    return Err(AttestationError::AttestationTypeNotSupported);
+                }
             }
             AttestationType::Dummy => {
                 // Dummy assumes dummy DCAP
@@ -309,30 +332,21 @@ pub enum AttestationError {
     X509Parse(#[from] x509_parser::asn1_rs::Err<x509_parser::error::X509Error>),
     #[error("X509: {0}")]
     X509(#[from] x509_parser::error::X509Error),
-    #[error("Quote input is not as expected")]
-    InputMismatch,
     #[error("Configuration mismatch - expected no remote attestation")]
     AttestationGivenWhenNoneExpected,
     #[error("Configfs-tsm quote generation: {0}")]
     QuoteGeneration(#[from] configfs_tsm::QuoteGenerationError),
-    #[error("SGX quote given when TDX quote expected")]
-    SgxNotSupported,
-    #[error("Platform measurements do not match any accepted values")]
-    UnacceptablePlatformMeasurements,
-    #[error("OS image measurements do not match any accepted values")]
-    UnacceptableOsImageMeasurements,
-    #[error("System Time: {0}")]
-    SystemTime(#[from] SystemTimeError),
-    #[error("DCAP quote verification: {0}")]
-    DcapQvl(#[from] anyhow::Error),
-    #[error("Quote parse: {0}")]
-    QuoteParse(#[from] QuoteParseError),
+    #[error("DCAP verification: {0}")]
+    DcapVerification(#[from] DcapVerificationError),
     #[error("Attestation type not supported")]
     AttestationTypeNotSupported,
     #[error("Attestation type not accepted")]
     AttestationTypeNotAccepted,
     #[error("Measurements not accepted")]
     MeasurementsNotAccepted,
+    #[cfg(feature = "azure")]
+    #[error("MAA: {0}")]
+    Maa(#[from] azure::MaaError),
     #[error("Dummy attestation type requires dummy service URL")]
     DummyUrl,
     #[error("Dummy server: {0}")]

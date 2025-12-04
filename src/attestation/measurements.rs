@@ -1,5 +1,5 @@
 //! Measurements and policy for enforcing them when validating a remote attestation
-use crate::attestation::{AttestationError, AttestationType};
+use crate::attestation::{dcap::DcapVerificationError, AttestationError, AttestationType};
 use std::{collections::HashMap, path::PathBuf};
 
 use dcap_qvl::quote::Report;
@@ -18,12 +18,14 @@ pub struct PlatformMeasurements {
 
 impl PlatformMeasurements {
     /// Given a quote from the dcap_qvl library, extract the platform measurements
-    pub fn from_dcap_qvl_quote(quote: &dcap_qvl::quote::Quote) -> Result<Self, AttestationError> {
+    pub fn from_dcap_qvl_quote(
+        quote: &dcap_qvl::quote::Quote,
+    ) -> Result<Self, DcapVerificationError> {
         let report = match quote.report {
             Report::TD10(report) => report,
             Report::TD15(report) => report.base,
             Report::SgxEnclave(_) => {
-                return Err(AttestationError::SgxNotSupported);
+                return Err(DcapVerificationError::SgxNotSupported);
             }
         };
         Ok(Self {
@@ -53,12 +55,14 @@ pub struct CvmImageMeasurements {
 
 impl CvmImageMeasurements {
     /// Given a quote from the dcap_qvl library, extract the CVM image / application measurements
-    pub fn from_dcap_qvl_quote(quote: &dcap_qvl::quote::Quote) -> Result<Self, AttestationError> {
+    pub fn from_dcap_qvl_quote(
+        quote: &dcap_qvl::quote::Quote,
+    ) -> Result<Self, DcapVerificationError> {
         let report = match quote.report {
             Report::TD10(report) => report,
             Report::TD15(report) => report.base,
             Report::SgxEnclave(_) => {
-                return Err(AttestationError::SgxNotSupported);
+                return Err(DcapVerificationError::SgxNotSupported);
             }
         };
         Ok(Self {
