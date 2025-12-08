@@ -1,5 +1,4 @@
 use anyhow::{anyhow, ensure};
-use axum::routing::head;
 use clap::{Parser, Subcommand};
 use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
