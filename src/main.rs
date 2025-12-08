@@ -6,6 +6,8 @@ use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
     attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
+    attested_get::attested_get,
+    file_server::attested_file_server,
     get_tls_cert, AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey,
 };
 
@@ -96,6 +98,38 @@ enum CliCommand {
     GetTlsCert {
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         server: String,
+    },
+    /// Serve a filesystem path over an attested channel
+    AttestedFileServer {
+        /// Filesystem path to statically serve
+        path_to_serve: PathBuf,
+        /// Socket address to listen on
+        #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
+        listen_addr: SocketAddr,
+        /// Type of attestation to present (dafaults to none)
+        /// If other than None, a TLS key and certicate must also be given
+        #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
+        server_attestation_type: Option<String>,
+        /// The path to a PEM encoded private key
+        #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
+        tls_private_key_path: PathBuf,
+        /// The path to a PEM encoded certificate chain
+        #[arg(long, env = "TLS_CERTIFICATE_PATH")]
+        tls_certificate_path: PathBuf,
+        /// URL of the remote dummy attestation service. Only use with --server-attestation-type
+        /// dummy
+        #[arg(long)]
+        dev_dummy_dcap: Option<String>,
+    },
+    AttestedGet {
+        /// The hostname:port or ip:port of the proxy server (port defaults to 443)
+        target_addr: String,
+        #[arg(long)]
+        /// path to GET (defaults to '/')
+        url_path: Option<String>,
+        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
+        #[arg(long)]
+        tls_ca_certificate: Option<PathBuf>,
     },
 }
 
@@ -248,6 +282,61 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::GetTlsCert { server } => {
             let cert_chain = get_tls_cert(server, attestation_verifier).await?;
             println!("{}", certs_to_pem_string(&cert_chain)?);
+        }
+        CliCommand::AttestedFileServer {
+            path_to_serve,
+            listen_addr,
+            server_attestation_type,
+            tls_private_key_path,
+            tls_certificate_path,
+            dev_dummy_dcap,
+        } => {
+            let tls_cert_and_chain =
+                load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
+
+            let server_attestation_type: AttestationType = serde_json::from_value(
+                serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
+            )?;
+
+            let attestation_generator =
+                AttestationGenerator::new(server_attestation_type, dev_dummy_dcap)?;
+
+            attested_file_server(
+                path_to_serve,
+                tls_cert_and_chain,
+                listen_addr,
+                attestation_generator,
+                attestation_verifier,
+                false,
+            )
+            .await?;
+        }
+        CliCommand::AttestedGet {
+            target_addr,
+            url_path,
+            tls_ca_certificate,
+        } => {
+            let remote_tls_cert = match tls_ca_certificate {
+                Some(remote_cert_filename) => Some(
+                    load_certs_pem(remote_cert_filename)?
+                        .first()
+                        .ok_or(anyhow!("Filename given but no ceritificates found"))?
+                        .clone(),
+                ),
+                None => None,
+            };
+
+            let response = attested_get(
+                target_addr,
+                &url_path.unwrap_or_default(),
+                attestation_verifier,
+                remote_tls_cert,
+            )
+            .await?;
+
+            // TODO how to handle binary response
+            let text = response.text().await?;
+            println!("{text}");
         }
     }
 

@@ -3,6 +3,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
 use tower_http::services::ServeDir;
 
+/// Setup a static file server serving the given directory, and a proxy server targetting it
 pub async fn attested_file_server(
     path_to_serve: PathBuf,
     cert_and_key: TlsCertAndKey,
@@ -13,7 +14,7 @@ pub async fn attested_file_server(
 ) -> Result<(), ProxyError> {
     let target_addr = static_file_server(path_to_serve).await?;
 
-    let _server = ProxyServer::new(
+    let server = ProxyServer::new(
         cert_and_key,
         listen_addr,
         target_addr,
@@ -23,11 +24,15 @@ pub async fn attested_file_server(
     )
     .await?;
 
-    Ok(())
+    loop {
+        if let Err(err) = server.accept().await {
+            tracing::error!("Failed to handle connection: {err}");
+        }
+    }
 }
 
 /// Statically serve the given filesystem path over HTTP
-async fn static_file_server(path: PathBuf) -> Result<SocketAddr, ProxyError> {
+pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, ProxyError> {
     let app = axum::Router::new().fallback_service(ServeDir::new(&path));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -53,7 +58,7 @@ mod tests {
     use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
     use tempfile::tempdir;
 
-    /// Given a url. fetch response body and content type header
+    /// Given a URL, fetch response body and content type header
     async fn get_body_and_content_type(url: String, client: &reqwest::Client) -> (Vec<u8>, String) {
         let res = client.get(url).send().await.unwrap();
 
@@ -71,6 +76,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_static_file_server() {
+        // Create a temporary directory with some files to serve
         let dir = tempdir().unwrap();
 
         let file_path = dir.path().join("foo.txt");
@@ -84,11 +90,14 @@ mod tests {
         let file_path = dir.path().join("data.bin");
         tokio::fs::write(file_path, [0u8; 32]).await.unwrap();
 
+        // Start a static file server
         let target_addr = static_file_server(dir.path().to_path_buf()).await.unwrap();
 
+        // Create TLS configuration
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
+        // Setup a proxy server targetting the static file server
         let proxy_server = ProxyServer::new_with_tls_config(
             cert_chain,
             server_config,
@@ -119,12 +128,14 @@ mod tests {
 
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
+        // Proxy cient accepts a single connection
         tokio::spawn(async move {
             proxy_client.accept().await.unwrap();
         });
 
         let client = reqwest::Client::new();
 
+        // This makes the request
         let (body, content_type) = get_body_and_content_type(
             format!("http://{}/foo.txt", proxy_client_addr.to_string()),
             &client,
