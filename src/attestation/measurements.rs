@@ -246,7 +246,6 @@ impl MeasurementPolicy {
     /// Given an attestation type and set of measurements, check whether they are acceptable
     pub fn check_measurement(
         &self,
-        attestation_type: AttestationType,
         measurements: &MultiMeasurements,
     ) -> Result<(), AttestationError> {
         if self
@@ -256,7 +255,7 @@ impl MeasurementPolicy {
                 MultiMeasurements::Dcap(dcap_measurements) => {
                     if let MultiMeasurements::Dcap(d) = measurement_record.measurements.clone() {
                         for (k, v) in dcap_measurements.iter() {
-                            if d[k] != *v {
+                            if d.get(k).is_some_and(|x| x != v) {
                                 return false;
                             }
                         }
@@ -267,7 +266,7 @@ impl MeasurementPolicy {
                 MultiMeasurements::Azure(azure_measurements) => {
                     if let MultiMeasurements::Azure(a) = measurement_record.measurements.clone() {
                         for (k, v) in azure_measurements.iter() {
-                            if a[k] != *v {
+                            if a.get(k).is_some_and(|x| x != v) {
                                 false;
                             }
                         }
@@ -376,6 +375,8 @@ impl MeasurementPolicy {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_helpers::default_dcap_measurements;
+
     use super::*;
 
     #[tokio::test]
@@ -385,51 +386,53 @@ mod tests {
                 .await
                 .unwrap();
 
-        // assert!(specific_measurements
-        //     .accepted_measurements
-        //     .get(&AttestationType::DcapTdx)
-        //     .unwrap()
-        //     .is_some());
-        //
-        // // Will not match mock measurements
-        // assert!(matches!(
-        //     specific_measurements
-        //         .check_measurement(AttestationType::DcapTdx, &mock_measurements())
-        //         .unwrap_err(),
-        //     AttestationError::MeasurementsNotAccepted
-        // ));
-        //
-        // // Will not match another attestation type
-        // assert!(matches!(
-        //     specific_measurements
-        //         .check_measurement(AttestationType::None, &mock_measurements())
-        //         .unwrap_err(),
-        //     AttestationError::AttestationTypeNotAccepted
-        // ));
+        assert_eq!(specific_measurements.accepted_measurements.len(), 1);
+        let m = &specific_measurements.accepted_measurements[0];
+        if let MultiMeasurements::Dcap(d) = &m.measurements {
+            assert!(d.contains_key(&DcapMeasurementRegister::MRTD));
+            assert!(d.contains_key(&DcapMeasurementRegister::RTMR0));
+            assert!(d.contains_key(&DcapMeasurementRegister::RTMR1));
+            assert!(d.contains_key(&DcapMeasurementRegister::RTMR2));
+            assert!(d.contains_key(&DcapMeasurementRegister::RTMR3));
+        } else {
+            panic!("Unexpected measurement type");
+        }
+
+        // Will not match mock measurements
+        assert!(matches!(
+            specific_measurements
+                .check_measurement(&default_dcap_measurements())
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
+
+        // Will not match another attestation type
+        assert!(matches!(
+            specific_measurements
+                .check_measurement(&MultiMeasurements::NoAttestation)
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
     }
 
     #[tokio::test]
     async fn test_read_measurements_file_non_specific() {
-        // let mock_measurements = mock_measurements();
         // This specifies a particular attestation type, but not specific measurements
         let allowed_attestation_type =
             MeasurementPolicy::from_file("test-assets/measurements_2.json".into())
                 .await
                 .unwrap();
 
-        // allowed_attestation_type
-        //     .check_measurement(AttestationType::DcapTdx, &mock_measurements)
-        //     .unwrap();
-        //
-        // assert!(allowed_attestation_type
-        //     .accepted_measurements
-        //     .get(&AttestationType::DcapTdx)
-        //     .unwrap()
-        //     .is_none());
-        //
-        // // Will match mock measurements
-        // allowed_attestation_type
-        //     .check_measurement(AttestationType::DcapTdx, &mock_measurements)
-        //     .unwrap();
+        allowed_attestation_type
+            .check_measurement(&default_dcap_measurements())
+            .unwrap();
+
+        // Will not match another attestation type
+        assert!(matches!(
+            allowed_attestation_type
+                .check_measurement(&MultiMeasurements::NoAttestation)
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
     }
 }

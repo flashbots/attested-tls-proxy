@@ -640,7 +640,6 @@ impl ProxyClient {
 
         // If we are in a CVM, provide an attestation
         let attestation = if attestation_generator.attestation_type != AttestationType::None {
-            println!("fff");
             let local_input_data =
                 compute_report_input(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?;
             attestation_generator

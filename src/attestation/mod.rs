@@ -295,8 +295,7 @@ impl AttestationVerifier {
         };
 
         // Do a measurement / attestation type policy check
-        self.measurement_policy
-            .check_measurement(attestation_type, &measurements)?;
+        self.measurement_policy.check_measurement(&measurements)?;
 
         tracing::debug!("Verification successful");
         Ok(Some(measurements))
