@@ -88,11 +88,9 @@ impl ProxyServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
-        println!("here");
         if attestation_verifier.has_remote_attestion() && !client_auth {
             return Err(ProxyError::NoClientAuth);
         }
-        println!("here2");
 
         let mut server_config = if client_auth {
             let root_store =
