@@ -9,7 +9,9 @@ license = "MIT"
 
 [dependencies]
 tokio = { version = "1.48.0", features = ["full"] }
-tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = [
+  "ring",
+] }
 sha2 = "0.10.9"
 x509-parser = "0.18.0"
 thiserror = "2.0.17"
@@ -31,7 +33,9 @@ http = "1.3.1"
 serde_json = "1.0.145"
 serde = "1.0.228"
 base64 = "0.22.1"
-reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
+reqwest = { version = "0.12.23", default-features = false, features = [
+  "rustls-tls-webpki-roots-no-provider",
+] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 parity-scale-codec = "3.7.5"
@@ -42,10 +46,12 @@ num-bigint = "0.4.6"
 webpki = { package = "rustls-webpki", version = "0.103.8" }
 time = "0.3.44"
 once_cell = "1.21.3"
+axum = "0.8.6"
+tower-http = { version = "0.6.7", features = ["fs"] }
 
 [dev-dependencies]
 rcgen = "0.14.5"
-axum = "0.8.6"
+tempfile = "3.23.0"
 
 [features]
 default = ["azure"]
