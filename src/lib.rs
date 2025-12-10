@@ -861,8 +861,8 @@ mod tests {
 
     use super::*;
     use test_helpers::{
-        default_dcap_measurements, example_http_service, example_service,
-        generate_certificate_chain, generate_tls_config, generate_tls_config_with_client_auth,
+        example_http_service, generate_certificate_chain, generate_tls_config,
+        generate_tls_config_with_client_auth, mock_dcap_measurements,
     };
 
     // Server has mock DCAP, client has no attestation and no client auth
@@ -924,7 +924,7 @@ mod tests {
         let measurements =
             MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
                 .unwrap();
-        assert_eq!(measurements, default_dcap_measurements());
+        assert_eq!(measurements, mock_dcap_measurements());
 
         let res_body = res.text().await.unwrap();
         assert_eq!(res_body, "No measurements");
@@ -1008,7 +1008,7 @@ mod tests {
         // handler puts them there)
         let measurements =
             MultiMeasurements::from_header_format(&res_body, AttestationType::DcapTdx).unwrap();
-        assert_eq!(measurements, default_dcap_measurements());
+        assert_eq!(measurements, mock_dcap_measurements());
     }
 
     // Server has mock DCAP, client has mock DCAP and client auth
@@ -1077,7 +1077,7 @@ mod tests {
         let measurements =
             MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
                 .unwrap();
-        assert_eq!(measurements, default_dcap_measurements());
+        assert_eq!(measurements, mock_dcap_measurements());
 
         let attestation_type = headers
             .get(ATTESTATION_TYPE_HEADER)
@@ -1092,7 +1092,7 @@ mod tests {
         // handler puts them there)
         let measurements =
             MultiMeasurements::from_header_format(&res_body, AttestationType::DcapTdx).unwrap();
-        assert_eq!(measurements, default_dcap_measurements());
+        assert_eq!(measurements, mock_dcap_measurements());
 
         // Now do another request - to check that the connection has stayed open
         let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
@@ -1104,7 +1104,7 @@ mod tests {
         let measurements =
             MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
                 .unwrap();
-        assert_eq!(measurements, default_dcap_measurements());
+        assert_eq!(measurements, mock_dcap_measurements());
 
         let attestation_type = headers
             .get(ATTESTATION_TYPE_HEADER)
@@ -1119,13 +1119,13 @@ mod tests {
         // handler puts them there)
         let measurements =
             MultiMeasurements::from_header_format(&res_body, AttestationType::DcapTdx).unwrap();
-        assert_eq!(measurements, default_dcap_measurements());
+        assert_eq!(measurements, mock_dcap_measurements());
     }
 
     // Server has mock DCAP, client no attestation - just get the server certificate
     #[tokio::test]
     async fn test_get_tls_cert() {
-        let target_addr = example_service().await;
+        let target_addr = example_http_service().await;
 
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);

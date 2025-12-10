@@ -392,7 +392,7 @@ impl MeasurementPolicy {
 mod tests {
     use std::collections::HashSet;
 
-    use crate::test_helpers::default_dcap_measurements;
+    use crate::test_helpers::mock_dcap_measurements;
 
     use super::*;
 
@@ -436,7 +436,7 @@ mod tests {
         // Will not match mock measurements
         assert!(matches!(
             specific_measurements
-                .check_measurement(&default_dcap_measurements())
+                .check_measurement(&mock_dcap_measurements())
                 .unwrap_err(),
             AttestationError::MeasurementsNotAccepted
         ));
@@ -459,7 +459,7 @@ mod tests {
                 .unwrap();
 
         allowed_attestation_type
-            .check_measurement(&default_dcap_measurements())
+            .check_measurement(&mock_dcap_measurements())
             .unwrap();
 
         // Will not match another attestation type

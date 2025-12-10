@@ -4,7 +4,6 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio_rustls::rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
@@ -121,6 +120,8 @@ pub fn generate_tls_config_with_client_auth(
     )
 }
 
+/// Given a TLS certificate, return a [WebPkiClientVerifier] and [RootCertStore] which will accept
+/// that certificate
 fn client_verifier_from_remote_cert(
     cert: CertificateDer<'static>,
 ) -> (Arc<dyn ClientCertVerifier>, RootCertStore) {
@@ -135,6 +136,8 @@ fn client_verifier_from_remote_cert(
     )
 }
 
+/// Simple http server used in tests which returns in the response the measurement header from the
+/// request
 pub async fn example_http_service() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -156,21 +159,8 @@ async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
         .to_string()
 }
 
-pub async fn example_service() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        loop {
-            let (mut inbound, _client_addr) = listener.accept().await.unwrap();
-            inbound.write_all(b"some data").await.unwrap();
-        }
-    });
-
-    addr
-}
-
-pub fn default_dcap_measurements() -> MultiMeasurements {
+/// All-zero measurment values used in some tests
+pub fn mock_dcap_measurements() -> MultiMeasurements {
     MultiMeasurements::Dcap(HashMap::from([
         (DcapMeasurementRegister::MRTD, [0u8; 48]),
         (DcapMeasurementRegister::RTMR0, [0u8; 48]),
