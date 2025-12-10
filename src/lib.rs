@@ -1,4 +1,6 @@
 pub mod attestation;
+pub mod attested_get;
+pub mod file_server;
 
 pub use attestation::AttestationGenerator;
 use attestation::{measurements::Measurements, AttestationError, AttestationType};
@@ -88,11 +90,9 @@ impl ProxyServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
-        println!("here");
         if attestation_verifier.has_remote_attestion() && !client_auth {
             return Err(ProxyError::NoClientAuth);
         }
-        println!("here2");
 
         let mut server_config = if client_auth {
             let root_store =
@@ -640,7 +640,6 @@ impl ProxyClient {
 
         // If we are in a CVM, provide an attestation
         let attestation = if attestation_generator.attestation_type != AttestationType::None {
-            println!("fff");
             let local_input_data =
                 compute_report_input(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?;
             attestation_generator
