@@ -79,7 +79,7 @@ fn generate_quote(input: [u8; 64]) -> Result<Vec<u8>, QuoteGenerationError> {
 /// Create a quote
 #[cfg(not(test))]
 fn generate_quote(input: [u8; 64]) -> Result<Vec<u8>, QuoteGenerationError> {
-    configfs_tsm::create_quote(input)
+    configfs_tsm::create_tdx_quote(input)
 }
 
 /// Given a [Report] get the input data regardless of report type

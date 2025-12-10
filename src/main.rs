@@ -9,7 +9,7 @@ use attested_tls_proxy::{
     attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
     attested_get::attested_get,
     file_server::attested_file_server,
-    get_tls_cert, AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey,
+    get_tls_cert, health_check, AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -63,6 +63,9 @@ enum CliCommand {
         /// dummy
         #[arg(long)]
         dev_dummy_dcap: Option<String>,
+        // Address to listen on for health checks
+        #[arg(long)]
+        listen_addr_healthcheck: Option<SocketAddr>,
     },
     /// Run a proxy server
     Server {
@@ -89,11 +92,9 @@ enum CliCommand {
         /// dummy
         #[arg(long)]
         dev_dummy_dcap: Option<String>,
-        // TODO missing:
-        // Name:    "listen-addr-healthcheck",
-        // EnvVars: []string{"LISTEN_ADDR_HEALTHCHECK"},
-        // Value:   "",
-        // Usage:   "address to listen on for health checks",
+        // Address to listen on for health checks
+        #[arg(long)]
+        listen_addr_healthcheck: Option<SocketAddr>,
     },
     /// Retrieve the attested TLS certificate from a proxy server
     GetTlsCert {
@@ -193,11 +194,16 @@ async fn main() -> anyhow::Result<()> {
             tls_certificate_path,
             tls_ca_certificate,
             dev_dummy_dcap,
+            listen_addr_healthcheck,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
                 .unwrap_or(&target_addr)
                 .to_string();
+
+            if let Some(listen_addr_healthcheck) = listen_addr_healthcheck {
+                health_check::server(listen_addr_healthcheck).await?;
+            }
 
             let tls_cert_and_chain = if let Some(private_key) = tls_private_key_path {
                 Some(load_tls_cert_and_key(
@@ -254,7 +260,12 @@ async fn main() -> anyhow::Result<()> {
             client_auth,
             server_attestation_type,
             dev_dummy_dcap,
+            listen_addr_healthcheck,
         } => {
+            if let Some(listen_addr_healthcheck) = listen_addr_healthcheck {
+                health_check::server(listen_addr_healthcheck).await?;
+            }
+
             let tls_cert_and_chain =
                 load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
 
