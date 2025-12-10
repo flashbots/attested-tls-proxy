@@ -159,6 +159,8 @@ pub enum MeasurementFormatError {
     BadLength,
     #[error("TDX quote register index must be in the ranger 0-3")]
     BadRegisterIndex,
+    #[error("ParseInt: {0}")]
+    ParseInt(#[from] std::num::ParseIntError),
 }
 
 /// An accepted measurement value given in the measurements file
@@ -327,8 +329,7 @@ impl MeasurementPolicy {
 
         for measurement in measurements_simple {
             let attestation_type =
-                serde_json::from_value(serde_json::Value::String(measurement.attestation_type))
-                    .unwrap();
+                serde_json::from_value(serde_json::Value::String(measurement.attestation_type))?;
 
             if let Some(measurements) = measurement.measurements {
                 let multi_measurement = match attestation_type {
@@ -337,8 +338,10 @@ impl MeasurementPolicy {
                             .into_iter()
                             .map(|(index, entry)| {
                                 Ok((
-                                    index.parse().unwrap(),
-                                    hex::decode(entry.expected)?.try_into().unwrap(),
+                                    index.parse()?,
+                                    hex::decode(entry.expected)?
+                                        .try_into()
+                                        .map_err(|_| MeasurementFormatError::BadLength)?,
                                 ))
                             })
                             .collect::<Result<HashMap<u32, [u8; 32]>, MeasurementFormatError>>()?;
@@ -349,10 +352,12 @@ impl MeasurementPolicy {
                         measurements
                             .into_iter()
                             .map(|(index, entry)| {
-                                let index: u8 = index.parse().unwrap();
+                                let index: u8 = index.parse()?;
                                 Ok((
-                                    DcapMeasurementRegister::try_from(index).unwrap(),
-                                    hex::decode(entry.expected)?.try_into().unwrap(),
+                                    DcapMeasurementRegister::try_from(index)?,
+                                    hex::decode(entry.expected)?
+                                        .try_into()
+                                        .map_err(|_| MeasurementFormatError::BadLength)?,
                                 ))
                             })
                             .collect::<Result<
