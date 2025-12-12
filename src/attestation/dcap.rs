@@ -32,13 +32,18 @@ pub async fn verify_dcap_attestation(
 
     let ca = quote.ca()?;
     let fmspc = hex::encode_upper(quote.fmspc()?);
-    let collateral = get_collateral_for_fmspc(
+
+    #[allow(unused_mut)]
+    let mut collateral = get_collateral_for_fmspc(
         &pccs_url.clone().unwrap_or(PCS_URL.to_string()),
         fmspc,
         ca,
         false, // Indicates not SGX
     )
     .await?;
+
+    #[cfg(feature = "azure-v6-override")]
+    crate::attestation::azure::azure_v6_override(&mut collateral);
 
     let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
 
