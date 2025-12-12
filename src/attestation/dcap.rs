@@ -40,7 +40,8 @@ pub async fn verify_dcap_attestation(
     )
     .await?;
 
-    let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
+    let quote_verifier = dcap_qvl::verify::QuoteVerifier::new_prod();
+    let _verified_report = quote_verifier.verify(&input, &collateral, now)?;
 
     let measurements = MultiMeasurements::from_dcap_qvl_quote(&quote)?;
 
