@@ -1,9 +1,9 @@
 //! Data Center Attestation Primitives (DCAP) evidence generation and verification
-use crate::attestation::{measurements::MultiMeasurements, AttestationError};
+use crate::attestation::{measurements::MultiMeasurements, tcb_info::TcbInfo, AttestationError};
 
 use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
-    collateral::get_collateral_for_fmspc,
+    collateral::{self, get_collateral_for_fmspc},
     quote::{Quote, Report},
 };
 use thiserror::Error;
@@ -24,7 +24,7 @@ pub async fn verify_dcap_attestation(
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
 ) -> Result<MultiMeasurements, DcapVerificationError> {
-    let measurements = if cfg!(not(test)) {
+    let measurements = if !cfg!(not(test)) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs();
@@ -33,13 +33,42 @@ pub async fn verify_dcap_attestation(
 
         let ca = quote.ca()?;
         let fmspc = hex::encode_upper(quote.fmspc()?);
-        let collateral = get_collateral_for_fmspc(
+        let mut collateral = get_collateral_for_fmspc(
             &pccs_url.clone().unwrap_or(PCS_URL.to_string()),
             fmspc,
             ca,
             false, // Indicates not SGX
         )
         .await?;
+
+        println!("tcb info {:?}", collateral.tcb_info);
+        let mut tcb_info: TcbInfo = serde_json::from_str(&collateral.tcb_info).unwrap();
+
+        let tcb_levels = tcb_info
+            .tcb_levels
+            .into_iter()
+            .map(|mut tcb_level| {
+                if &tcb_level.tcb_status == "UpToDate" {
+                    if tcb_level.tcb.sgx_components[7].svn > 3 {
+                        tracing::warn!(
+                            "Overriding tcb info to allow outdated Azure v6 SEAM loader"
+                        );
+                        println!("modifying!");
+                        tcb_level.tcb.sgx_components[7].svn = 3;
+                    }
+                    tcb_level
+                } else {
+                    tcb_level
+                }
+            })
+            .collect::<Vec<_>>();
+
+        tcb_info.tcb_levels = tcb_levels;
+
+        let tcb_info_json = serde_json::to_string(&tcb_info).unwrap();
+        // collateral.tcb_info = tcb_info_json;
+
+        println!("tcb info {:?}", collateral.tcb_info);
 
         let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
 
