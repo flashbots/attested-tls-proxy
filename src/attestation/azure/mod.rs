@@ -13,6 +13,9 @@ use x509_parser::prelude::*;
 
 use crate::attestation::{dcap::verify_dcap_attestation, measurements::MultiMeasurements};
 
+#[cfg(feature = "azure-v6-override")]
+const AZURE_V6_BAD_FMSPC: &str = "90c06f000000";
+
 /// The attestation evidence payload that gets sent over the channel
 #[derive(Debug, Serialize, Deserialize)]
 struct AttestationDocument {
@@ -242,6 +245,39 @@ impl RsaPubKey {
             n: BigUint::from_bytes_be(&rsa_from_pkey.n().to_vec()),
             e: BigUint::from_bytes_be(&rsa_from_pkey.e().to_vec()),
         })
+    }
+}
+
+#[cfg(feature = "azure-v6-override")]
+pub fn azure_v6_override(collateral: &mut dcap_qvl::QuoteCollateralV3) {
+    use crate::attestation::tcb_info::TcbInfo;
+
+    let mut tcb_info: TcbInfo = serde_json::from_str(&collateral.tcb_info).unwrap();
+
+    if tcb_info.fmspc == AZURE_V6_BAD_FMSPC {
+        let tcb_levels = tcb_info
+            .tcb_levels
+            .into_iter()
+            .map(|mut tcb_level| {
+                if &tcb_level.tcb_status == "UpToDate" {
+                    if tcb_level.tcb.sgx_components[7].svn > 3 {
+                        tracing::warn!(
+                            "Overriding tcb info to allow outdated Azure v6 SEAM loader"
+                        );
+                        println!("modifying!");
+                        tcb_level.tcb.sgx_components[7].svn = 3;
+                    }
+                    tcb_level
+                } else {
+                    tcb_level
+                }
+            })
+            .collect::<Vec<_>>();
+
+        tcb_info.tcb_levels = tcb_levels;
+
+        let tcb_info_json = serde_json::to_string(&tcb_info).unwrap();
+        collateral.tcb_info = tcb_info_json;
     }
 }
 

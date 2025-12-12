@@ -1,9 +1,9 @@
 //! Data Center Attestation Primitives (DCAP) evidence generation and verification
-use crate::attestation::{measurements::MultiMeasurements, tcb_info::TcbInfo, AttestationError};
+use crate::attestation::{measurements::MultiMeasurements, AttestationError};
 
 use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
-    collateral::{self, get_collateral_for_fmspc},
+    collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
 };
 use thiserror::Error;
@@ -32,6 +32,8 @@ pub async fn verify_dcap_attestation(
 
     let ca = quote.ca()?;
     let fmspc = hex::encode_upper(quote.fmspc()?);
+
+    #[allow(unused_mut)]
     let mut collateral = get_collateral_for_fmspc(
         &pccs_url.clone().unwrap_or(PCS_URL.to_string()),
         fmspc,
@@ -39,6 +41,9 @@ pub async fn verify_dcap_attestation(
         false, // Indicates not SGX
     )
     .await?;
+
+    #[cfg(feature = "azure-v6-override")]
+    crate::attestation::azure::azure_v6_override(&mut collateral);
 
     let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
 

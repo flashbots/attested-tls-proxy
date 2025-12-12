@@ -54,5 +54,10 @@ rcgen = "0.14.5"
 tempfile = "3.23.0"
 
 [features]
-default = ["azure"]
+default = ["azure", "azure-v6-override"]
+
+# Adds support for Microsoft Azure attestation generation and verification
 azure = ["tss-esapi", "az-tdx-vtpm"]
+
+# Allows Azure's V6 instance outdated SEAM Loader
+azure-v6-override = ["azure"]
