@@ -24,71 +24,43 @@ pub async fn verify_dcap_attestation(
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
 ) -> Result<MultiMeasurements, DcapVerificationError> {
-    let measurements = if !cfg!(not(test)) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs();
-        let quote = Quote::parse(&input)?;
-        tracing::info!("Verifying DCAP attestation: {quote:?}");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let quote = Quote::parse(&input)?;
+    tracing::info!("Verifying DCAP attestation: {quote:?}");
 
-        let ca = quote.ca()?;
-        let fmspc = hex::encode_upper(quote.fmspc()?);
-        let mut collateral = get_collateral_for_fmspc(
-            &pccs_url.clone().unwrap_or(PCS_URL.to_string()),
-            fmspc,
-            ca,
-            false, // Indicates not SGX
-        )
-        .await?;
+    let ca = quote.ca()?;
+    let fmspc = hex::encode_upper(quote.fmspc()?);
+    let mut collateral = get_collateral_for_fmspc(
+        &pccs_url.clone().unwrap_or(PCS_URL.to_string()),
+        fmspc,
+        ca,
+        false, // Indicates not SGX
+    )
+    .await?;
 
-        println!("tcb info {:?}", collateral.tcb_info);
-        let mut tcb_info: TcbInfo = serde_json::from_str(&collateral.tcb_info).unwrap();
+    let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
 
-        let tcb_levels = tcb_info
-            .tcb_levels
-            .into_iter()
-            .map(|mut tcb_level| {
-                if &tcb_level.tcb_status == "UpToDate" {
-                    if tcb_level.tcb.sgx_components[7].svn > 3 {
-                        tracing::warn!(
-                            "Overriding tcb info to allow outdated Azure v6 SEAM loader"
-                        );
-                        println!("modifying!");
-                        tcb_level.tcb.sgx_components[7].svn = 3;
-                    }
-                    tcb_level
-                } else {
-                    tcb_level
-                }
-            })
-            .collect::<Vec<_>>();
+    let measurements = MultiMeasurements::from_dcap_qvl_quote(&quote)?;
 
-        tcb_info.tcb_levels = tcb_levels;
-
-        let tcb_info_json = serde_json::to_string(&tcb_info).unwrap();
-        // collateral.tcb_info = tcb_info_json;
-
-        println!("tcb info {:?}", collateral.tcb_info);
-
-        let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
-
-        let measurements = MultiMeasurements::from_dcap_qvl_quote(&quote)?;
-
-        if get_quote_input_data(quote.report) != expected_input_data {
-            return Err(DcapVerificationError::InputMismatch);
-        }
-        measurements
-    } else {
-        // In tests we use mock quotes which will fail to verify
-        let quote = tdx_quote::Quote::from_bytes(&input)?;
-        if quote.report_input_data() != expected_input_data {
-            return Err(DcapVerificationError::InputMismatch);
-        }
-
-        MultiMeasurements::from_tdx_quote(&quote)
-    };
+    if get_quote_input_data(quote.report) != expected_input_data {
+        return Err(DcapVerificationError::InputMismatch);
+    }
 
     Ok(measurements)
+}
+
+pub fn mock_verify_dcap(
+    input: Vec<u8>,
+    expected_input_data: [u8; 64],
+) -> Result<MultiMeasurements, DcapVerificationError> {
+    // In tests we use mock quotes which will fail to verify
+    let quote = tdx_quote::Quote::from_bytes(&input)?;
+    if quote.report_input_data() != expected_input_data {
+        return Err(DcapVerificationError::InputMismatch);
+    }
+    Ok(MultiMeasurements::from_tdx_quote(&quote))
 }
 
 /// Create a mock quote for testing on non-confidential hardware

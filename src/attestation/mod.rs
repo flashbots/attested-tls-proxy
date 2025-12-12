@@ -286,12 +286,19 @@ impl AttestationVerifier {
                 .await?
             }
             _ => {
-                dcap::verify_dcap_attestation(
-                    attestation_exchange_message.attestation,
-                    expected_input_data,
-                    self.pccs_url.clone(),
-                )
-                .await?
+                if cfg!(test) {
+                    dcap::mock_verify_dcap(
+                        attestation_exchange_message.attestation,
+                        expected_input_data,
+                    )?
+                } else {
+                    dcap::verify_dcap_attestation(
+                        attestation_exchange_message.attestation,
+                        expected_input_data,
+                        self.pccs_url.clone(),
+                    )
+                    .await?
+                }
             }
         };
 
