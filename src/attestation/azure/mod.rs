@@ -264,7 +264,6 @@ pub fn azure_v6_override(collateral: &mut dcap_qvl::QuoteCollateralV3) {
                         tracing::warn!(
                             "Overriding tcb info to allow outdated Azure v6 SEAM loader"
                         );
-                        println!("modifying!");
                         tcb_level.tcb.sgx_components[7].svn = 3;
                     }
                     tcb_level
