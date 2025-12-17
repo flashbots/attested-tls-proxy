@@ -90,10 +90,6 @@ impl ProxyServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
-        if attestation_verifier.has_remote_attestion() && !client_auth {
-            return Err(ProxyError::NoClientAuth);
-        }
-
         let mut server_config = if client_auth {
             let root_store =
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -349,12 +345,6 @@ impl ProxyClient {
         attestation_verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
     ) -> Result<Self, ProxyError> {
-        // If we will provide attestation, we must also use client auth
-        if attestation_generator.attestation_type != AttestationType::None && cert_and_key.is_none()
-        {
-            return Err(ProxyError::NoClientAuth);
-        }
-
         // If a remote CA cert was given, use it as the root store, otherwise use webpki_roots
         let root_store = match remote_certificate {
             Some(remote_certificate) => {
@@ -768,8 +758,6 @@ fn get_pki_hash_from_certificate_chain(
 /// An error when running a proxy client or server
 #[derive(Error, Debug)]
 pub enum ProxyError {
-    #[error("Client auth is required when the client is running in a CVM")]
-    NoClientAuth,
     #[error("Failed to get server ceritifcate")]
     NoCertificate,
     #[error("TLS: {0}")]
@@ -973,6 +961,77 @@ mod tests {
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
             Some(client_cert_chain),
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            // Accept two connections, then finish
+            proxy_client.accept().await.unwrap();
+            proxy_client.accept().await.unwrap();
+        });
+
+        let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+            .await
+            .unwrap();
+
+        // We expect no measurements from the server
+        let headers = res.headers();
+        assert!(headers.get(MEASUREMENT_HEADER).is_none());
+
+        let attestation_type = headers
+            .get(ATTESTATION_TYPE_HEADER)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(attestation_type, AttestationType::None.as_str());
+
+        let res_body = res.text().await.unwrap();
+
+        // The response body shows us what was in the request header (as the test http server
+        // handler puts them there)
+        let measurements =
+            MultiMeasurements::from_header_format(&res_body, AttestationType::DcapTdx).unwrap();
+        assert_eq!(measurements, mock_dcap_measurements());
+    }
+
+    // Server has no attestation, client has mock DCAP but no client auth
+    #[tokio::test]
+    async fn http_proxy_client_attestation_no_client_auth() {
+        let target_addr = example_http_service().await;
+
+        let (server_cert_chain, server_private_key) =
+            generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (server_config, client_config) =
+            generate_tls_config(server_cert_chain.clone(), server_private_key);
+
+        let proxy_server = ProxyServer::new_with_tls_config(
+            server_cert_chain,
+            server_config,
+            "127.0.0.1:0",
+            target_addr,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            // Accept one connection, then finish
+            proxy_server.accept().await.unwrap();
+        });
+
+        let proxy_client = ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0",
+            proxy_addr.to_string(),
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationVerifier::expect_none(),
+            None,
         )
         .await
         .unwrap();
