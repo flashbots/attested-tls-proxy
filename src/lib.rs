@@ -204,7 +204,7 @@ impl ProxyServer {
             None, // context
         )?;
 
-        let input_data = compute_report_input(&cert_chain, exporter)?;
+        let input_data = compute_report_input(Some(&cert_chain), exporter)?;
 
         // Get the TLS certficate chain of the client, if there is one
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
@@ -234,10 +234,7 @@ impl ProxyServer {
 
         // If we expect an attestaion from the client, verify it and get measurements
         let measurements = if attestation_verifier.has_remote_attestion() {
-            let remote_input_data = compute_report_input(
-                &remote_cert_chain.ok_or(ProxyError::NoClientAuth)?,
-                exporter,
-            )?;
+            let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
 
             attestation_verifier
                 .verify_attestation(remote_attestation_message, remote_input_data)
@@ -620,7 +617,7 @@ impl ProxyClient {
             .ok_or(ProxyError::NoCertificate)?
             .to_owned();
 
-        let remote_input_data = compute_report_input(&remote_cert_chain, exporter)?;
+        let remote_input_data = compute_report_input(Some(&remote_cert_chain), exporter)?;
 
         // Read a length prefixed attestation from the proxy-server
         let mut length_bytes = [0; 4];
@@ -640,8 +637,7 @@ impl ProxyClient {
 
         // If we are in a CVM, provide an attestation
         let attestation = if attestation_generator.attestation_type != AttestationType::None {
-            let local_input_data =
-                compute_report_input(&cert_chain.ok_or(ProxyError::NoClientAuth)?, exporter)?;
+            let local_input_data = compute_report_input(cert_chain.as_deref(), exporter)?;
             attestation_generator
                 .generate_attestation(local_input_data)
                 .await?
@@ -731,7 +727,7 @@ async fn get_tls_cert_with_config(
 
     let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
 
-    let remote_input_data = compute_report_input(&remote_cert_chain, exporter)?;
+    let remote_input_data = compute_report_input(Some(&remote_cert_chain), exporter)?;
 
     let _measurements = attestation_verifier
         .verify_attestation(remote_attestation_message, remote_input_data)
@@ -743,12 +739,14 @@ async fn get_tls_cert_with_config(
 /// Given a certificate chain and an exporter (session key material), build the quote input value
 /// SHA256(pki) || exporter
 pub fn compute_report_input(
-    cert_chain: &[CertificateDer<'_>],
+    cert_chain: Option<&[CertificateDer<'_>]>,
     exporter: [u8; 32],
 ) -> Result<[u8; 64], AttestationError> {
     let mut quote_input = [0u8; 64];
-    let pki_hash = get_pki_hash_from_certificate_chain(cert_chain)?;
-    quote_input[..32].copy_from_slice(&pki_hash);
+    if let Some(cert_chain) = cert_chain {
+        let pki_hash = get_pki_hash_from_certificate_chain(cert_chain)?;
+        quote_input[..32].copy_from_slice(&pki_hash);
+    }
     quote_input[32..].copy_from_slice(&exporter);
     Ok(quote_input)
 }
