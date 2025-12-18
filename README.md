@@ -159,7 +159,14 @@ This requires `openssl` to be installed.
 ./scripts/generate-cert.sh localhost 127.0.0.1
 ```
 
-3. Start a http server to try this out with, on 127.0.01:8000 `python3 -m http.server 8000`
+3. Start a http server to try this out with, on 127.0.01:8000 
+
+This requires `python3` to be installed.
+
+```
+python3 -m http.server 8000
+```
+
 4. Start a proxy-server:
 
 ```
@@ -196,6 +203,18 @@ curl 127.0.0.1:6000/README.md
 ```
 
 Assuming you started the python http server in the directory of this repository, this should print the contents of this README.
+
+Since we just wanted to make a single GET request here, we can make this process simpler but using the `attested-get` command:
+
+```
+cargo run -- attested-get \
+  --url-path README.md 
+  --tls-ca-certificate ca.crt \
+  --allowed-remote-attestation-type none \
+  localhost:7000
+```
+
+This should also print the README file. This should work even if the proxy-client from step 5 is not running.
 
 ## CLI differences from `cvm-reverse-proxy`
 
