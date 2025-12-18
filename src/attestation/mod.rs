@@ -2,6 +2,7 @@
 pub mod azure;
 pub mod dcap;
 pub mod measurements;
+pub mod tcb_info;
 
 use measurements::MultiMeasurements;
 use parity_scale_codec::{Decode, Encode};
