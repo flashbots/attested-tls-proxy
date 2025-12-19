@@ -121,7 +121,7 @@ Attestation exchange messages are formatted as follows:
 
 SCALE is used by parity/substrate and was chosen because it is simple and actually matches the formatting used in TDX quotes. So it was already used as a dependency (via the [`dcap-qvl`](https://docs.rs/dcap-qvl) crate).
 
-### Attestation Generation and Verification
+### Attestation Generation and Verification:
 
 Attestation input takes the form of a 64 byte array.
 
@@ -145,6 +145,77 @@ The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm
 
 This feature is enabled by default. For non-azure deployments you can compile without this requirement by specifying `--no-default-features`. But note that this is will disable both generation and verification of azure attestations.
 
+
+## Trying it out locally (without CVM attestation)
+
+This might help give an understanding of how it works.
+
+1. Make sure you have the tpm2 dependency (see above) - or compile with `--no-default-features`.
+2. Run the helper script to generate a mock certifcate authority and a TLS certificate for localhost signed by it.
+
+This requires `openssl` to be installed.
+ 
+```
+./scripts/generate-cert.sh localhost 127.0.0.1
+```
+
+3. Start a http server to try this out with, on 127.0.01:8000 
+
+This requires `python3` to be installed.
+
+```
+python3 -m http.server 8000
+```
+
+4. Start a proxy-server:
+
+```
+cargo run -- server \
+  --listen-addr 127.0.0.1:7000 \
+  --server-attestation-type none \
+  --allowed-remote-attestation-type none \
+  --tls-private-key-path server.key \
+  --tls-certificate-path server.crt \
+  127.0.0.1:8000
+```
+
+The final positional argument is the target address - in this case the python server we started in step 3.
+Note that you must specify that you accept 'none' as the remote attestation type.
+
+5. Start a proxy-client:
+
+```
+cargo run -- client \
+  --listen-addr 127.0.0.1:6000 \
+  --client-attestation-type none \
+  --allowed-remote-attestation-type none \
+  --tls-ca-certificate ca.crt \
+  localhost:7000
+```
+
+The final positional argument is the hostname and port of the proxy-server.
+Note that we specified a CA root of trust. If you use a standard certificate authority you do not need this argument.
+
+6. Make a HTTP request to the proxy-client:
+
+```
+curl 127.0.0.1:6000/README.md
+```
+
+Assuming you started the python http server in the directory of this repository, this should print the contents of this README.
+
+Since we just wanted to make a single GET request here, we can make this process simpler but using the `attested-get` command:
+
+```
+cargo run -- attested-get \
+  --url-path README.md 
+  --tls-ca-certificate ca.crt \
+  --allowed-remote-attestation-type none \
+  localhost:7000
+```
+
+This should also print the README file. This should work even if the proxy-client from step 5 is not running.
+
 ## CLI differences from `cvm-reverse-proxy`
 
 This aims to have a similar command line interface to `cvm-reverse-proxy` but there are some differences:
@@ -152,3 +223,4 @@ This aims to have a similar command line interface to `cvm-reverse-proxy` but th
 - The measurements file path is specified with `--measurements-file` rather than `--server-measurements` or `--client-measurements`.
 - If no measurements file is specified, `--allowed-remote-attestation-type` must be given.
 - `--log-dcap-quote` logs all attestation data (not only DCAP), but [currently] only remote attestation data, not locally-generated data.
+
