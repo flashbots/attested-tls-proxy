@@ -46,7 +46,7 @@ enum CliCommand {
         listen_addr: SocketAddr,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
-        /// Type of attestation to present (dafaults to none)
+        /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
         client_attestation_type: Option<String>,
@@ -74,7 +74,7 @@ enum CliCommand {
         listen_addr: SocketAddr,
         /// Socket address of the target service to forward traffic to
         target_addr: SocketAddr,
-        /// Type of attestation to present (dafaults to none)
+        /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
         server_attestation_type: Option<String>,
@@ -222,10 +222,6 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
-            let client_attestation_type: AttestationType = serde_json::from_value(
-                serde_json::Value::String(client_attestation_type.unwrap_or("none".to_string())),
-            )?;
-
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
                     load_certs_pem(remote_cert_filename)?
@@ -237,7 +233,8 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let client_attestation_generator =
-                AttestationGenerator::new(client_attestation_type, dev_dummy_dcap)?;
+                AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
+                    .await?;
 
             let client = ProxyClient::new(
                 tls_cert_and_chain,
@@ -272,12 +269,9 @@ async fn main() -> anyhow::Result<()> {
             let tls_cert_and_chain =
                 load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
 
-            let server_attestation_type: AttestationType = serde_json::from_value(
-                serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
-            )?;
-
             let local_attestation_generator =
-                AttestationGenerator::new(server_attestation_type, dev_dummy_dcap)?;
+                AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)
+                    .await?;
 
             let server = ProxyServer::new(
                 tls_cert_and_chain,
