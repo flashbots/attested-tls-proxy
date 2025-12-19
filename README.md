@@ -121,7 +121,7 @@ Attestation exchange messages are formatted as follows:
 
 SCALE is used by parity/substrate and was chosen because it is simple and actually matches the formatting used in TDX quotes. So it was already used as a dependency (via the [`dcap-qvl`](https://docs.rs/dcap-qvl) crate).
 
-### Attestation Generation and Verification:
+### Attestation Generation and Verification
 
 Attestation input takes the form of a 64 byte array.
 
@@ -223,4 +223,70 @@ This aims to have a similar command line interface to `cvm-reverse-proxy` but th
 - The measurements file path is specified with `--measurements-file` rather than `--server-measurements` or `--client-measurements`.
 - If no measurements file is specified, `--allowed-remote-attestation-type` must be given.
 - `--log-dcap-quote` logs all attestation data (not only DCAP), but [currently] only remote attestation data, not locally-generated data.
+
+
+## Docker
+
+### Building the Image
+
+```bash
+docker build -t attested-tls-proxy .
+
+# With custom features (e.g., without azure/TPM):
+docker build --build-arg FEATURES="" -t attested-tls-proxy .
+```
+
+**Note for Apple Silicon (M1-M4) Mac users:** When building on ARM Macs, the Docker build will automatically compile without Azure/TPM features (`--no-default-features`) because the TPM libraries cannot be cross-compiled. For production builds with full Azure support, use an x86_64 system.
+
+### Running
+
+The same image supports all subcommands (server, client, get-tls-cert, etc.):
+
+```bash
+# Show help
+docker run --rm attested-tls-proxy --help
+
+# Run as server
+docker run --rm attested-tls-proxy server \
+  --listen-addr 0.0.0.0:443 \
+  --target-addr 127.0.0.1:8080 \
+  --tls-private-key-path /path/to/key.pem \
+  --tls-certificate-path /path/to/cert.pem \
+  --allowed-remote-attestation-type none
+
+# Run as client
+docker run --rm attested-tls-proxy client \
+  --listen-addr 0.0.0.0:8080 \
+  target-server:443 \
+  --allowed-remote-attestation-type none
+```
+
+### Testing with Docker Compose
+
+A `docker-compose.yml` is provided to test the full proxy chain:
+
+1. **Generate test certificates:**
+   ```bash
+   mkdir -p certs && cd certs
+   ../scripts/generate-cert.sh proxy-server 127.0.0.1
+   # Convert key to PKCS#8 format (required by the proxy)
+   openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in server.key -out server.pkcs8.key
+   mv server.pkcs8.key server.key
+   ```
+
+2. **Start all services:**
+   ```bash
+   docker compose up --build
+   ```
+
+3. **Test the proxy:**
+   ```bash
+   # Test via proxy-client (HTTP)
+   curl http://localhost:8080
+   # Should return the nginx welcome page
+
+   # Test TLS directly to proxy-server
+   openssl s_client -connect localhost:8443 -CAfile certs/ca.crt -servername proxy-server
+   # Should show "Verify return code: 0 (ok)"
+   ```
 

@@ -1,0 +1,53 @@
+services:
+  # Simple HTTP backend
+  backend:
+    image: nginx:alpine
+    networks:
+      testnet:
+        ipv4_address: 172.28.0.10
+
+  # Proxy server - connects to backend, accepts TLS from client
+  proxy-server:
+    build: .
+    command:
+      - server
+      - --listen-addr=0.0.0.0:8443
+      - --tls-private-key-path=/certs/server.key
+      - --tls-certificate-path=/certs/server.crt
+      - --allowed-remote-attestation-type=none
+      - "172.28.0.10:80"
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "8443:8443"
+    depends_on:
+      - backend
+    networks:
+      testnet:
+        ipv4_address: 172.28.0.11
+
+  # Proxy client - accepts HTTP, forwards to proxy-server over TLS
+  proxy-client:
+    build: .
+    command:
+      - client
+      - --listen-addr=0.0.0.0:8080
+      - proxy-server:8443
+      - --tls-ca-certificate=/certs/ca.crt
+      - --allowed-remote-attestation-type=none
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - proxy-server
+    networks:
+      testnet:
+
+networks:
+  testnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
