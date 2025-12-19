@@ -28,7 +28,7 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
-    ca-certificates libssl3 libtss2-esys-3.0.2-0 \
+    ca-certificates libssl3 libtss2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/attested-tls-proxy /usr/local/bin/
