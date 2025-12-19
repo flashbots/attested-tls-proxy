@@ -120,6 +120,7 @@ impl MultiMeasurements {
         ])))
     }
 
+    #[cfg(test)]
     pub fn from_tdx_quote(quote: &tdx_quote::Quote) -> Self {
         Self::Dcap(HashMap::from([
             (DcapMeasurementRegister::MRTD, quote.mrtd()),
