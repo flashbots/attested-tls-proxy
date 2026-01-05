@@ -1,5 +1,4 @@
-# Heavily inspired by Lighthouse: https://github.com/sigp/lighthouse/blob/stable/Makefile
-# and Reth: https://github.com/paradigmxyz/reth/blob/main/Makefile
+# Heavily inspired by rbuilder: https://github.com/flashbots/rbuilder/blob/develop/Makefile
 .DEFAULT_GOAL := help
 
 GIT_VER ?= $(shell git describe --tags --always --dirty="-dev")
@@ -111,9 +110,3 @@ fmt: ## Format the code
 	cargo fmt
 	cargo fix --allow-staged
 	cargo clippy --features "$(FEATURES)" --fix --allow-staged
-
-.PHONY: validate-config
-validate-config: ## Validate the correctness of the configuration files
-	@for CONFIG in $(shell ls config-*.toml); do \
-		cargo run --bin validate-config -- --config $$CONFIG; \
-	done
