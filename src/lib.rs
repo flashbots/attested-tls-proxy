@@ -428,14 +428,16 @@ impl ProxyClient {
         )>(1024);
 
         // Connect to the proxy server and provide / verify attestation
-        let (mut sender, mut measurements, mut remote_attestation_type) = Self::setup_connection(
-            connector.clone(),
-            target.clone(),
-            cert_chain.clone(),
-            attestation_generator.clone(),
-            attestation_verifier.clone(),
-        )
-        .await?;
+        let (mut sender, mut measurements, mut remote_attestation_type) =
+            Self::setup_connection_with_backoff(
+                connector.clone(),
+                target.clone(),
+                cert_chain.clone(),
+                attestation_generator.clone(),
+                attestation_verifier.clone(),
+                true,
+            )
+            .await?;
 
         tokio::spawn(async move {
             // Read an incoming request from the channel (from the source client)
@@ -490,8 +492,10 @@ impl ProxyClient {
                             cert_chain.clone(),
                             attestation_generator.clone(),
                             attestation_verifier.clone(),
+                            false,
                         )
-                        .await;
+                        .await
+                        .expect("Function will not return an error when should_bail is false");
                 }
             }
         });
@@ -562,7 +566,8 @@ impl ProxyClient {
         cert_chain: Option<Vec<CertificateDer<'static>>>,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
-    ) -> (Http2Sender, Option<MultiMeasurements>, AttestationType) {
+        should_bail: bool,
+    ) -> Result<(Http2Sender, Option<MultiMeasurements>, AttestationType), ProxyError> {
         let mut delay = Duration::from_secs(1);
         let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
 
@@ -577,14 +582,19 @@ impl ProxyClient {
             .await
             {
                 Ok(output) => {
-                    return output;
+                    return Ok(output);
                 }
                 Err(e) => {
-                    warn!("Reconnect failed: {e}. Retrying in {:#?}...", delay);
-                    tokio::time::sleep(delay).await;
+                    if matches!(e, ProxyError::Io(_)) || !should_bail {
+                        warn!("Reconnect failed: {e}. Retrying in {:#?}...", delay);
+                        tokio::time::sleep(delay).await;
 
-                    // increase delay for next time (exponential), but clamp to max_delay
-                    delay = std::cmp::min(delay * 2, max_delay);
+                        // increase delay for next time (exponential), but clamp to max_delay
+                        delay = std::cmp::min(delay * 2, max_delay);
+                    } else {
+                        // If we get a non-IO error and should_bail is true, bail
+                        return Err(e);
+                    }
                 }
             }
         }
