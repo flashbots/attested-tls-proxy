@@ -1,4 +1,3 @@
-/target
-remote-cert.crt
+/target/
+certs/
 /quotes
-ca.crt
