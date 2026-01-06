@@ -83,5 +83,4 @@ systemd-units = { enable = false, start = false, unit-name = "attested-tls-proxy
 inherits = "release"
 lto = "thin"
 panic = "abort"
-codegen-units = 1
 incremental = false
