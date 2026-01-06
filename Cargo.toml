@@ -67,7 +67,7 @@ priority = "optional"
 maintainer-scripts = "pkg/debian"
 assets = [
     [
-        "target/release/**/attested-tls-proxy",
+        "target/reproducible/attested-tls-proxy",
         "usr/bin/",
         "755",
     ],
