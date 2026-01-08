@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use x509_parser::prelude::*;
 
-use crate::attestation::{dcap::verify_dcap_attestation, measurements::MultiMeasurements};
+use crate::attestation::{
+    dcap::verify_dcap_attestation_with_given_timestamp, measurements::MultiMeasurements,
+};
 
 /// The attestation evidence payload that gets sent over the channel
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,8 +110,13 @@ async fn verify_azure_attestation_with_given_timestamp(
 
     // Do DCAP verification
     let tdx_quote_bytes = BASE64_URL_SAFE.decode(attestation_document.tdx_quote_base64)?;
-    let _dcap_measurements =
-        verify_dcap_attestation(tdx_quote_bytes, expected_tdx_input_data, pccs_url).await?;
+    let _dcap_measurements = verify_dcap_attestation_with_given_timestamp(
+        tdx_quote_bytes,
+        expected_tdx_input_data,
+        pccs_url,
+        now,
+    )
+    .await?;
 
     let hcl_ak_pub = hcl_report.ak_pub()?;
 

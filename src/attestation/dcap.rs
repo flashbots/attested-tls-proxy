@@ -11,6 +11,10 @@ use thiserror::Error;
 /// For fetching collateral directly from Intel, if no PCCS is specified
 pub const PCS_URL: &str = "https://api.trustedservices.intel.com";
 
+/// Allowed mask when validating XFAM values
+/// FP, SSE, AVX, AVX512, plus reserved bit observed on GCP
+const ALLOWED_XFAM_MASK: [u8; 8] = [0xe7, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00];
+
 /// Quote generation using configfs_tsm
 pub async fn create_dcap_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, AttestationError> {
     let quote = generate_quote(input_data)?;
@@ -32,7 +36,7 @@ pub async fn verify_dcap_attestation(
 }
 
 /// Allows the timestamp to be given, making it possible to test with existing attestations
-async fn verify_dcap_attestation_with_given_timestamp(
+pub async fn verify_dcap_attestation_with_given_timestamp(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
@@ -50,6 +54,14 @@ async fn verify_dcap_attestation_with_given_timestamp(
         false, // Indicates not SGX
     )
     .await?;
+
+    validate_xfam(
+        quote
+            .report
+            .as_td10()
+            .ok_or(DcapVerificationError::SgxNotSupported)?
+            .xfam,
+    )?;
 
     let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
 
@@ -105,6 +117,23 @@ pub fn get_quote_input_data(report: Report) -> [u8; 64] {
     }
 }
 
+/// Validate an XFAM value against policy mask
+fn validate_xfam(xfam: [u8; 8]) -> Result<(), DcapVerificationError> {
+    tracing::debug!("Validating XFAM value: {xfam:?}");
+    for (i, (&xfam_byte, &allowed_byte)) in xfam.iter().zip(ALLOWED_XFAM_MASK.iter()).enumerate() {
+        let disallowed_bits = allowed_byte & !xfam_byte;
+
+        if disallowed_bits != 0 {
+            return Err(DcapVerificationError::InvalidXfam {
+                byte_index: i,
+                disallowed_bits,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 /// An error when verifying a DCAP attestation
 #[derive(Error, Debug)]
 pub enum DcapVerificationError {
@@ -119,6 +148,11 @@ pub enum DcapVerificationError {
     #[cfg(test)]
     #[error("Quote parse: {0}")]
     QuoteParse(#[from] tdx_quote::QuoteParseError),
+    #[error("Invalid XFAM at index: {byte_index} value: {disallowed_bits}")]
+    InvalidXfam {
+        byte_index: usize,
+        disallowed_bits: u8,
+    },
 }
 
 #[cfg(test)]
@@ -168,5 +202,28 @@ mod tests {
         .unwrap();
 
         measurement_policy.check_measurement(&measurements).unwrap();
+    }
+
+    #[test]
+    fn test_validate_xfam() {
+        // The mask itself
+        assert!(validate_xfam(ALLOWED_XFAM_MASK).is_ok());
+
+        // The value from a quote from Azure
+        assert!(validate_xfam([231, 24, 6, 0, 0, 0, 0, 0]).is_ok());
+
+        // The value from a quote from GCP
+        assert!(validate_xfam([231, 0, 6, 0, 0, 0, 0, 0]).is_ok());
+
+        // Remove one allowed bit from byte 0 (0xe7 -> 0xe6 clears bit0)
+        let xfam = [0xe6, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+        assert!(matches!(
+            validate_xfam(xfam).unwrap_err(),
+            DcapVerificationError::InvalidXfam {
+                byte_index: 0,
+                disallowed_bits: 0x01
+            }
+        ));
     }
 }
