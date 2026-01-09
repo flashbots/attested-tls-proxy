@@ -5,7 +5,6 @@ use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
-use tracing::error;
 use x509_parser::parse_x509_certificate;
 
 use std::num::TryFromIntError;
