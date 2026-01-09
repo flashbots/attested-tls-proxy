@@ -38,9 +38,10 @@ pub struct TlsCertAndKey {
 }
 
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
+#[derive(Clone)]
 pub struct AttestedTlsServer {
     /// The underlying TCP listener
-    listener: TcpListener,
+    pub listener: Arc<TcpListener>,
     /// Quote generation type to use (including none)
     attestation_generator: AttestationGenerator,
     /// Verifier for remote attestation (including none)
@@ -102,7 +103,7 @@ impl AttestedTlsServer {
         let listener = TcpListener::bind(local).await?;
 
         Ok(Self {
-            listener,
+            listener: listener.into(),
             attestation_generator,
             attestation_verifier,
             acceptor,
@@ -110,7 +111,7 @@ impl AttestedTlsServer {
         })
     }
 
-    /// Accept an incoming connection and handle it in a seperate task
+    /// Accept an incoming connection and do an attestation exchange
     pub async fn accept(
         &self,
     ) -> Result<
@@ -123,18 +124,7 @@ impl AttestedTlsServer {
     > {
         let (inbound, _client_addr) = self.listener.accept().await?;
 
-        let acceptor = self.acceptor.clone();
-        let cert_chain = self.cert_chain.clone();
-        let attestation_generator = self.attestation_generator.clone();
-        let attestation_verifier = self.attestation_verifier.clone();
-        Ok(Self::handle_connection(
-            inbound,
-            acceptor,
-            cert_chain,
-            attestation_generator,
-            attestation_verifier,
-        )
-        .await?)
+        self.handle_connection(inbound).await
     }
 
     /// Helper to get the socket address of the underlying TCP listener
@@ -143,12 +133,13 @@ impl AttestedTlsServer {
     }
 
     /// Handle an incoming connection from a proxy-client
-    async fn handle_connection(
+    pub async fn handle_connection(
+        &self,
         inbound: TcpStream,
-        acceptor: TlsAcceptor,
-        cert_chain: Vec<CertificateDer<'static>>,
-        attestation_generator: AttestationGenerator,
-        attestation_verifier: AttestationVerifier,
+        // acceptor: TlsAcceptor,
+        // cert_chain: Vec<CertificateDer<'static>>,
+        // attestation_generator: AttestationGenerator,
+        // attestation_verifier: AttestationVerifier,
     ) -> Result<
         (
             tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
@@ -160,7 +151,7 @@ impl AttestedTlsServer {
         tracing::debug!("attested-tls-server accepted connection");
 
         // Do TLS handshake
-        let mut tls_stream = acceptor.accept(inbound).await?;
+        let mut tls_stream = self.acceptor.accept(inbound).await?;
         let (_io, connection) = tls_stream.get_ref();
 
         // Ensure that we agreed a protocol
@@ -176,13 +167,14 @@ impl AttestedTlsServer {
             None, // context
         )?;
 
-        let input_data = compute_report_input(Some(&cert_chain), exporter)?;
+        let input_data = compute_report_input(Some(&self.cert_chain), exporter)?;
 
         // Get the TLS certficate chain of the client, if there is one
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
         // If we are in a CVM, generate an attestation
-        let attestation = attestation_generator
+        let attestation = self
+            .attestation_generator
             .generate_attestation(input_data)
             .await?
             .encode();
@@ -205,10 +197,10 @@ impl AttestedTlsServer {
         let remote_attestation_type = remote_attestation_message.attestation_type;
 
         // If we expect an attestaion from the client, verify it and get measurements
-        let measurements = if attestation_verifier.has_remote_attestion() {
+        let measurements = if self.attestation_verifier.has_remote_attestion() {
             let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
 
-            attestation_verifier
+            self.attestation_verifier
                 .verify_attestation(remote_attestation_message, remote_input_data)
                 .await?
         } else {
@@ -220,9 +212,8 @@ impl AttestedTlsServer {
 }
 
 /// A proxy client which forwards http traffic to a proxy-server
+#[derive(Clone)]
 pub struct AttestedTlsClient {
-    /// The underlying TCP listener
-    listener: TcpListener,
     /// The connector for making TLS connections with out configuration
     connector: TlsConnector,
     /// Quote generation type to use (including none)
@@ -234,9 +225,10 @@ pub struct AttestedTlsClient {
 }
 
 impl std::fmt::Debug for AttestedTlsClient {
+    // TODO add other fields
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AttestedTlsClient")
-            .field("listener", &self.listener)
+            .field("attestation_verifier", &self.attestation_verifier)
             .finish()
     }
 }
@@ -245,7 +237,6 @@ impl AttestedTlsClient {
     /// Start with optional TLS client auth
     pub async fn new(
         cert_and_key: Option<TlsCertAndKey>,
-        address: impl ToSocketAddrs,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
@@ -281,7 +272,6 @@ impl AttestedTlsClient {
 
         Self::new_with_tls_config(
             client_config.into(),
-            address,
             attestation_generator,
             attestation_verifier,
             cert_and_key.map(|c| c.cert_chain),
@@ -291,30 +281,21 @@ impl AttestedTlsClient {
 
     /// Create a new proxy client with given TLS configuration
     ///
-    /// This is private as it allows dangerous configuration but is used in tests
-    async fn new_with_tls_config(
+    /// This not fully public as it allows dangerous configuration but is used in tests
+    pub(crate) async fn new_with_tls_config(
         client_config: Arc<ClientConfig>,
-        local: impl ToSocketAddrs,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, AttestedTlsError> {
-        // Setup TCP server and TLS client
-        let listener = TcpListener::bind(local).await?;
         let connector = TlsConnector::from(client_config.clone());
 
         Ok(Self {
-            listener,
             connector,
             attestation_generator,
             attestation_verifier,
             cert_chain,
         })
-    }
-
-    /// Helper to return the local socket address from the underlying TCP listener
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.listener.local_addr()
     }
 
     /// Connect to the attested-tls-server, do TLS handshake and remote attestation
@@ -425,7 +406,7 @@ pub async fn get_tls_cert(
     get_tls_cert_with_config(server_name, attestation_verifier, client_config.into()).await
 }
 
-async fn get_tls_cert_with_config(
+pub(crate) async fn get_tls_cert_with_config(
     server_name: String,
     attestation_verifier: AttestationVerifier,
     client_config: Arc<ClientConfig>,

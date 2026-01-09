@@ -8,9 +8,9 @@ use tracing::level_filters::LevelFilter;
 use attested_tls_proxy::{
     attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
     attested_get::attested_get,
-    attested_tls::TlsCertAndKey,
+    attested_tls::{get_tls_cert, TlsCertAndKey},
     file_server::attested_file_server,
-    get_tls_cert, health_check, AttestationGenerator, ProxyClient, ProxyServer,
+    health_check, AttestationGenerator, ProxyClient, ProxyServer,
 };
 
 #[derive(Parser, Debug, Clone)]
