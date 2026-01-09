@@ -5,7 +5,7 @@ pub mod file_server;
 pub mod health_check;
 
 pub use attestation::AttestationGenerator;
-use attestation::{measurements::MultiMeasurements, AttestationError, AttestationType};
+
 use bytes::Bytes;
 use http::HeaderValue;
 use http_body_util::{combinators::BoxBody, BodyExt};
@@ -27,22 +27,21 @@ use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::RootCertStore;
 use tokio_rustls::{
     rustls::{ClientConfig, ServerConfig},
-    TlsAcceptor, TlsConnector,
+    TlsConnector,
 };
 
-use crate::attestation::{AttestationExchangeMessage, AttestationVerifier};
-
-/// This makes it possible to add breaking protocol changes and provide backwards compatibility.
-/// When adding more supported versions, note that ordering is important. ALPN will pick the first
-/// protocol which both parties support - so newer supported versions should come first.
-pub const SUPPORTED_ALPN_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"flashbots-ratls/1"];
-
-/// The label used when exporting key material from a TLS session
-const EXPORTER_LABEL: &[u8; 24] = b"EXPORTER-Channel-Binding";
+use crate::attestation::{
+    measurements::MultiMeasurements, AttestationError, AttestationExchangeMessage, AttestationType,
+    AttestationVerifier,
+};
+use crate::attested_tls::{
+    AttestedTlsError, AttestedTlsServer, TlsCertAndKey, EXPORTER_LABEL,
+    SUPPORTED_ALPN_PROTOCOL_VERSIONS,
+};
 
 /// The header name for giving attestation type
 const ATTESTATION_TYPE_HEADER: &str = "X-Flashbots-Attestation-Type";
@@ -59,26 +58,9 @@ type RequestWithResponseSender = (
 );
 type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
 
-/// TLS Credentials
-pub struct TlsCertAndKey {
-    /// Der-encoded TLS certificate chain
-    pub cert_chain: Vec<CertificateDer<'static>>,
-    /// Der-encoded TLS private key
-    pub key: PrivateKeyDer<'static>,
-}
-
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer {
-    /// The underlying TCP listener
-    listener: TcpListener,
-    /// Quote generation type to use (including none)
-    attestation_generator: AttestationGenerator,
-    /// Verifier for remote attestation (including none)
-    attestation_verifier: AttestationVerifier,
-    /// The certificate chain
-    cert_chain: Vec<CertificateDer<'static>>,
-    /// For accepting TLS connections
-    acceptor: TlsAcceptor,
+    attested_tls_server: AttestedTlsServer,
     /// The address of the target service we are proxying to
     target: SocketAddr,
 }
@@ -133,38 +115,30 @@ impl ProxyServer {
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
-        let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
-        let listener = TcpListener::bind(local).await?;
-
-        Ok(Self {
-            listener,
+        let attested_tls_server = AttestedTlsServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            local,
             attestation_generator,
             attestation_verifier,
-            acceptor,
+        )
+        .await?;
+
+        Ok(Self {
+            attested_tls_server,
             target,
-            cert_chain,
         })
     }
 
     /// Accept an incoming connection and handle it in a seperate task
     pub async fn accept(&self) -> Result<(), ProxyError> {
-        let (inbound, _client_addr) = self.listener.accept().await?;
+        let target = self.target.clone();
+        let (tls_stream, measurements, attestation_type) =
+            self.attested_tls_server.accept().await?;
 
-        let acceptor = self.acceptor.clone();
-        let target = self.target;
-        let cert_chain = self.cert_chain.clone();
-        let attestation_generator = self.attestation_generator.clone();
-        let attestation_verifier = self.attestation_verifier.clone();
         tokio::spawn(async move {
-            if let Err(err) = Self::handle_connection(
-                inbound,
-                acceptor,
-                target,
-                cert_chain,
-                attestation_generator,
-                attestation_verifier,
-            )
-            .await
+            if let Err(err) =
+                Self::handle_connection(tls_stream, measurements, attestation_type, target).await
             {
                 warn!("Failed to handle connection: {err}");
             }
@@ -175,73 +149,17 @@ impl ProxyServer {
 
     /// Helper to get the socket address of the underlying TCP listener
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.listener.local_addr()
+        self.attested_tls_server.local_addr()
     }
 
     /// Handle an incoming connection from a proxy-client
     async fn handle_connection(
-        inbound: TcpStream,
-        acceptor: TlsAcceptor,
+        tls_stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+        measurements: Option<MultiMeasurements>,
+        remote_attestation_type: AttestationType,
         target: SocketAddr,
-        cert_chain: Vec<CertificateDer<'static>>,
-        attestation_generator: AttestationGenerator,
-        attestation_verifier: AttestationVerifier,
     ) -> Result<(), ProxyError> {
         tracing::debug!("proxy-server accepted connection");
-
-        // Do TLS handshake
-        let mut tls_stream = acceptor.accept(inbound).await?;
-        let (_io, connection) = tls_stream.get_ref();
-
-        // Ensure that we agreed a protocol
-        let _negotiated_protocol = connection.alpn_protocol().ok_or(ProxyError::AlpnFailed)?;
-
-        // Compute an exporter unique to the session
-        let mut exporter = [0u8; 32];
-        connection.export_keying_material(
-            &mut exporter,
-            EXPORTER_LABEL,
-            None, // context
-        )?;
-
-        let input_data = compute_report_input(Some(&cert_chain), exporter)?;
-
-        // Get the TLS certficate chain of the client, if there is one
-        let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
-
-        // If we are in a CVM, generate an attestation
-        let attestation = attestation_generator
-            .generate_attestation(input_data)
-            .await?
-            .encode();
-
-        // Write our attestation to the channel, with length prefix
-        let attestation_length_prefix = length_prefix(&attestation);
-        tls_stream.write_all(&attestation_length_prefix).await?;
-        tls_stream.write_all(&attestation).await?;
-
-        // Now read a length-prefixed attestation from the remote peer
-        // In the case of no client attestation this will be zero bytes
-        let mut length_bytes = [0; 4];
-        tls_stream.read_exact(&mut length_bytes).await?;
-        let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
-
-        let mut buf = vec![0; length];
-        tls_stream.read_exact(&mut buf).await?;
-
-        let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
-        let remote_attestation_type = remote_attestation_message.attestation_type;
-
-        // If we expect an attestaion from the client, verify it and get measurements
-        let measurements = if attestation_verifier.has_remote_attestion() {
-            let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
-
-            attestation_verifier
-                .verify_attestation(remote_attestation_message, remote_input_data)
-                .await?
-        } else {
-            None
-        };
 
         // Setup an HTTP server
         let http = hyper::server::conn::http2::Builder::new(TokioExecutor);
@@ -819,6 +737,8 @@ pub enum ProxyError {
     Serialization(#[from] parity_scale_codec::Error),
     #[error("Protocol negotiation failed - remote peer does not support this protocol")]
     AlpnFailed,
+    #[error("Attested TLS: {0}")]
+    AttestedTls(#[from] AttestedTlsError),
 }
 
 impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {

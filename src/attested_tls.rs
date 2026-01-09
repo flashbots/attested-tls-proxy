@@ -5,7 +5,7 @@ use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
-use tracing::{error, warn};
+use tracing::error;
 use x509_parser::parse_x509_certificate;
 
 use std::num::TryFromIntError;
@@ -27,7 +27,7 @@ use crate::attestation::{AttestationExchangeMessage, AttestationVerifier};
 pub const SUPPORTED_ALPN_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"flashbots-ratls/1"];
 
 /// The label used when exporting key material from a TLS session
-const EXPORTER_LABEL: &[u8; 24] = b"EXPORTER-Channel-Binding";
+pub(crate) const EXPORTER_LABEL: &[u8; 24] = b"EXPORTER-Channel-Binding";
 
 /// TLS Credentials
 pub struct TlsCertAndKey {
@@ -90,8 +90,8 @@ impl AttestedTlsServer {
 
     /// Start with preconfigured TLS
     ///
-    /// This is not public as it allows dangerous configuration
-    async fn new_with_tls_config(
+    /// This is not fully public as it allows dangerous configuration
+    pub(crate) async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
         server_config: Arc<ServerConfig>,
         local: impl ToSocketAddrs,
@@ -111,28 +111,30 @@ impl AttestedTlsServer {
     }
 
     /// Accept an incoming connection and handle it in a seperate task
-    pub async fn accept(&self) -> Result<(), AttestedTlsError> {
+    pub async fn accept(
+        &self,
+    ) -> Result<
+        (
+            tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+            Option<MultiMeasurements>,
+            AttestationType,
+        ),
+        AttestedTlsError,
+    > {
         let (inbound, _client_addr) = self.listener.accept().await?;
 
         let acceptor = self.acceptor.clone();
         let cert_chain = self.cert_chain.clone();
         let attestation_generator = self.attestation_generator.clone();
         let attestation_verifier = self.attestation_verifier.clone();
-        tokio::spawn(async move {
-            if let Err(err) = Self::handle_connection(
-                inbound,
-                acceptor,
-                cert_chain,
-                attestation_generator,
-                attestation_verifier,
-            )
-            .await
-            {
-                warn!("Failed to handle connection: {err}");
-            }
-        });
-
-        Ok(())
+        Ok(Self::handle_connection(
+            inbound,
+            acceptor,
+            cert_chain,
+            attestation_generator,
+            attestation_verifier,
+        )
+        .await?)
     }
 
     /// Helper to get the socket address of the underlying TCP listener
