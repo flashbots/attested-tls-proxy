@@ -135,10 +135,6 @@ impl AttestedTlsServer {
     pub async fn handle_connection(
         &self,
         inbound: TcpStream,
-        // acceptor: TlsAcceptor,
-        // cert_chain: Vec<CertificateDer<'static>>,
-        // attestation_generator: AttestationGenerator,
-        // attestation_verifier: AttestationVerifier,
     ) -> Result<
         (
             tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
@@ -224,10 +220,11 @@ pub struct AttestedTlsClient {
 }
 
 impl std::fmt::Debug for AttestedTlsClient {
-    // TODO add other fields
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AttestedTlsClient")
             .field("attestation_verifier", &self.attestation_verifier)
+            .field("attestation_generator", &self.attestation_generator)
+            .field("cert_chain", &self.cert_chain)
             .finish()
     }
 }
@@ -297,7 +294,7 @@ impl AttestedTlsClient {
         })
     }
 
-    /// Connect to the attested-tls-server, do TLS handshake and remote attestation
+    /// Connect to an attested-tls-server, do TLS handshake and attestation exchange
     pub async fn connect(
         &self,
         target: String,
@@ -376,7 +373,7 @@ impl AttestedTlsClient {
     }
 }
 
-/// Just get the attested remote certificate, with no client authentication
+/// A client which just gets the attested remote certificate, with no client authentication
 pub async fn get_tls_cert(
     server_name: String,
     attestation_verifier: AttestationVerifier,
@@ -405,6 +402,7 @@ pub async fn get_tls_cert(
     get_tls_cert_with_config(server_name, attestation_verifier, client_config.into()).await
 }
 
+// TODO this could use AttestedTlsClient to avoid repeating code
 pub(crate) async fn get_tls_cert_with_config(
     server_name: String,
     attestation_verifier: AttestationVerifier,
@@ -497,10 +495,6 @@ pub enum AttestedTlsError {
     IntConversion(#[from] TryFromIntError),
     #[error("Bad host name: {0}")]
     BadDnsName(#[from] tokio_rustls::rustls::pki_types::InvalidDnsNameError),
-    #[error("HTTP: {0}")]
-    Hyper(#[from] hyper::Error),
-    #[error("JSON: {0}")]
-    Json(#[from] serde_json::Error),
     #[error("Serialization: {0}")]
     Serialization(#[from] parity_scale_codec::Error),
     #[error("Protocol negotiation failed - remote peer does not support this protocol")]
