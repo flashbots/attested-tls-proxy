@@ -115,7 +115,7 @@ impl Display for AttestationType {
 }
 
 /// Can generate a local attestation based on attestation type
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AttestationGenerator {
     pub attestation_type: AttestationType,
     dummy_dcap_url: Option<String>,
