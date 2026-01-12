@@ -11,12 +11,10 @@ use http::HeaderValue;
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::service_fn, Response};
 use hyper_util::rt::TokioIo;
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::VerifierBuilderError;
 use tracing::{error, warn};
-use x509_parser::parse_x509_certificate;
 
 #[cfg(test)]
 mod test_helpers;
@@ -500,35 +498,6 @@ impl ProxyClient {
         requests_tx.send((req, response_tx)).await?;
         Ok(response_rx.await??)
     }
-}
-
-/// Given a certificate chain and an exporter (session key material), build the quote input value
-/// SHA256(pki) || exporter
-pub fn compute_report_input(
-    cert_chain: Option<&[CertificateDer<'_>]>,
-    exporter: [u8; 32],
-) -> Result<[u8; 64], AttestationError> {
-    let mut quote_input = [0u8; 64];
-    if let Some(cert_chain) = cert_chain {
-        let pki_hash = get_pki_hash_from_certificate_chain(cert_chain)?;
-        quote_input[..32].copy_from_slice(&pki_hash);
-    }
-    quote_input[32..].copy_from_slice(&exporter);
-    Ok(quote_input)
-}
-
-/// Given a certificate chain, get the [Sha256] hash of the public key of the leaf certificate
-fn get_pki_hash_from_certificate_chain(
-    cert_chain: &[CertificateDer<'_>],
-) -> Result<[u8; 32], AttestationError> {
-    let leaf_certificate = cert_chain.first().ok_or(AttestationError::NoCertificate)?;
-    let (_, cert) = parse_x509_certificate(leaf_certificate.as_ref())?;
-    let public_key = &cert.tbs_certificate.subject_pki;
-    let key_bytes = public_key.subject_public_key.as_ref();
-
-    let mut hasher = Sha256::new();
-    hasher.update(key_bytes);
-    Ok(hasher.finalize().into())
 }
 
 /// An error when running a proxy client or server
