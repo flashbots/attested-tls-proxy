@@ -19,15 +19,11 @@ use tracing::{error, warn};
 #[cfg(test)]
 mod test_helpers;
 
-use std::net::SocketAddr;
-use std::num::TryFromIntError;
-use std::time::Duration;
+use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio_rustls::rustls::pki_types::CertificateDer;
 
-#[cfg(test)]
-use std::sync::Arc;
 #[cfg(test)]
 use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 
@@ -57,6 +53,8 @@ type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming
 pub struct ProxyServer {
     /// The underlying attested TLS server
     attested_tls_server: AttestedTlsServer,
+    /// The underlying TCP listener
+    listener: Arc<TcpListener>,
     /// The address of the target service we are proxying to
     target: SocketAddr,
 }
@@ -72,15 +70,17 @@ impl ProxyServer {
     ) -> Result<Self, ProxyError> {
         let attested_tls_server = AttestedTlsServer::new(
             cert_and_key,
-            local,
             attestation_generator,
             attestation_verifier,
             client_auth,
         )
         .await?;
 
+        let listener = TcpListener::bind(local).await?;
+
         Ok(Self {
             attested_tls_server,
+            listener: listener.into(),
             target,
         })
     }
@@ -100,14 +100,16 @@ impl ProxyServer {
         let attested_tls_server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
-            local,
             attestation_generator,
             attestation_verifier,
         )
         .await?;
 
+        let listener = TcpListener::bind(local).await?;
+
         Ok(Self {
             attested_tls_server,
+            listener: listener.into(),
             target,
         })
     }
@@ -115,7 +117,7 @@ impl ProxyServer {
     /// Accept an incoming connection and handle it in a seperate task
     pub async fn accept(&self) -> Result<(), ProxyError> {
         let target = self.target;
-        let (inbound, _client_addr) = self.attested_tls_server.listener.accept().await?;
+        let (inbound, _client_addr) = self.listener.accept().await?;
         let attested_tls_server = self.attested_tls_server.clone();
 
         tokio::spawn(async move {
@@ -139,7 +141,7 @@ impl ProxyServer {
 
     /// Helper to get the socket address of the underlying TCP listener
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.attested_tls_server.local_addr()
+        self.listener.local_addr()
     }
 
     /// Handle an incoming connection from a proxy-client
@@ -469,7 +471,7 @@ impl ProxyClient {
         inner: &AttestedTlsClient,
         target: &str,
     ) -> Result<(Http2Sender, Option<MultiMeasurements>, AttestationType), ProxyError> {
-        let (tls_stream, measurements, remote_attestation_type) = inner.connect(target).await?;
+        let (tls_stream, measurements, remote_attestation_type) = inner.connect_tcp(target).await?;
 
         // The attestation exchange is now complete - setup an HTTP client
 
