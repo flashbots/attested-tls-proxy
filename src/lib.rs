@@ -267,7 +267,7 @@ impl ProxyClient {
         )
         .await?;
 
-        Self::new_with_inner(address, attested_tls_client, server_name).await
+        Self::new_with_inner(address, attested_tls_client, &server_name).await
     }
 
     /// Create a new proxy client with given TLS configuration
@@ -290,7 +290,7 @@ impl ProxyClient {
         )
         .await?;
 
-        Self::new_with_inner(address, attested_tls_client, target_name).await
+        Self::new_with_inner(address, attested_tls_client, &target_name).await
     }
 
     /// Create a new proxy client with given TLS configuration
@@ -299,12 +299,12 @@ impl ProxyClient {
     async fn new_with_inner(
         address: impl ToSocketAddrs,
         attested_tls_client: AttestedTlsClient,
-        target_name: String,
+        target_name: &str,
     ) -> Result<Self, ProxyError> {
         let listener = TcpListener::bind(address).await?;
 
         // Process the hostname / port provided by the user
-        let target = host_to_host_with_port(&target_name);
+        let target = host_to_host_with_port(target_name);
 
         // Channel for getting incoming requests from the source client
         let (requests_tx, mut requests_rx) = mpsc::channel::<(
@@ -316,7 +316,7 @@ impl ProxyClient {
 
         // Connect to the proxy server and provide / verify attestation
         let (mut sender, mut measurements, mut remote_attestation_type) =
-            Self::setup_connection_with_backoff(target.clone(), &attested_tls_client, true).await?;
+            Self::setup_connection_with_backoff(&target, &attested_tls_client, true).await?;
 
         let attested_tls_client_clone = attested_tls_client.clone();
         tokio::spawn(async move {
@@ -367,7 +367,7 @@ impl ProxyClient {
                     // Reconnect to the server - retrying indefinately with a backoff
                     (sender, measurements, remote_attestation_type) =
                         Self::setup_connection_with_backoff(
-                            target.clone(),
+                            &target,
                             &attested_tls_client_clone,
                             false,
                         )
@@ -438,7 +438,7 @@ impl ProxyClient {
     // Attempt connection and handshake with the proxy-server
     // If it fails retry with a backoff (indefinately)
     async fn setup_connection_with_backoff(
-        target: String,
+        target: &str,
         attested_tls_client: &AttestedTlsClient,
         should_bail: bool,
     ) -> Result<(Http2Sender, Option<MultiMeasurements>, AttestationType), ProxyError> {
@@ -446,7 +446,7 @@ impl ProxyClient {
         let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
 
         loop {
-            match Self::setup_connection(attested_tls_client, target.clone()).await {
+            match Self::setup_connection(attested_tls_client, target).await {
                 Ok(output) => {
                     return Ok(output);
                 }
@@ -469,7 +469,7 @@ impl ProxyClient {
     /// Connect to the proxy-server, do TLS handshake and remote attestation
     async fn setup_connection(
         inner: &AttestedTlsClient,
-        target: String,
+        target: &str,
     ) -> Result<(Http2Sender, Option<MultiMeasurements>, AttestationType), ProxyError> {
         let (tls_stream, measurements, remote_attestation_type) = inner.connect(target).await?;
 
@@ -567,7 +567,7 @@ impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {
 }
 
 /// If no port was provided, default to 443
-fn host_to_host_with_port(host: &str) -> String {
+pub(crate) fn host_to_host_with_port(host: &str) -> String {
     if host.contains(':') {
         host.to_string()
     } else {
@@ -962,7 +962,7 @@ mod tests {
         });
 
         let retrieved_chain = get_tls_cert_with_config(
-            proxy_server_addr.to_string(),
+            &proxy_server_addr.to_string(),
             AttestationVerifier::mock(),
             client_config,
         )

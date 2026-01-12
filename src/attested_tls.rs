@@ -1,5 +1,9 @@
-use crate::attestation::{
-    measurements::MultiMeasurements, AttestationError, AttestationGenerator, AttestationType,
+use crate::{
+    attestation::{
+        measurements::MultiMeasurements, AttestationError, AttestationExchangeMessage,
+        AttestationGenerator, AttestationType, AttestationVerifier,
+    },
+    host_to_host_with_port,
 };
 use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
@@ -17,8 +21,6 @@ use tokio_rustls::{
     rustls::{ClientConfig, ServerConfig},
     TlsAcceptor, TlsConnector,
 };
-
-use crate::attestation::{AttestationExchangeMessage, AttestationVerifier};
 
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility.
 /// When adding more supported versions, note that ordering is important. ALPN will pick the first
@@ -297,7 +299,7 @@ impl AttestedTlsClient {
     /// Connect to an attested-tls-server, do TLS handshake and attestation exchange
     pub async fn connect(
         &self,
-        target: String,
+        target: &str,
     ) -> Result<
         (
             tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
@@ -310,7 +312,7 @@ impl AttestedTlsClient {
         let out = TcpStream::connect(&target).await?;
         let mut tls_stream = self
             .connector
-            .connect(server_name_from_host(&target)?, out)
+            .connect(server_name_from_host(target)?, out)
             .await?;
 
         let (_io, server_connection) = tls_stream.get_ref();
@@ -371,82 +373,61 @@ impl AttestedTlsClient {
 
         Ok((tls_stream, measurements, remote_attestation_type))
     }
+
+    /// Connect to an attested TLS server, retrieve the remote TLS certificate and return it
+    pub async fn get_tls_cert(
+        &self,
+        server_name: &str,
+    ) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
+        let (mut tls_stream, _, _) = self.connect(server_name).await?;
+
+        let (_io, server_connection) = tls_stream.get_ref();
+
+        let remote_cert_chain = server_connection
+            .peer_certificates()
+            .ok_or(AttestedTlsError::NoCertificate)?
+            .to_owned();
+
+        tls_stream.shutdown().await?;
+
+        Ok(remote_cert_chain)
+    }
 }
 
 /// A client which just gets the attested remote certificate, with no client authentication
 pub async fn get_tls_cert(
     server_name: String,
     attestation_verifier: AttestationVerifier,
-    remote_certificate: Option<CertificateDer<'_>>,
+    remote_certificate: Option<CertificateDer<'static>>,
 ) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
     tracing::debug!("Getting remote TLS cert");
-    // If a remote CA cert was given, use it as the root store, otherwise use webpki_roots
-    let root_store = match remote_certificate {
-        Some(remote_certificate) => {
-            let mut root_store = RootCertStore::empty();
-            root_store.add(remote_certificate)?;
-            root_store
-        }
-        None => RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
-    };
-
-    let mut client_config = ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-
-    client_config.alpn_protocols = SUPPORTED_ALPN_PROTOCOL_VERSIONS
-        .into_iter()
-        .map(|p| p.to_vec())
-        .collect();
-
-    get_tls_cert_with_config(server_name, attestation_verifier, client_config.into()).await
+    let attested_tls_client = AttestedTlsClient::new(
+        None,
+        AttestationGenerator::with_no_attestation(),
+        attestation_verifier,
+        remote_certificate,
+    )
+    .await?;
+    attested_tls_client
+        .get_tls_cert(&host_to_host_with_port(&server_name))
+        .await
 }
 
-// TODO this could use AttestedTlsClient to avoid repeating code
+/// Helper for testing getting remote certificate
+#[cfg(test)]
 pub(crate) async fn get_tls_cert_with_config(
-    server_name: String,
+    server_name: &str,
     attestation_verifier: AttestationVerifier,
     client_config: Arc<ClientConfig>,
 ) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
-    let connector = TlsConnector::from(client_config);
-
-    let out = TcpStream::connect(host_to_host_with_port(&server_name)).await?;
-    let mut tls_stream = connector
-        .connect(server_name_from_host(&server_name)?, out)
-        .await?;
-
-    let (_io, server_connection) = tls_stream.get_ref();
-
-    let mut exporter = [0u8; 32];
-    server_connection.export_keying_material(
-        &mut exporter,
-        EXPORTER_LABEL,
-        None, // context
-    )?;
-
-    let remote_cert_chain = server_connection
-        .peer_certificates()
-        .ok_or(AttestedTlsError::NoCertificate)?
-        .to_owned();
-
-    let mut length_bytes = [0; 4];
-    tls_stream.read_exact(&mut length_bytes).await?;
-    let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
-
-    let mut buf = vec![0; length];
-    tls_stream.read_exact(&mut buf).await?;
-
-    let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
-
-    let remote_input_data = compute_report_input(Some(&remote_cert_chain), exporter)?;
-
-    let _measurements = attestation_verifier
-        .verify_attestation(remote_attestation_message, remote_input_data)
-        .await?;
-
-    tls_stream.shutdown().await?;
-
-    Ok(remote_cert_chain)
+    let attested_tls_client = AttestedTlsClient::new_with_tls_config(
+        client_config,
+        AttestationGenerator::with_no_attestation(),
+        attestation_verifier,
+        None,
+    )
+    .await?;
+    attested_tls_client.get_tls_cert(server_name).await
 }
 
 /// Given a certificate chain and an exporter (session key material), build the quote input value
@@ -505,15 +486,6 @@ pub enum AttestedTlsError {
 fn length_prefix(input: &[u8]) -> [u8; 4] {
     let len = input.len() as u32;
     len.to_be_bytes()
-}
-
-/// If no port was provided, default to 443
-fn host_to_host_with_port(host: &str) -> String {
-    if host.contains(':') {
-        host.to_string()
-    } else {
-        format!("{host}:443")
-    }
 }
 
 /// Given a hostname with or without port number, create a TLS [ServerName] with just the host part
