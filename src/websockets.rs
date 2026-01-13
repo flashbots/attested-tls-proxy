@@ -1,5 +1,5 @@
 use thiserror::Error;
-use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{tungstenite::protocol::WebSocketConfig, WebSocketStream};
 
 use crate::{
     attestation::{measurements::MultiMeasurements, AttestationType},
@@ -9,12 +9,16 @@ use crate::{
 /// Websocket message type re-exported for convenience
 pub use tokio_tungstenite::tungstenite::protocol::Message;
 
-// TODO allow setting ws config
+/// An attested Websocket server
 pub struct AttestedWsServer {
-    inner: AttestedTlsServer,
+    /// The underlying attested TLS server
+    pub inner: AttestedTlsServer,
+    /// Optional websocket configuration
+    pub websocket_config: Option<WebSocketConfig>,
 }
 
 impl AttestedWsServer {
+    /// Accept a Websocket connection
     pub async fn accept(
         &self,
     ) -> Result<
@@ -27,18 +31,32 @@ impl AttestedWsServer {
     > {
         let (stream, measurements, attestation_type) = self.inner.accept().await?;
         Ok((
-            tokio_tungstenite::accept_async(stream).await?,
+            tokio_tungstenite::accept_async_with_config(stream, self.websocket_config).await?,
             measurements,
             attestation_type,
         ))
     }
 }
 
+impl From<AttestedTlsServer> for AttestedWsServer {
+    fn from(inner: AttestedTlsServer) -> Self {
+        Self {
+            inner,
+            websocket_config: None,
+        }
+    }
+}
+
+/// An attested Websocket client
 pub struct AttestedWsClient {
-    inner: AttestedTlsClient,
+    /// The underlying attested TLS client
+    pub inner: AttestedTlsClient,
+    /// Optional websocket configuration
+    pub websocket_config: Option<WebSocketConfig>,
 }
 
 impl AttestedWsClient {
+    /// Make a Websocket connection
     pub async fn connect(
         &self,
         server: &str,
@@ -51,10 +69,23 @@ impl AttestedWsClient {
         AttestedWsError,
     > {
         let (stream, measurements, attestation_type) = self.inner.connect(server).await?;
-        let (ws_connection, _response) =
-            tokio_tungstenite::client_async(format!("wss://{server}"), stream).await?;
+        let (ws_connection, _response) = tokio_tungstenite::client_async_with_config(
+            format!("wss://{server}"),
+            stream,
+            self.websocket_config,
+        )
+        .await?;
 
         Ok((ws_connection, measurements, attestation_type))
+    }
+}
+
+impl From<AttestedTlsClient> for AttestedWsClient {
+    fn from(inner: AttestedTlsClient) -> Self {
+        Self {
+            inner,
+            websocket_config: None,
+        }
     }
 }
 
@@ -94,7 +125,7 @@ mod tests {
 
         let server_addr = server.local_addr().unwrap();
 
-        let ws_server = AttestedWsServer { inner: server };
+        let ws_server: AttestedWsServer = server.into();
 
         tokio::spawn(async move {
             let (mut ws_connection, _measurements, _attestation_type) =
@@ -115,7 +146,7 @@ mod tests {
         .await
         .unwrap();
 
-        let ws_client = AttestedWsClient { inner: client };
+        let ws_client: AttestedWsClient = client.into();
 
         let (mut ws_connection, _measurements, _attestation_type) =
             ws_client.connect(&server_addr.to_string()).await.unwrap();
