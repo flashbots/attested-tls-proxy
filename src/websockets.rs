@@ -27,7 +27,7 @@ impl AttestedWsServer {
     > {
         let (stream, measurements, attestation_type) = self.inner.accept().await?;
         Ok((
-            tokio_tungstenite::accept_async(stream).await.unwrap(),
+            tokio_tungstenite::accept_async(stream).await?,
             measurements,
             attestation_type,
         ))
@@ -52,9 +52,8 @@ impl AttestedWsClient {
     > {
         let (stream, measurements, attestation_type) = self.inner.connect(server).await?;
         let (ws_connection, _response) =
-            tokio_tungstenite::client_async(format!("wss://{server}"), stream)
-                .await
-                .unwrap();
+            tokio_tungstenite::client_async(format!("wss://{server}"), stream).await?;
+
         Ok((ws_connection, measurements, attestation_type))
     }
 }
@@ -63,6 +62,8 @@ impl AttestedWsClient {
 pub enum AttestedWsError {
     #[error("Attested TLS: {0}")]
     Rustls(#[from] AttestedTlsError),
+    #[error("Websockets: {0}")]
+    Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
 }
 
 #[cfg(test)]
