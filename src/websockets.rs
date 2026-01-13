@@ -1,4 +1,6 @@
+use std::{net::SocketAddr, sync::Arc};
 use thiserror::Error;
+use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio_tungstenite::{tungstenite::protocol::WebSocketConfig, WebSocketStream};
 
 use crate::{
@@ -15,9 +17,24 @@ pub struct AttestedWsServer {
     pub inner: AttestedTlsServer,
     /// Optional websocket configuration
     pub websocket_config: Option<WebSocketConfig>,
+    listener: Arc<TcpListener>,
 }
 
 impl AttestedWsServer {
+    pub async fn new(
+        addr: impl ToSocketAddrs,
+        inner: AttestedTlsServer,
+        websocket_config: Option<WebSocketConfig>,
+    ) -> Result<Self, AttestedWsError> {
+        let listener = TcpListener::bind(addr).await?;
+
+        Ok(Self {
+            listener: listener.into(),
+            inner,
+            websocket_config,
+        })
+    }
+
     /// Accept a Websocket connection
     pub async fn accept(
         &self,
@@ -29,21 +46,20 @@ impl AttestedWsServer {
         ),
         AttestedWsError,
     > {
-        let (stream, measurements, attestation_type) = self.inner.accept().await?;
+        let (tcp_stream, _addr) = self.listener.accept().await?;
+
+        let (stream, measurements, attestation_type) =
+            self.inner.handle_connection(tcp_stream).await?;
         Ok((
             tokio_tungstenite::accept_async_with_config(stream, self.websocket_config).await?,
             measurements,
             attestation_type,
         ))
     }
-}
 
-impl From<AttestedTlsServer> for AttestedWsServer {
-    fn from(inner: AttestedTlsServer) -> Self {
-        Self {
-            inner,
-            websocket_config: None,
-        }
+    /// Helper to get the socket address of the underlying TCP listener
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.listener.local_addr()
     }
 }
 
@@ -68,7 +84,7 @@ impl AttestedWsClient {
         ),
         AttestedWsError,
     > {
-        let (stream, measurements, attestation_type) = self.inner.connect(server).await?;
+        let (stream, measurements, attestation_type) = self.inner.connect_tcp(server).await?;
         let (ws_connection, _response) = tokio_tungstenite::client_async_with_config(
             format!("wss://{server}"),
             stream,
@@ -95,6 +111,8 @@ pub enum AttestedWsError {
     Rustls(#[from] AttestedTlsError),
     #[error("Websockets: {0}")]
     Tungstenite(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("IO: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[cfg(test)]
@@ -116,16 +134,17 @@ mod tests {
         let server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
-            "127.0.0.1:0",
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
         .unwrap();
 
-        let server_addr = server.local_addr().unwrap();
+        let ws_server = AttestedWsServer::new("127.0.0.1:0", server, None)
+            .await
+            .unwrap();
 
-        let ws_server: AttestedWsServer = server.into();
+        let server_addr = ws_server.local_addr().unwrap();
 
         tokio::spawn(async move {
             let (mut ws_connection, _measurements, _attestation_type) =
