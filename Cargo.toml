@@ -3,9 +3,12 @@ members = [".", "dummy-attestation-server"]
 
 [package]
 name = "attested-tls-proxy"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 license = "MIT"
+description = "An HTTP attested TLS proxy server and client for secure communication with CVM services"
+repository = "https://github.com/flashbots/attested-tls-proxy"
+keywords = ["attested-TLS", "CVM", "TDX"]
 
 [dependencies]
 tokio = { version = "1.48.0", features = ["full"] }
