@@ -3,6 +3,8 @@ pub mod attested_get;
 pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
+
+#[cfg(feature = "azure")]
 pub mod websockets;
 
 pub use attestation::AttestationGenerator;
