@@ -1,3 +1,4 @@
+//! An attested TLS protocol and HTTPS proxy
 pub mod attestation;
 pub mod attested_get;
 pub mod attested_tls;

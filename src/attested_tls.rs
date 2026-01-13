@@ -1,3 +1,4 @@
+//! Attested TLS protocol server and client
 use crate::{
     attestation::{
         measurements::MultiMeasurements, AttestationError, AttestationExchangeMessage,

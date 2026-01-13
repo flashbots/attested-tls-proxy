@@ -1,3 +1,4 @@
+//! A one-shot attested TLS proxy client which sends a single GET request and returns the response
 use crate::{AttestationGenerator, AttestationVerifier, ProxyClient, ProxyError};
 use tokio_rustls::rustls::pki_types::CertificateDer;
 

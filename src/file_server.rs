@@ -1,3 +1,4 @@
+//! Static HTTP file server provided by an attested TLS proxy server
 use crate::{AttestationGenerator, AttestationVerifier, ProxyError, ProxyServer, TlsCertAndKey};
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
