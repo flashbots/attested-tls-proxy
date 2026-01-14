@@ -1,3 +1,4 @@
+//! Helper functions used in tests
 use axum::response::IntoResponse;
 use std::{
     collections::HashMap,
