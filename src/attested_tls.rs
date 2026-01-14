@@ -500,3 +500,46 @@ fn server_name_from_host(
 
     ServerName::try_from(host_part.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn server_attestation() {
+        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+
+        let server = AttestedTlsServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (tcp_stream, _) = listener.accept().await.unwrap();
+            let (_stream, _measurements, _attestation_type) =
+                server.handle_connection(tcp_stream).await.unwrap();
+        });
+
+        let client = AttestedTlsClient::new_with_tls_config(
+            client_config,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (_stream, _measurements, _attestation_type) =
+            client.connect_tcp(&server_addr.to_string()).await.unwrap();
+    }
+}
