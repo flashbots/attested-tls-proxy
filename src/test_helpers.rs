@@ -1,3 +1,4 @@
+//! Helper functions used in tests
 use axum::response::IntoResponse;
 use std::{
     collections::HashMap,
@@ -13,7 +14,8 @@ use tokio_rustls::rustls::{
 
 use crate::{
     attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
-    MEASUREMENT_HEADER, SUPPORTED_ALPN_PROTOCOL_VERSIONS,
+    attested_tls::SUPPORTED_ALPN_PROTOCOL_VERSIONS,
+    MEASUREMENT_HEADER,
 };
 
 /// Helper to generate a self-signed certificate for testing

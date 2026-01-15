@@ -1,3 +1,5 @@
+//! CVM attestation generation and verification
+
 #[cfg(feature = "azure")]
 pub mod azure;
 pub mod dcap;
@@ -115,14 +117,39 @@ impl Display for AttestationType {
 }
 
 /// Can generate a local attestation based on attestation type
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AttestationGenerator {
     pub attestation_type: AttestationType,
     dummy_dcap_url: Option<String>,
 }
 
 impl AttestationGenerator {
-    /// Create an [AttestationGenerator] detecting the attestation type if it is specified as 'auto'
+    /// Create an attesation generator with given attestation type
+    pub fn new(
+        attestation_type: AttestationType,
+        dummy_dcap_url: Option<String>,
+    ) -> Result<Self, AttestationError> {
+        match attestation_type {
+            AttestationType::Dummy => Self::new_dummy(dummy_dcap_url),
+            _ => Self::new_not_dummy(attestation_type),
+        }
+    }
+
+    /// Detect what confidential compute platform is present and create the approprate attestation
+    /// generator
+    pub async fn detect() -> Result<Self, AttestationError> {
+        Self::new_with_detection(None, None).await
+    }
+
+    /// Do not generate attestations
+    pub fn with_no_attestation() -> Self {
+        Self {
+            attestation_type: AttestationType::None,
+            dummy_dcap_url: None,
+        }
+    }
+
+    /// Create an [AttestationGenerator] detecting the attestation type if it is not given
     pub async fn new_with_detection(
         attestation_type_string: Option<String>,
         dummy_dcap_url: Option<String>,
@@ -137,23 +164,6 @@ impl AttestationGenerator {
         tracing::info!("Local platform: {attestaton_type}");
 
         Self::new(attestaton_type, dummy_dcap_url)
-    }
-
-    pub fn new(
-        attestation_type: AttestationType,
-        dummy_dcap_url: Option<String>,
-    ) -> Result<Self, AttestationError> {
-        match attestation_type {
-            AttestationType::Dummy => Self::new_dummy(dummy_dcap_url),
-            _ => Self::new_not_dummy(attestation_type),
-        }
-    }
-
-    pub fn with_no_attestation() -> Self {
-        Self {
-            attestation_type: AttestationType::None,
-            dummy_dcap_url: None,
-        }
     }
 
     /// Create an [AttestationGenerator] without a given dummy DCAP url - meaning Dummy attestation
@@ -190,7 +200,7 @@ impl AttestationGenerator {
         }
     }
 
-    /// Generate an attestation exchange message
+    /// Generate an attestation exchange message with given input data
     pub async fn generate_attestation(
         &self,
         input_data: [u8; 64],
@@ -201,7 +211,7 @@ impl AttestationGenerator {
         })
     }
 
-    /// Generate attestation evidence bytes based on attestation type
+    /// Generate attestation evidence bytes based on attestation type, with given input data
     async fn generate_attestation_bytes(
         &self,
         input_data: [u8; 64],

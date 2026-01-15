@@ -162,6 +162,8 @@ pub enum MeasurementFormatError {
     BadRegisterIndex,
     #[error("ParseInt: {0}")]
     ParseInt(#[from] std::num::ParseIntError),
+    #[error("Failed to read measurements from URL: {0}")]
+    Reqwest(#[from] reqwest::Error),
 }
 
 /// An accepted measurement value given in the measurements file
@@ -261,9 +263,11 @@ impl MeasurementPolicy {
             .any(|measurement_record| match measurements {
                 MultiMeasurements::Dcap(dcap_measurements) => {
                     if let MultiMeasurements::Dcap(d) = measurement_record.measurements.clone() {
-                        for (k, v) in dcap_measurements.iter() {
-                            if d.get(k).is_some_and(|x| x != v) {
-                                return false;
+                        // All measurements in our policy must be given and must match
+                        for (k, v) in d.iter() {
+                            match dcap_measurements.get(k) {
+                                Some(value) if value == v => {}
+                                _ => return false,
                             }
                         }
                         return true;
@@ -272,9 +276,10 @@ impl MeasurementPolicy {
                 }
                 MultiMeasurements::Azure(azure_measurements) => {
                     if let MultiMeasurements::Azure(a) = measurement_record.measurements.clone() {
-                        for (k, v) in azure_measurements.iter() {
-                            if a.get(k).is_some_and(|x| x != v) {
-                                return false;
+                        for (k, v) in a.iter() {
+                            match azure_measurements.get(k) {
+                                Some(value) if value == v => {}
+                                _ => return false,
                             }
                         }
                         return true;
@@ -301,6 +306,16 @@ impl MeasurementPolicy {
             .accepted_measurements
             .iter()
             .any(|a| a.measurements == MultiMeasurements::NoAttestation)
+    }
+
+    /// Given either a URL or the path to a file, parse the measurement policy from JSON
+    pub async fn from_file_or_url(file_or_url: String) -> Result<Self, MeasurementFormatError> {
+        if file_or_url.starts_with("https://") || file_or_url.starts_with("http://") {
+            let measurements_json = reqwest::get(file_or_url).await?.bytes().await?;
+            Self::from_json_bytes(measurements_json.to_vec()).await
+        } else {
+            Self::from_file(file_or_url.into()).await
+        }
     }
 
     /// Given the path to a JSON file containing measurements, return a [MeasurementPolicy]
@@ -449,6 +464,14 @@ mod tests {
                 .unwrap_err(),
             AttestationError::MeasurementsNotAccepted
         ));
+
+        // A non-specific measurement fails
+        assert!(matches!(
+            specific_measurements
+                .check_measurement(&MultiMeasurements::Azure(HashMap::new()))
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
     }
 
     #[tokio::test]
@@ -467,6 +490,33 @@ mod tests {
         assert!(matches!(
             allowed_attestation_type
                 .check_measurement(&MultiMeasurements::NoAttestation)
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_read_remote_buildernet_measurements() {
+        // Check that the buildernet measurements are available and parse correctly
+        let policy = MeasurementPolicy::from_file_or_url(
+            "https://measurements.builder.flashbots.net".to_string(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!policy.accepted_measurements.is_empty());
+
+        assert!(matches!(
+            policy
+                .check_measurement(&MultiMeasurements::NoAttestation)
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
+
+        // A non-specific measurement fails
+        assert!(matches!(
+            policy
+                .check_measurement(&MultiMeasurements::Azure(HashMap::new()))
                 .unwrap_err(),
             AttestationError::MeasurementsNotAccepted
         ));
