@@ -31,7 +31,9 @@ pub async fn server(listen_addr: SocketAddr) -> anyhow::Result<SocketAddr> {
     tracing::info!("Starting health check server at {}", listen_addr);
 
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        if let Err(err) = axum::serve(listener, app).await {
+            tracing::error!("Health check server closed: {err}");
+        }
     });
 
     Ok(listen_addr)
