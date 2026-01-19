@@ -8,8 +8,9 @@ use tracing::level_filters::LevelFilter;
 use attested_tls_proxy::{
     attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
     attested_get::attested_get,
+    attested_tls::{get_tls_cert, TlsCertAndKey},
     file_server::attested_file_server,
-    get_tls_cert, health_check, AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey,
+    health_check, AttestationGenerator, ProxyClient, ProxyServer,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -17,9 +18,9 @@ use attested_tls_proxy::{
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
-    /// Optional path to file containing JSON measurements to be enforced on the remote party
+    /// Path to file, or URL, containing JSON measurements to be enforced on the remote party
     #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
-    measurements_file: Option<PathBuf>,
+    measurements_file: Option<String>,
     /// If no measurements file is specified, a single attestion type to allow
     #[arg(long, global = true)]
     allowed_remote_attestation_type: Option<String>,
@@ -171,7 +172,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let measurement_policy = match cli.measurements_file {
-        Some(server_measurements) => MeasurementPolicy::from_file(server_measurements).await?,
+        Some(server_measurements) => {
+            MeasurementPolicy::from_file_or_url(server_measurements).await?
+        }
         None => {
             let allowed_server_attestation_type: AttestationType = serde_json::from_value(
                 serde_json::Value::String(cli.allowed_remote_attestation_type.ok_or(anyhow!(

@@ -112,7 +112,7 @@ jobs:
     name: Draft release
     if: ${{ github.event.inputs.draft-release == 'true' || github.event_name == 'push'}} # when manually triggered or version tagged
     needs: [extract-version, build-binary]
-    runs-on: warp-ubuntu-2404-x64-16x
+    runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.extract-version.outputs.VERSION }}
     permissions:

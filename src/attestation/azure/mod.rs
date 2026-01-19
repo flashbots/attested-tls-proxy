@@ -1,4 +1,4 @@
-//! Microsoft Azure Attestation (MAA) evidence generation and verification
+//! Microsoft Azure vTPM attestation evidence generation and verification
 mod ak_certificate;
 mod nv_index;
 use ak_certificate::{read_ak_certificate_from_tpm, verify_ak_cert_with_azure_roots};
@@ -245,6 +245,7 @@ impl RsaPubKey {
     }
 }
 
+/// An error when generating or verifying a Microsoft Azure vTPM attestation
 #[derive(Error, Debug)]
 pub enum MaaError {
     #[error("Report: {0}")]
