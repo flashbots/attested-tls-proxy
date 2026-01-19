@@ -1,10 +1,12 @@
 //! Attested TLS protocol server and client
-use crate::{
-    attestation::{
-        measurements::MultiMeasurements, AttestationError, AttestationExchangeMessage,
-        AttestationGenerator, AttestationType, AttestationVerifier,
-    },
-    host_to_host_with_port,
+pub mod attestation;
+
+#[cfg(test)]
+pub mod test_helpers;
+
+use crate::attestation::{
+    measurements::MultiMeasurements, AttestationError, AttestationExchangeMessage,
+    AttestationGenerator, AttestationType, AttestationVerifier,
 };
 use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
@@ -542,5 +544,14 @@ mod tests {
 
         let (_stream, _measurements, _attestation_type) =
             client.connect_tcp(&server_addr.to_string()).await.unwrap();
+    }
+}
+
+/// If no port was provided, default to 443
+fn host_to_host_with_port(host: &str) -> String {
+    if host.contains(':') {
+        host.to_string()
+    } else {
+        format!("{host}:443")
     }
 }

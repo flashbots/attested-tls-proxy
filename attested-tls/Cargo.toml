@@ -1,12 +1,9 @@
-[workspace]
-members = [".", "dummy-attestation-server", "attested-tls"]
-
 [package]
-name = "attested-tls-proxy"
+name = "attested-tls"
 version = "0.0.1"
 edition = "2024"
 license = "MIT"
-description = "An HTTP attested TLS proxy server and client for secure communication with CVM services"
+description = "A remote-attested TLS protocol for secure communication with CVM services"
 repository = "https://github.com/flashbots/attested-tls-proxy"
 keywords = ["attested-TLS", "CVM", "TDX"]
 
