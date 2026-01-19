@@ -1,6 +1,7 @@
 //! An attested TLS protocol and HTTPS proxy
 pub mod attestation;
 pub mod attested_get;
+pub mod attested_rpc;
 pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
@@ -552,7 +553,7 @@ pub(crate) fn host_to_host_with_port(host: &str) -> String {
 
 /// An Executor for hyper that uses the tokio runtime
 #[derive(Clone)]
-struct TokioExecutor;
+pub struct TokioExecutor;
 
 // Implement the `hyper::rt::Executor` trait for `TokioExecutor` so that it can be used to spawn
 // tasks in the hyper runtime.
