@@ -60,8 +60,7 @@ ifeq ($(IS_X86_64),1)
     BUILD_ENV = SOURCE_DATE_EPOCH=$(SOURCE_DATE) \
                 RUSTFLAGS="${RUST_BUILD_FLAGS}" \
                 LC_ALL=${LOCALE_VAL} \
-                TZ=${TZ_VAL} \
-                JEMALLOC_OVERRIDE=/usr/lib/x86_64-linux-gnu/libjemalloc.a
+                TZ=${TZ_VAL}
 else
     # Non-x86_64: Use release profile without reproducible build flags
     BUILD_PROFILE = release
