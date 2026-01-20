@@ -73,8 +73,8 @@ enum CliCommand {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
-        /// Socket address of the target service to forward traffic to
-        target_addr: SocketAddr,
+        /// The hostname:port or ip:port of the target service to forward traffic to
+        target_addr: String,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
