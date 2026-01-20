@@ -42,8 +42,7 @@ pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, Prox
     tracing::info!("Statically serving {path:?} on {addr}");
 
     tokio::spawn(async move {
-        if let Err(err) = axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await
-        {
+        if let Err(err) = axum::serve(listener, app).await {
             tracing::error!("HTTP file server: {err}");
         }
     });
