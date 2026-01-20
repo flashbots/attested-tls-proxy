@@ -555,7 +555,7 @@ pub(crate) fn host_to_host_with_port(host: &str) -> String {
 
 /// An Executor for hyper that uses the tokio runtime
 #[derive(Clone)]
-pub struct TokioExecutor;
+pub(crate) struct TokioExecutor;
 
 // Implement the `hyper::rt::Executor` trait for `TokioExecutor` so that it can be used to spawn
 // tasks in the hyper runtime.
