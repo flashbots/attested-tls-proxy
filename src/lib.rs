@@ -4,6 +4,7 @@ pub mod attested_get;
 pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
+pub mod normalize_pem;
 
 #[cfg(feature = "azure")]
 pub mod websockets;
