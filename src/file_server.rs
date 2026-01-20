@@ -18,7 +18,7 @@ pub async fn attested_file_server(
     let server = ProxyServer::new(
         cert_and_key,
         listen_addr,
-        target_addr,
+        target_addr.to_string(),
         attestation_generator,
         attestation_verifier,
         client_auth,
@@ -42,8 +42,7 @@ pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, Prox
     tracing::info!("Statically serving {path:?} on {addr}");
 
     tokio::spawn(async move {
-        if let Err(err) = axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await
-        {
+        if let Err(err) = axum::serve(listener, app).await {
             tracing::error!("HTTP file server: {err}");
         }
     });
@@ -103,7 +102,7 @@ mod tests {
             cert_chain,
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )

@@ -4,6 +4,7 @@ pub mod attested_get;
 pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
+pub mod normalize_pem;
 
 #[cfg(feature = "azure")]
 pub mod websockets;
@@ -59,15 +60,15 @@ pub struct ProxyServer {
     attested_tls_server: AttestedTlsServer,
     /// The underlying TCP listener
     listener: Arc<TcpListener>,
-    /// The address of the target service we are proxying to
-    target: SocketAddr,
+    /// The address/hostname of the target service we are proxying to
+    target: String,
 }
 
 impl ProxyServer {
     pub async fn new(
         cert_and_key: TlsCertAndKey,
         local: impl ToSocketAddrs,
-        target: SocketAddr,
+        target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
@@ -97,7 +98,7 @@ impl ProxyServer {
         cert_chain: Vec<CertificateDer<'static>>,
         server_config: Arc<ServerConfig>,
         local: impl ToSocketAddrs,
-        target: SocketAddr,
+        target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
@@ -120,7 +121,7 @@ impl ProxyServer {
 
     /// Accept an incoming connection and handle it in a seperate task
     pub async fn accept(&self) -> Result<(), ProxyError> {
-        let target = self.target;
+        let target = self.target.clone();
         let (inbound, _client_addr) = self.listener.accept().await?;
         let attested_tls_server = self.attested_tls_server.clone();
 
@@ -153,7 +154,7 @@ impl ProxyServer {
         tls_stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
         measurements: Option<MultiMeasurements>,
         remote_attestation_type: AttestationType,
-        target: SocketAddr,
+        target: String,
     ) -> Result<(), ProxyError> {
         tracing::debug!("proxy-server accepted connection");
 
@@ -183,6 +184,7 @@ impl ProxyServer {
                     .expect("Attestation type should be able to be encoded as a header value"),
             );
 
+            let target = target.clone();
             async move {
                 match Self::handle_http_request(req, target).await {
                     Ok(res) => {
@@ -208,7 +210,7 @@ impl ProxyServer {
     // Handle a request from the proxy client to the target server
     async fn handle_http_request(
         req: hyper::Request<hyper::body::Incoming>,
-        target: SocketAddr,
+        target: String,
     ) -> Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, ProxyError> {
         // Connect to the target server
         let outbound = TcpStream::connect(target).await?;
@@ -595,7 +597,7 @@ mod tests {
             cert_chain,
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
@@ -672,7 +674,7 @@ mod tests {
             server_cert_chain,
             server_tls_server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
         )
@@ -743,7 +745,7 @@ mod tests {
             server_cert_chain,
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
         )
@@ -824,7 +826,7 @@ mod tests {
             server_cert_chain,
             server_tls_server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::mock(),
         )
@@ -923,7 +925,7 @@ mod tests {
             cert_chain.clone(),
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
@@ -960,7 +962,7 @@ mod tests {
             cert_chain,
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
         )
@@ -1004,7 +1006,7 @@ mod tests {
             cert_chain,
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )

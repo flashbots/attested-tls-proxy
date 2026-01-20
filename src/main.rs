@@ -10,7 +10,9 @@ use attested_tls_proxy::{
     attested_get::attested_get,
     attested_tls::{get_tls_cert, TlsCertAndKey},
     file_server::attested_file_server,
-    health_check, AttestationGenerator, ProxyClient, ProxyServer,
+    health_check,
+    normalize_pem::normalize_private_key_pem_to_pkcs8,
+    AttestationGenerator, ProxyClient, ProxyServer,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -73,8 +75,8 @@ enum CliCommand {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
-        /// Socket address of the target service to forward traffic to
-        target_addr: SocketAddr,
+        /// The hostname:port or ip:port of the target service to forward traffic to
+        target_addr: String,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
@@ -391,14 +393,8 @@ fn load_certs_pem(path: PathBuf) -> std::io::Result<Vec<CertificateDer<'static>>
 
 /// load TLS private key from a PEM-encoded file
 fn load_private_key_pem(path: PathBuf) -> anyhow::Result<PrivateKeyDer<'static>> {
-    let mut reader = std::io::BufReader::new(File::open(path)?);
-
-    // Tries to read the key as PKCS#8, PKCS#1, or SEC1
-    let pks8_key = rustls_pemfile::pkcs8_private_keys(&mut reader)
-        .next()
-        .ok_or(anyhow!("No PKS8 Key"))??;
-
-    Ok(PrivateKeyDer::Pkcs8(pks8_key))
+    let pem_bytes = std::fs::read(path)?;
+    normalize_private_key_pem_to_pkcs8(&pem_bytes)
 }
 
 /// Given a certificate chain, convert it to a PEM encoded string
