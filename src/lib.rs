@@ -1,13 +1,15 @@
 //! An attested TLS protocol and HTTPS proxy
 pub mod attestation;
 pub mod attested_get;
-pub mod attested_rpc;
 pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
 
-#[cfg(feature = "azure")]
+#[cfg(feature = "ws")]
 pub mod websockets;
+
+#[cfg(feature = "rpc")]
+pub mod attested_rpc;
 
 pub use attestation::AttestationGenerator;
 
