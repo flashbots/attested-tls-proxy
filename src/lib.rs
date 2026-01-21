@@ -165,7 +165,9 @@ impl ProxyServer {
         let service = service_fn(move |mut req| {
             // Change the request uri to match the target service
             let new_uri = rewrite_uri_authority(req.uri(), &target);
+            tracing::info!("Setting URI to: {new_uri}");
             *req.uri_mut() = new_uri;
+
             let headers = req.headers_mut();
 
             // Add or update the HOST header
@@ -521,10 +523,14 @@ impl ProxyClient {
 
 /// Given an http request, update the host in the URI when proxying
 fn rewrite_uri_authority(old_uri: &http::Uri, new_authority: &str) -> http::Uri {
+    tracing::info!("Updating URI in request - old URI: {old_uri} new_authority: {new_authority}");
+
     let path_and_query = old_uri
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or("/");
+
+    tracing::info!("Path and query: {path_and_query}");
 
     let scheme = old_uri.scheme_str().unwrap_or("http");
 
