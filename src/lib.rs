@@ -163,12 +163,17 @@ impl ProxyServer {
 
         // Setup a request handler
         let service = service_fn(move |mut req| {
-            // Change the request uri to match the target service
-            let new_uri = rewrite_uri_authority(req.uri(), &target);
-            tracing::info!("Setting URI to: {new_uri}");
-            *req.uri_mut() = new_uri;
-
             let headers = req.headers_mut();
+
+            // Add or update the HOST header
+            if let Ok(host_header_value) = target.parse() {
+                let old_value = headers.insert(http::header::HOST, host_header_value);
+                tracing::info!(
+                    "Updating Host header - old value: {old_value:?} new value: {target}",
+                );
+            } else {
+                error!("Failed to encode host as header value: {target}");
+            }
 
             // If we have measurements, from the remote peer, add them to the request header
             let measurements = measurements.clone();
@@ -511,33 +516,6 @@ impl ProxyClient {
         let (response_tx, response_rx) = oneshot::channel();
         requests_tx.send((req, response_tx)).await?;
         Ok(response_rx.await??)
-    }
-}
-
-/// Given an http request, update the host in the URI when proxying
-fn rewrite_uri_authority(old_uri: &http::Uri, new_authority: &str) -> http::Uri {
-    tracing::info!("Updating URI in request - old URI: {old_uri} new_authority: {new_authority}");
-
-    let path_and_query = old_uri
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
-
-    tracing::info!("Path and query: {path_and_query}");
-
-    let scheme = old_uri.scheme_str().unwrap_or("http");
-
-    match http::Uri::builder()
-        .scheme(scheme)
-        .authority(new_authority)
-        .path_and_query(path_and_query)
-        .build()
-    {
-        Ok(new_uri) => new_uri,
-        Err(err) => {
-            tracing::error!("Failed to build URI - falling back to old one: {err}");
-            old_uri.clone()
-        }
     }
 }
 
