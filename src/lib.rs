@@ -12,7 +12,7 @@ pub mod websockets;
 pub use attestation::AttestationGenerator;
 
 use bytes::Bytes;
-use http::HeaderValue;
+use http::{HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::service_fn, Response};
 use hyper_util::rt::TokioIo;
@@ -44,6 +44,12 @@ const ATTESTATION_TYPE_HEADER: &str = "X-Flashbots-Attestation-Type";
 
 /// The header name for giving measurements
 const MEASUREMENT_HEADER: &str = "X-Flashbots-Measurement";
+
+/// The header name for giving the forwarded for IP
+static X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
+
+/// The header name for giving the 'real IP' - in our case that of the client
+static X_REAL_IP: HeaderName = HeaderName::from_static("x-real-ip");
 
 /// The longest time in seconds to wait between reconnection attempts
 const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
@@ -122,15 +128,20 @@ impl ProxyServer {
     /// Accept an incoming connection and handle it in a seperate task
     pub async fn accept(&self) -> Result<(), ProxyError> {
         let target = self.target.clone();
-        let (inbound, _client_addr) = self.listener.accept().await?;
+        let (inbound, client_addr) = self.listener.accept().await?;
         let attested_tls_server = self.attested_tls_server.clone();
 
         tokio::spawn(async move {
             match attested_tls_server.handle_connection(inbound).await {
                 Ok((tls_stream, measurements, attestation_type)) => {
-                    if let Err(err) =
-                        Self::handle_connection(tls_stream, measurements, attestation_type, target)
-                            .await
+                    if let Err(err) = Self::handle_connection(
+                        tls_stream,
+                        measurements,
+                        attestation_type,
+                        target,
+                        client_addr,
+                    )
+                    .await
                     {
                         warn!("Failed to handle connection: {err}");
                     }
@@ -155,6 +166,7 @@ impl ProxyServer {
         measurements: Option<MultiMeasurements>,
         remote_attestation_type: AttestationType,
         target: String,
+        client_addr: SocketAddr,
     ) -> Result<(), ProxyError> {
         tracing::debug!("proxy-server accepted connection");
 
@@ -173,6 +185,29 @@ impl ProxyServer {
                 );
             } else {
                 error!("Failed to encode host as header value: {target}");
+            }
+
+            // Add the x-real-ip header
+            let client_ip = client_addr.ip().to_string();
+            if let Ok(real_ip_value) = HeaderValue::from_str(&client_ip) {
+                headers.insert(&X_REAL_IP, real_ip_value);
+            } else {
+                error!("Failed to encode x-real-ip header value: {client_ip}");
+            }
+
+            // Add or update the x-forwarded-for header
+            let new_x_forwarded_for =
+                match headers.get(&X_FORWARDED_FOR).and_then(|v| v.to_str().ok()) {
+                    Some(existing) if !existing.trim().is_empty() => {
+                        format!("{}, {}", existing.trim(), client_ip)
+                    }
+                    _ => client_ip.clone(),
+                };
+
+            if let Ok(forwarded_for_value) = HeaderValue::from_str(&new_x_forwarded_for) {
+                headers.insert(&X_FORWARDED_FOR, forwarded_for_value);
+            } else {
+                error!("Failed to encode x-forwarded-for header value: {new_x_forwarded_for}");
             }
 
             // If we have measurements, from the remote peer, add them to the request header
