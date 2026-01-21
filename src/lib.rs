@@ -170,13 +170,6 @@ impl ProxyServer {
 
             let headers = req.headers_mut();
 
-            // Add or update the HOST header
-            if let Ok(host_header_value) = target.parse() {
-                headers.insert(http::header::HOST, host_header_value);
-            } else {
-                error!("Failed to encode host as header value: {target}");
-            }
-
             // If we have measurements, from the remote peer, add them to the request header
             let measurements = measurements.clone();
             if let Some(measurements) = measurements {
