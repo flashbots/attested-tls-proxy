@@ -71,3 +71,29 @@ azure = ["tss-esapi", "az-tdx-vtpm"]
 
 # Adds websocket support
 ws = ["tokio-tungstenite", "futures-util"]
+
+[package.metadata.deb]
+maintainer = "Flashbots Team <devops+ci@flashbots.net>"
+depends = "$auto"
+section = "network"
+priority = "optional"
+maintainer-scripts = "pkg/debian"
+assets = [
+    [
+        "target/reproducible/attested-tls-proxy",
+        "usr/bin/",
+        "755",
+    ],
+    [
+        "LICENSE",
+        "usr/share/doc/attested-tls-proxy/",
+        "644",
+    ],
+]
+systemd-units = { enable = false, start = false, unit-name = "attested-tls-proxy" }
+
+[profile.reproducible]
+inherits = "release"
+lto = "thin"
+panic = "abort"
+incremental = false
