@@ -12,7 +12,7 @@ pub mod websockets;
 pub use attestation::AttestationGenerator;
 
 use bytes::Bytes;
-use http::{HeaderName, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::service_fn, Response};
 use hyper_util::rt::TokioIo;
@@ -178,22 +178,12 @@ impl ProxyServer {
             let headers = req.headers_mut();
 
             // Add or update the HOST header
-            if let Ok(host_header_value) = target.parse() {
-                let old_value = headers.insert(http::header::HOST, host_header_value);
-                tracing::info!(
-                    "Updating Host header - old value: {old_value:?} new value: {target}",
-                );
-            } else {
-                error!("Failed to encode host as header value: {target}");
-            }
+            let old_value = update_header(headers, &http::header::HOST, &target);
+            tracing::info!("Updating Host header - old value: {old_value:?} new value: {target}",);
 
             // Add the x-real-ip header
             let client_ip = client_addr.ip().to_string();
-            if let Ok(real_ip_value) = HeaderValue::from_str(&client_ip) {
-                headers.insert(&X_REAL_IP, real_ip_value);
-            } else {
-                error!("Failed to encode x-real-ip header value: {client_ip}");
-            }
+            update_header(headers, &X_REAL_IP, &client_ip);
 
             // Add or update the x-forwarded-for header
             let new_x_forwarded_for =
@@ -204,11 +194,7 @@ impl ProxyServer {
                     _ => client_ip.clone(),
                 };
 
-            if let Ok(forwarded_for_value) = HeaderValue::from_str(&new_x_forwarded_for) {
-                headers.insert(&X_FORWARDED_FOR, forwarded_for_value);
-            } else {
-                error!("Failed to encode x-forwarded-for header value: {new_x_forwarded_for}");
-            }
+            update_header(headers, &X_FORWARDED_FOR, &new_x_forwarded_for);
 
             // If we have measurements, from the remote peer, add them to the request header
             let measurements = measurements.clone();
@@ -224,10 +210,11 @@ impl ProxyServer {
                     }
                 }
             }
-            headers.insert(
+
+            update_header(
+                headers,
                 ATTESTATION_TYPE_HEADER,
-                HeaderValue::from_str(remote_attestation_type.as_str())
-                    .expect("Attestation type should be able to be encoded as a header value"),
+                remote_attestation_type.as_str(),
             );
 
             let target = target.clone();
@@ -392,11 +379,11 @@ impl ProxyClient {
                                 }
                             }
                         }
-                        headers.insert(
+
+                        update_header(
+                            headers,
                             ATTESTATION_TYPE_HEADER,
-                            HeaderValue::from_str(remote_attestation_type.as_str()).expect(
-                                "Attestation type should be able to be encoded as a header value",
-                            ),
+                            remote_attestation_type.as_str(),
                         );
                         (Ok(resp.map(|b| b.boxed())), false)
                     }
@@ -551,6 +538,25 @@ impl ProxyClient {
         let (response_tx, response_rx) = oneshot::channel();
         requests_tx.send((req, response_tx)).await?;
         Ok(response_rx.await??)
+    }
+}
+
+/// Update a request/response header if we are able to encode the header value
+///
+/// This avoids bailing on bad header values - the headers are simply not updated
+fn update_header<K>(
+    headers: &mut HeaderMap,
+    header_name: K,
+    header_value: &str,
+) -> Option<HeaderValue>
+where
+    K: http::header::IntoHeaderName + std::fmt::Display,
+{
+    if let Ok(value) = HeaderValue::from_str(header_value) {
+        headers.insert(header_name, value)
+    } else {
+        error!("Failed to encode {header_name} header value: {header_value}");
+        None
     }
 }
 
