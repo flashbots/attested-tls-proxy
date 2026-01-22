@@ -3,7 +3,7 @@ mod ak_certificate;
 mod nv_index;
 use ak_certificate::{read_ak_certificate_from_tpm, verify_ak_cert_with_azure_roots};
 
-use az_tdx_vtpm::{hcl, imds, report, vtpm};
+use az_tdx_vtpm::{hcl, imds, vtpm};
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
 use num_bigint::BigUint;
 use openssl::{error::ErrorStack, pkey::PKey};
@@ -42,12 +42,14 @@ struct TpmAttest {
 
 /// Generate a TDX attestation on Azure
 pub async fn create_azure_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, MaaError> {
-    let td_report = report::get_report()?;
+    let hcl_report_bytes = vtpm::get_report_with_report_data(&input_data)?;
+
+    let hcl = hcl::HclReport::new(hcl_report_bytes.clone())?;
+
+    let td_report_from_hcl = hcl.try_into()?;
 
     // This makes a request to Azure Instance metadata service and gives us a binary response
-    let td_quote_bytes = imds::get_td_quote(&td_report)?;
-
-    let hcl_report_bytes = vtpm::get_report_with_report_data(&input_data)?;
+    let td_quote_bytes = imds::get_td_quote(&td_report_from_hcl)?;
 
     let ak_certificate_der = read_ak_certificate_from_tpm()?;
 
