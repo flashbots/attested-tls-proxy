@@ -122,12 +122,12 @@ impl ProxyServer {
     }
 
     /// Accept an incoming connection and handle it in a seperate task
-    pub async fn accept(&self) -> Result<(), ProxyError> {
+    pub async fn accept(&self) -> Result<tokio::task::JoinHandle<()>, ProxyError> {
         let target = self.target;
         let (inbound, _client_addr) = self.listener.accept().await?;
         let attested_tls_server = self.attested_tls_server.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             match attested_tls_server.handle_connection(inbound).await {
                 Ok((tls_stream, measurements, attestation_type)) => {
                     if let Err(err) =
@@ -143,7 +143,7 @@ impl ProxyServer {
             }
         });
 
-        Ok(())
+        Ok(handle)
     }
 
     /// Helper to get the socket address of the underlying TCP listener
@@ -396,18 +396,18 @@ impl ProxyClient {
     }
 
     /// Accept an incoming connection and handle it in a separate task
-    pub async fn accept(&self) -> io::Result<()> {
+    pub async fn accept(&self) -> io::Result<tokio::task::JoinHandle<()>> {
         let (inbound, _client_addr) = self.listener.accept().await?;
 
         let requests_tx = self.requests_tx.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             if let Err(err) = Self::handle_connection(inbound, requests_tx).await {
                 warn!("Failed to handle connection from source client: {err}");
             }
         });
 
-        Ok(())
+        Ok(handle)
     }
 
     /// Handle an incoming connection from the source client

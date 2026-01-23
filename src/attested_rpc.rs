@@ -190,4 +190,78 @@ mod tests {
         let response: String = rpc_client.request("eth_chainId", ()).await.unwrap();
         assert_eq!(response, "0x1");
     }
+
+    #[tokio::test]
+    async fn server_attestation_rpc_client_drops_connection() {
+        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+
+        let (target_addr, _handle) = spawn_test_rpc_server().await;
+
+        let proxy_server = ProxyServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            "127.0.0.1:0",
+            target_addr,
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+
+        // This is used to trigger a dropped connection to the proxy server
+        let (connection_breaker_tx, connection_breaker_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let handle = proxy_server.accept().await.unwrap();
+
+            // Wait for a signal to simulate a dropped connection, then drop the task handling the
+            // connection
+            connection_breaker_rx.await.unwrap();
+            handle.abort();
+
+            proxy_server.accept().await.unwrap();
+        });
+
+        let client = AttestedTlsClient::new_with_tls_config(
+            client_config,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let attested_rpc_client = AttestedRpcClient { inner: client };
+
+        let (rpc_client, _measurements, _attestation_type) = attested_rpc_client
+            .connect(&proxy_addr.to_string(), true)
+            .await
+            .unwrap();
+
+        let response: String = rpc_client.request("eth_chainId", ()).await.unwrap();
+        assert_eq!(response, "0x1");
+
+        // Now break the connection
+        connection_breaker_tx.send(()).unwrap();
+
+        // Show that the next call fails
+        let err = rpc_client
+            .request::<(), String>("eth_chainId", ())
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "connection error".to_string());
+
+        // Make another connection
+        let (rpc_client, _measurements, _attestation_type) = attested_rpc_client
+            .connect(&proxy_addr.to_string(), true)
+            .await
+            .unwrap();
+
+        // Now the call succeeds
+        let response: String = rpc_client.request("eth_chainId", ()).await.unwrap();
+        assert_eq!(response, "0x1");
+    }
 }
