@@ -37,6 +37,11 @@ time = "0.3.44"
 axum = "0.8.6"
 tower-http = { version = "0.6.7", features = ["fs"] }
 
+rsa   = { version = "0.9", default-features = false }
+p256 = { version = "0.13.2", features = ["pkcs8"] }
+pkcs1 = "0.7.5"
+pkcs8 = "0.10.2"
+
 [dev-dependencies]
 rcgen = "0.14.5"
 tempfile = "3.23.0"
@@ -48,3 +53,29 @@ default = ["azure"]
 
 # Adds support for Microsoft Azure attestation generation and verification
 azure = ["attested-tls/azure"]
+
+[package.metadata.deb]
+maintainer = "Flashbots Team <devops+ci@flashbots.net>"
+depends = "$auto"
+section = "network"
+priority = "optional"
+maintainer-scripts = "pkg/debian"
+assets = [
+    [
+        "target/reproducible/attested-tls-proxy",
+        "usr/bin/",
+        "755",
+    ],
+    [
+        "LICENSE",
+        "usr/share/doc/attested-tls-proxy/",
+        "644",
+    ],
+]
+systemd-units = { enable = false, start = false, unit-name = "attested-tls-proxy" }
+
+[profile.reproducible]
+inherits = "release"
+lto = "thin"
+panic = "abort"
+incremental = false

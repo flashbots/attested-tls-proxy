@@ -2,13 +2,14 @@
 pub mod attested_get;
 pub mod file_server;
 pub mod health_check;
+pub mod normalize_pem;
 
 pub use attested_tls;
 pub use attested_tls::attestation;
 pub use attested_tls::attestation::AttestationGenerator;
 
 use bytes::Bytes;
-use http::HeaderValue;
+use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::service_fn, Response};
 use hyper_util::rt::TokioIo;
@@ -41,6 +42,12 @@ const ATTESTATION_TYPE_HEADER: &str = "X-Flashbots-Attestation-Type";
 /// The header name for giving measurements
 const MEASUREMENT_HEADER: &str = "X-Flashbots-Measurement";
 
+/// The header name for giving the forwarded for IP
+static X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
+
+/// The header name for giving the 'real IP' - in our case that of the client
+static X_REAL_IP: HeaderName = HeaderName::from_static("x-real-ip");
+
 /// The longest time in seconds to wait between reconnection attempts
 const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 
@@ -56,15 +63,15 @@ pub struct ProxyServer {
     attested_tls_server: AttestedTlsServer,
     /// The underlying TCP listener
     listener: Arc<TcpListener>,
-    /// The address of the target service we are proxying to
-    target: SocketAddr,
+    /// The address/hostname of the target service we are proxying to
+    target: String,
 }
 
 impl ProxyServer {
     pub async fn new(
         cert_and_key: TlsCertAndKey,
         local: impl ToSocketAddrs,
-        target: SocketAddr,
+        target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
@@ -94,7 +101,7 @@ impl ProxyServer {
         cert_chain: Vec<CertificateDer<'static>>,
         server_config: Arc<ServerConfig>,
         local: impl ToSocketAddrs,
-        target: SocketAddr,
+        target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
@@ -117,16 +124,21 @@ impl ProxyServer {
 
     /// Accept an incoming connection and handle it in a seperate task
     pub async fn accept(&self) -> Result<(), ProxyError> {
-        let target = self.target;
-        let (inbound, _client_addr) = self.listener.accept().await?;
+        let target = self.target.clone();
+        let (inbound, client_addr) = self.listener.accept().await?;
         let attested_tls_server = self.attested_tls_server.clone();
 
         tokio::spawn(async move {
             match attested_tls_server.handle_connection(inbound).await {
                 Ok((tls_stream, measurements, attestation_type)) => {
-                    if let Err(err) =
-                        Self::handle_connection(tls_stream, measurements, attestation_type, target)
-                            .await
+                    if let Err(err) = Self::handle_connection(
+                        tls_stream,
+                        measurements,
+                        attestation_type,
+                        target,
+                        client_addr,
+                    )
+                    .await
                     {
                         warn!("Failed to handle connection: {err}");
                     }
@@ -150,7 +162,8 @@ impl ProxyServer {
         tls_stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
         measurements: Option<MultiMeasurements>,
         remote_attestation_type: AttestationType,
-        target: SocketAddr,
+        target: String,
+        client_addr: SocketAddr,
     ) -> Result<(), ProxyError> {
         tracing::debug!("proxy-server accepted connection");
 
@@ -159,9 +172,29 @@ impl ProxyServer {
 
         // Setup a request handler
         let service = service_fn(move |mut req| {
+            let headers = req.headers_mut();
+
+            // Add or update the HOST header
+            let old_value = update_header(headers, &http::header::HOST, &target);
+            tracing::info!("Updating Host header - old value: {old_value:?} new value: {target}",);
+
+            // Add the x-real-ip header
+            let client_ip = client_addr.ip().to_string();
+            update_header(headers, &X_REAL_IP, &client_ip);
+
+            // Add or update the x-forwarded-for header
+            let new_x_forwarded_for =
+                match headers.get(&X_FORWARDED_FOR).and_then(|v| v.to_str().ok()) {
+                    Some(existing) if !existing.trim().is_empty() => {
+                        format!("{}, {}", existing.trim(), client_ip)
+                    }
+                    _ => client_ip.clone(),
+                };
+
+            update_header(headers, &X_FORWARDED_FOR, &new_x_forwarded_for);
+
             // If we have measurements, from the remote peer, add them to the request header
             let measurements = measurements.clone();
-            let headers = req.headers_mut();
             if let Some(measurements) = measurements {
                 match measurements.to_header_format() {
                     Ok(header_value) => {
@@ -174,12 +207,14 @@ impl ProxyServer {
                     }
                 }
             }
-            headers.insert(
+
+            update_header(
+                headers,
                 ATTESTATION_TYPE_HEADER,
-                HeaderValue::from_str(remote_attestation_type.as_str())
-                    .expect("Attestation type should be able to be encoded as a header value"),
+                remote_attestation_type.as_str(),
             );
 
+            let target = target.clone();
             async move {
                 match Self::handle_http_request(req, target).await {
                     Ok(res) => {
@@ -205,7 +240,7 @@ impl ProxyServer {
     // Handle a request from the proxy client to the target server
     async fn handle_http_request(
         req: hyper::Request<hyper::body::Incoming>,
-        target: SocketAddr,
+        target: String,
     ) -> Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, ProxyError> {
         // Connect to the target server
         let outbound = TcpStream::connect(target).await?;
@@ -339,11 +374,11 @@ impl ProxyClient {
                                 }
                             }
                         }
-                        headers.insert(
+
+                        update_header(
+                            headers,
                             ATTESTATION_TYPE_HEADER,
-                            HeaderValue::from_str(remote_attestation_type.as_str()).expect(
-                                "Attestation type should be able to be encoded as a header value",
-                            ),
+                            remote_attestation_type.as_str(),
                         );
                         (Ok(resp.map(|b| b.boxed())), false)
                     }
@@ -501,6 +536,25 @@ impl ProxyClient {
     }
 }
 
+/// Update a request/response header if we are able to encode the header value
+///
+/// This avoids bailing on bad header values - the headers are simply not updated
+fn update_header<K>(
+    headers: &mut HeaderMap,
+    header_name: K,
+    header_value: &str,
+) -> Option<HeaderValue>
+where
+    K: http::header::IntoHeaderName + std::fmt::Display,
+{
+    if let Ok(value) = HeaderValue::from_str(header_value) {
+        headers.insert(header_name, value)
+    } else {
+        error!("Failed to encode {header_name} header value: {header_value}");
+        None
+    }
+}
+
 /// An error when running a proxy client or server
 #[derive(Error, Debug)]
 pub enum ProxyError {
@@ -586,7 +640,7 @@ mod tests {
             cert_chain,
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
@@ -663,7 +717,7 @@ mod tests {
             server_cert_chain,
             server_tls_server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
         )
@@ -734,7 +788,7 @@ mod tests {
             server_cert_chain,
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
         )
@@ -815,7 +869,7 @@ mod tests {
             server_cert_chain,
             server_tls_server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::mock(),
         )
@@ -914,7 +968,7 @@ mod tests {
             cert_chain.clone(),
             server_config,
             "127.0.0.1:0",
-            target_addr,
+            target_addr.to_string(),
             AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
             AttestationVerifier::expect_none(),
         )
