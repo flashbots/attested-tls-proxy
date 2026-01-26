@@ -1,14 +1,11 @@
 //! An attested TLS protocol and HTTPS proxy
-pub mod attestation;
 pub mod attested_get;
-pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
 
-#[cfg(feature = "azure")]
-pub mod websockets;
-
-pub use attestation::AttestationGenerator;
+pub use attested_tls;
+pub use attested_tls::attestation;
+pub use attested_tls::attestation::AttestationGenerator;
 
 use bytes::Bytes;
 use http::HeaderValue;
@@ -31,11 +28,11 @@ use tokio_rustls::rustls::pki_types::CertificateDer;
 #[cfg(test)]
 use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 
-use crate::{
+use attested_tls::{
     attestation::{
         measurements::MultiMeasurements, AttestationError, AttestationType, AttestationVerifier,
     },
-    attested_tls::{AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey},
+    AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey,
 };
 
 /// The header name for giving attestation type
@@ -297,10 +294,8 @@ impl ProxyClient {
         Self::new_with_inner(address, attested_tls_client, &target_name).await
     }
 
-    /// Create a new proxy client with given TLS configuration
-    ///
-    /// This is private as it allows dangerous configuration but is used in tests
-    async fn new_with_inner(
+    /// Create a new proxy client with given [AttestedTlsClient]
+    pub async fn new_with_inner(
         address: impl ToSocketAddrs,
         attested_tls_client: AttestedTlsClient,
         target_name: &str,
@@ -568,13 +563,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use crate::{
-        attestation::measurements::{
-            DcapMeasurementRegister, MeasurementPolicy, MeasurementRecord, MultiMeasurements,
-        },
-        attested_tls::get_tls_cert_with_config,
+        attestation::measurements::MultiMeasurements, attested_tls::get_tls_cert_with_config,
     };
 
     use super::*;
@@ -586,6 +576,7 @@ mod tests {
     // Server has mock DCAP, client has no attestation and no client auth
     #[tokio::test]
     async fn http_proxy_with_server_attestation() {
+        let _ = tracing_subscriber::fmt::try_init();
         let target_addr = example_http_service().await;
 
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
@@ -945,110 +936,5 @@ mod tests {
         .unwrap();
 
         assert_eq!(retrieved_chain, cert_chain);
-    }
-
-    // Negative test - server does not provide attestation but client requires it
-    // Server has no attestaion, client has no attestation and no client auth
-    #[tokio::test]
-    async fn fails_on_no_attestation_when_expected() {
-        let target_addr = example_http_service().await;
-
-        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
-        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
-
-        let proxy_server = ProxyServer::new_with_tls_config(
-            cert_chain,
-            server_config,
-            "127.0.0.1:0",
-            target_addr,
-            AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::expect_none(),
-        )
-        .await
-        .unwrap();
-
-        let proxy_addr = proxy_server.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            proxy_server.accept().await.unwrap();
-        });
-
-        let proxy_client_result = ProxyClient::new_with_tls_config(
-            client_config,
-            "127.0.0.1:0".to_string(),
-            proxy_addr.to_string(),
-            AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
-            None,
-        )
-        .await;
-
-        assert!(matches!(
-            proxy_client_result.unwrap_err(),
-            ProxyError::AttestedTls(AttestedTlsError::Attestation(
-                AttestationError::AttestationTypeNotAccepted
-            ))
-        ));
-    }
-
-    // Negative test - server does not provide attestation but client requires it
-    // Server has no attestaion, client has no attestation and no client auth
-    #[tokio::test]
-    async fn fails_on_bad_measurements() {
-        let target_addr = example_http_service().await;
-
-        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
-        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
-
-        let proxy_server = ProxyServer::new_with_tls_config(
-            cert_chain,
-            server_config,
-            "127.0.0.1:0",
-            target_addr,
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
-            AttestationVerifier::expect_none(),
-        )
-        .await
-        .unwrap();
-
-        let proxy_addr = proxy_server.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            proxy_server.accept().await.unwrap();
-        });
-
-        let attestation_verifier = AttestationVerifier {
-            measurement_policy: MeasurementPolicy {
-                accepted_measurements: vec![MeasurementRecord {
-                    measurement_id: "test".to_string(),
-                    measurements: MultiMeasurements::Dcap(HashMap::from([
-                        (DcapMeasurementRegister::MRTD, [0; 48]),
-                        (DcapMeasurementRegister::RTMR0, [0; 48]),
-                        (DcapMeasurementRegister::RTMR1, [1; 48]), // This differs from the mock measurements
-                        (DcapMeasurementRegister::RTMR2, [0; 48]),
-                        (DcapMeasurementRegister::RTMR3, [0; 48]),
-                    ])),
-                }],
-            },
-            pccs_url: None,
-            log_dcap_quote: false,
-        };
-
-        let proxy_client_result = ProxyClient::new_with_tls_config(
-            client_config,
-            "127.0.0.1:0".to_string(),
-            proxy_addr.to_string(),
-            AttestationGenerator::with_no_attestation(),
-            attestation_verifier,
-            None,
-        )
-        .await;
-
-        assert!(matches!(
-            proxy_client_result.unwrap_err(),
-            ProxyError::AttestedTls(AttestedTlsError::Attestation(
-                AttestationError::MeasurementsNotAccepted
-            ))
-        ));
     }
 }

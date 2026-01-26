@@ -11,22 +11,16 @@ repository = "https://github.com/flashbots/attested-tls-proxy"
 keywords = ["attested-TLS", "CVM", "TDX"]
 
 [dependencies]
+attested-tls = { path = "attested-tls" }
 tokio = { version = "1.48.0", features = ["full"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = [
   "ring",
 ] }
-sha2 = "0.10.9"
-x509-parser = "0.18.0"
 thiserror = "2.0.17"
 clap = { version = "4.5.51", features = ["derive", "env"] }
-webpki-roots = "1.0.4"
 rustls-pemfile = "2.2.0"
 anyhow = "1.0.100"
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
-configfs-tsm = "0.0.2"
-rand_core = { version = "0.6.4", features = ["getrandom"] }
-dcap-qvl = "0.3.4"
-hex = "0.4.3"
 hyper = { version = "1.7.0", features = ["server", "http2"] }
 hyper-util = "0.1.17"
 http-body-util = "0.1.3"
@@ -34,35 +28,23 @@ bytes = "1.10.1"
 http = "1.3.1"
 serde_json = "1.0.145"
 serde = "1.0.228"
-base64 = "0.22.1"
 reqwest = { version = "0.12.23", default-features = false, features = [
   "rustls-tls-webpki-roots-no-provider",
 ] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
-parity-scale-codec = "3.7.5"
-openssl = "0.10.75"
-az-tdx-vtpm = { version = "0.7.4", optional = true }
-tss-esapi = { version = "7.6.0", optional = true }
-num-bigint = "0.4.6"
-webpki = { package = "rustls-webpki", version = "0.103.8" }
 time = "0.3.44"
-once_cell = "1.21.3"
 axum = "0.8.6"
 tower-http = { version = "0.6.7", features = ["fs"] }
-tokio-tungstenite = { version = "0.28.0", optional = true }
-futures-util = { version = "0.3.31", optional = true }
 
 [dev-dependencies]
 rcgen = "0.14.5"
 tempfile = "3.23.0"
 tdx-quote = { version = "0.0.5", features = ["mock"] }
+attested-tls = { path = "attested-tls", features = ["test-helpers", "mock"] }
 
 [features]
-default = ["azure", "ws"]
+default = ["azure"]
 
 # Adds support for Microsoft Azure attestation generation and verification
-azure = ["tss-esapi", "az-tdx-vtpm"]
-
-# Adds websocket support
-ws = ["tokio-tungstenite", "futures-util"]
+azure = ["attested-tls/azure"]

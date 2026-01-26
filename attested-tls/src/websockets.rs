@@ -5,7 +5,7 @@ use tokio_tungstenite::{tungstenite::protocol::WebSocketConfig, WebSocketStream}
 
 use crate::{
     attestation::{measurements::MultiMeasurements, AttestationType},
-    attested_tls::{AttestedTlsClient, AttestedTlsError, AttestedTlsServer},
+    AttestedTlsClient, AttestedTlsError, AttestedTlsServer,
 };
 
 /// Websocket message type re-exported for convenience
