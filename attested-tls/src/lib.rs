@@ -56,6 +56,16 @@ pub struct AttestedTlsServer {
     acceptor: TlsAcceptor,
 }
 
+impl std::fmt::Debug for AttestedTlsServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttestedTlsServer")
+            .field("attestation_generator", &self.attestation_generator)
+            .field("attestation_verifier", &self.attestation_verifier)
+            .field("cert_chain", &self.cert_chain)
+            .finish()
+    }
+}
+
 impl AttestedTlsServer {
     pub async fn new(
         cert_and_key: TlsCertAndKey,
@@ -100,6 +110,9 @@ impl AttestedTlsServer {
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, AttestedTlsError> {
+        #[cfg(feature = "mock")]
+        tracing::warn!("AttestedTlsServer instantiated in MOCK mode - do NOT use in production");
+
         let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
 
         Ok(Self {
@@ -268,6 +281,9 @@ impl AttestedTlsClient {
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, AttestedTlsError> {
+        #[cfg(feature = "mock")]
+        tracing::warn!("AttestedTlsClient instantiated in MOCK mode - do NOT use in production");
+
         let connector = TlsConnector::from(client_config.clone());
 
         Ok(Self {
