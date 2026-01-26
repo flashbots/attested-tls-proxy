@@ -215,12 +215,12 @@ mod tests {
         let (connection_breaker_tx, connection_breaker_rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
-            let handle = proxy_server.accept().await.unwrap();
+            let connection_handle = proxy_server.accept().await.unwrap();
 
             // Wait for a signal to simulate a dropped connection, then drop the task handling the
             // connection
             connection_breaker_rx.await.unwrap();
-            handle.abort();
+            connection_handle.abort();
 
             proxy_server.accept().await.unwrap();
         });

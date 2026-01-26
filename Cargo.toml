@@ -61,7 +61,7 @@ tower-service = { version = "0.3.3", optional = true }
 alloy-transport-http = { version = "1.4.3", features = [
   "hyper",
 ], optional = true }
-url = { version = "2.5.8", optional = true }
+url = { version = "2.5.7", optional = true }
 
 [dev-dependencies]
 rcgen = "0.14.5"
