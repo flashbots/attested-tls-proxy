@@ -170,9 +170,6 @@ impl ProxyServer {
     ) -> Result<(), ProxyError> {
         tracing::debug!("proxy-server accepted connection");
 
-        // Setup an HTTP server
-        let http = hyper::server::conn::http2::Builder::new(TokioExecutor);
-
         // Setup a request handler
         let service = service_fn(move |mut req| {
             let headers = req.headers_mut();
@@ -235,7 +232,14 @@ impl ProxyServer {
 
         // Serve this connection using the request handler defined above
         let io = TokioIo::new(tls_stream);
-        http.serve_connection(io, service).await?;
+
+        // Setup an HTTP server
+        hyper::server::conn::http2::Builder::new(TokioExecutor)
+            .timer(hyper_util::rt::tokio::TokioTimer::new())
+            .keep_alive_interval(Some(Duration::from_secs(30)))
+            .keep_alive_timeout(Duration::from_secs(10))
+            .serve_connection(io, service)
+            .await?;
 
         Ok(())
     }
@@ -516,6 +520,10 @@ impl ProxyClient {
 
         let outbound_io = TokioIo::new(tls_stream);
         let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
+            .timer(hyper_util::rt::tokio::TokioTimer::new())
+            .keep_alive_interval(Some(Duration::from_secs(30)))
+            .keep_alive_timeout(Duration::from_secs(10))
+            .keep_alive_while_idle(true)
             .handshake::<_, hyper::body::Incoming>(outbound_io)
             .await?;
 
