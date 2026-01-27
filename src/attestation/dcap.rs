@@ -5,6 +5,7 @@ use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
     collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
+    QuoteCollateralV3,
 };
 use thiserror::Error;
 
@@ -28,14 +29,18 @@ pub async fn verify_dcap_attestation(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
-    verify_dcap_attestation_with_given_timestamp(input, expected_input_data, pccs_url, now).await
+    verify_dcap_attestation_with_given_timestamp(input, expected_input_data, pccs_url, None, now)
+        .await
 }
 
 /// Allows the timestamp to be given, making it possible to test with existing attestations
+///
+/// If collateral is given, it is used instead of contacting PCCS (used in tests)
 async fn verify_dcap_attestation_with_given_timestamp(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
+    collateral: Option<QuoteCollateralV3>,
     now: u64,
 ) -> Result<MultiMeasurements, DcapVerificationError> {
     let quote = Quote::parse(&input)?;
@@ -43,13 +48,19 @@ async fn verify_dcap_attestation_with_given_timestamp(
 
     let ca = quote.ca()?;
     let fmspc = hex::encode_upper(quote.fmspc()?);
-    let collateral = get_collateral_for_fmspc(
-        &pccs_url.clone().unwrap_or(PCS_URL.to_string()),
-        fmspc,
-        ca,
-        false, // Indicates not SGX
-    )
-    .await?;
+
+    let collateral = match collateral {
+        Some(c) => c,
+        None => {
+            get_collateral_for_fmspc(
+                &pccs_url.clone().unwrap_or(PCS_URL.to_string()),
+                fmspc,
+                ca,
+                false, // Indicates not SGX
+            )
+            .await?
+        }
+    };
 
     let quote_verifier = dcap_qvl::verify::QuoteVerifier::new_prod();
     let _verified_report = quote_verifier.verify(&input, &collateral, now)?;
@@ -134,7 +145,7 @@ mod tests {
 
         // To avoid this test stopping working when the certificate is no longer valid we pass in a
         // timestamp
-        let now = 1769503950;
+        let now = 1769509141;
 
         let measurements_json = br#"
         [{
@@ -154,6 +165,11 @@ mod tests {
             .await
             .unwrap();
 
+        let collateral_bytes: &'static [u8] =
+            include_bytes!("../../test-assets/dcap-quote-collateral-00.json");
+
+        let collateral = serde_json::from_slice(collateral_bytes).unwrap();
+
         let measurements = verify_dcap_attestation_with_given_timestamp(
             attestation_bytes.to_vec(),
             [
@@ -163,6 +179,7 @@ mod tests {
                 173, 129, 180, 32, 247, 70, 250, 141, 176, 248, 99, 125,
             ],
             None,
+            Some(collateral),
             now,
         )
         .await
