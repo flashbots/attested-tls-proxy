@@ -6,6 +6,8 @@ pub mod file_server;
 pub mod health_check;
 pub mod normalize_pem;
 
+pub mod self_signed;
+
 #[cfg(feature = "azure")]
 pub mod websockets;
 
