@@ -134,7 +134,7 @@ mod tests {
 
         // To avoid this test stopping working when the certificate is no longer valid we pass in a
         // timestamp
-        let now = 1764621240;
+        let now = 1769503950;
 
         let measurements_json = br#"
         [{

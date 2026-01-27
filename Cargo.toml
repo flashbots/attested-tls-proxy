@@ -25,7 +25,7 @@ anyhow = "1.0.100"
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
 configfs-tsm = "0.0.2"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-dcap-qvl = { git="https://github.com/Phala-Network/dcap-qvl.git" }
+dcap-qvl = "0.3.10"
 hex = "0.4.3"
 hyper = { version = "1.7.0", features = ["server", "http2"] }
 hyper-util = "0.1.17"
