@@ -1,10 +1,15 @@
 //! Attested TLS protocol server and client
-use crate::{
-    attestation::{
-        measurements::MultiMeasurements, AttestationError, AttestationExchangeMessage,
-        AttestationGenerator, AttestationType, AttestationVerifier,
-    },
-    host_to_host_with_port,
+pub mod attestation;
+
+#[cfg(feature = "ws")]
+pub mod websockets;
+
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod test_helpers;
+
+use crate::attestation::{
+    measurements::MultiMeasurements, AttestationError, AttestationExchangeMessage,
+    AttestationGenerator, AttestationType, AttestationVerifier,
 };
 use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
@@ -51,6 +56,16 @@ pub struct AttestedTlsServer {
     acceptor: TlsAcceptor,
 }
 
+impl std::fmt::Debug for AttestedTlsServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttestedTlsServer")
+            .field("attestation_generator", &self.attestation_generator)
+            .field("attestation_verifier", &self.attestation_verifier)
+            .field("cert_chain", &self.cert_chain)
+            .finish()
+    }
+}
+
 impl AttestedTlsServer {
     pub async fn new(
         cert_and_key: TlsCertAndKey,
@@ -88,13 +103,16 @@ impl AttestedTlsServer {
 
     /// Start with preconfigured TLS
     ///
-    /// This is not fully public as it allows dangerous configuration
-    pub(crate) async fn new_with_tls_config(
+    /// This allows dangerous configuration
+    pub async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
         server_config: Arc<ServerConfig>,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, AttestedTlsError> {
+        #[cfg(feature = "mock")]
+        tracing::warn!("AttestedTlsServer instantiated in MOCK mode - do NOT use in production");
+
         let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
 
         Ok(Self {
@@ -256,13 +274,16 @@ impl AttestedTlsClient {
 
     /// Create a new proxy client with given TLS configuration
     ///
-    /// This not fully public as it allows dangerous configuration but is used in tests
-    pub(crate) async fn new_with_tls_config(
+    /// This allows dangerous configuration but is used in tests
+    pub async fn new_with_tls_config(
         client_config: Arc<ClientConfig>,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, AttestedTlsError> {
+        #[cfg(feature = "mock")]
+        tracing::warn!("AttestedTlsClient instantiated in MOCK mode - do NOT use in production");
+
         let connector = TlsConnector::from(client_config.clone());
 
         Ok(Self {
@@ -414,8 +435,8 @@ pub async fn get_tls_cert(
 }
 
 /// Helper for testing getting remote certificate
-#[cfg(test)]
-pub(crate) async fn get_tls_cert_with_config(
+#[cfg(any(test, feature = "test-helpers"))]
+pub async fn get_tls_cert_with_config(
     server_name: &str,
     attestation_verifier: AttestationVerifier,
     client_config: Arc<ClientConfig>,
@@ -502,10 +523,26 @@ fn server_name_from_host(
     ServerName::try_from(host_part.to_string())
 }
 
+/// If no port was provided, default to 443
+fn host_to_host_with_port(host: &str) -> String {
+    if host.contains(':') {
+        host.to_string()
+    } else {
+        format!("{host}:443")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
-    use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
+    use crate::{
+        attestation::measurements::{
+            DcapMeasurementRegister, MeasurementPolicy, MeasurementRecord,
+        },
+        test_helpers::{generate_certificate_chain, generate_tls_config},
+    };
     use tokio::net::TcpListener;
 
     #[tokio::test]
@@ -542,5 +579,106 @@ mod tests {
 
         let (_stream, _measurements, _attestation_type) =
             client.connect_tcp(&server_addr.to_string()).await.unwrap();
+    }
+
+    // Negative test - server does not provide attestation but client requires it
+    // Server has no attestation, client has no attestation and no client auth
+    #[tokio::test]
+    async fn fails_on_no_attestation_when_expected() {
+        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+
+        let server = AttestedTlsServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (tcp_stream, _) = listener.accept().await.unwrap();
+            let (_stream, _measurements, _attestation_type) =
+                server.handle_connection(tcp_stream).await.unwrap();
+        });
+
+        let client = AttestedTlsClient::new_with_tls_config(
+            client_config,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let client_result = client.connect_tcp(&server_addr.to_string()).await;
+
+        assert!(matches!(
+            client_result.unwrap_err(),
+            AttestedTlsError::Attestation(AttestationError::AttestationTypeNotAccepted)
+        ));
+    }
+
+    // Negative test - server does not provide attestation but client requires it
+    // Server has no attestaion, client has no attestation and no client auth
+    #[tokio::test]
+    async fn fails_on_bad_measurements() {
+        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+
+        let server = AttestedTlsServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (tcp_stream, _) = listener.accept().await.unwrap();
+            let (_stream, _measurements, _attestation_type) =
+                server.handle_connection(tcp_stream).await.unwrap();
+        });
+
+        let attestation_verifier = AttestationVerifier {
+            measurement_policy: MeasurementPolicy {
+                accepted_measurements: vec![MeasurementRecord {
+                    measurement_id: "test".to_string(),
+                    measurements: MultiMeasurements::Dcap(HashMap::from([
+                        (DcapMeasurementRegister::MRTD, [0; 48]),
+                        (DcapMeasurementRegister::RTMR0, [0; 48]),
+                        (DcapMeasurementRegister::RTMR1, [1; 48]), // This differs from the mock measurements
+                        (DcapMeasurementRegister::RTMR2, [0; 48]),
+                        (DcapMeasurementRegister::RTMR3, [0; 48]),
+                    ])),
+                }],
+            },
+            pccs_url: None,
+            log_dcap_quote: false,
+        };
+
+        let client = AttestedTlsClient::new_with_tls_config(
+            client_config,
+            AttestationGenerator::with_no_attestation(),
+            attestation_verifier,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let client_result = client.connect_tcp(&server_addr.to_string()).await;
+
+        assert!(matches!(
+            client_result.unwrap_err(),
+            AttestedTlsError::Attestation(AttestationError::MeasurementsNotAccepted)
+        ));
     }
 }

@@ -136,36 +136,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "attested-tls-proxy"
+name = "attested-tls"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "axum",
  "az-tdx-vtpm",
  "base64 0.22.1",
- "bytes",
- "clap",
  "configfs-tsm",
  "dcap-qvl",
  "futures-util",
  "hex",
  "http",
- "http-body-util",
- "hyper",
- "hyper-util",
  "num-bigint",
  "once_cell",
  "openssl",
- "p256",
  "parity-scale-codec",
  "pem-rfc7468",
- "pkcs1",
- "pkcs8",
  "rand_core 0.6.4",
  "rcgen",
  "reqwest",
- "rsa",
- "rustls-pemfile",
  "rustls-webpki 0.103.8",
  "serde",
  "serde_json",
@@ -177,12 +166,44 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
- "tower-http",
  "tracing",
- "tracing-subscriber",
  "tss-esapi",
  "webpki-roots",
  "x509-parser",
+]
+
+[[package]]
+name = "attested-tls-proxy"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "attested-tls",
+ "axum",
+ "bytes",
+ "clap",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "p256",
+ "pem-rfc7468",
+ "pkcs1",
+ "pkcs8",
+ "rcgen",
+ "reqwest",
+ "rsa",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "tdx-quote",
+ "tempfile",
+ "thiserror 2.0.17",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1584,9 +1605,9 @@ checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
 
 [[package]]
 name = "libm"
-version = "0.2.15"
+version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
