@@ -51,7 +51,8 @@ async fn verify_dcap_attestation_with_given_timestamp(
     )
     .await?;
 
-    let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
+    let quote_verifier = dcap_qvl::verify::QuoteVerifier::new_prod();
+    let _verified_report = quote_verifier.verify(&input, &collateral, now)?;
 
     let measurements = MultiMeasurements::from_dcap_qvl_quote(&quote)?;
 
@@ -133,7 +134,7 @@ mod tests {
 
         // To avoid this test stopping working when the certificate is no longer valid we pass in a
         // timestamp
-        let now = 1764621240;
+        let now = 1769503950;
 
         let measurements_json = br#"
         [{
