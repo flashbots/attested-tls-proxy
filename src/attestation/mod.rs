@@ -1,3 +1,5 @@
+//! CVM attestation generation and verification
+
 #[cfg(feature = "azure")]
 pub mod azure;
 pub mod dcap;
@@ -8,12 +10,15 @@ use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use thiserror::Error;
 
 use crate::attestation::{dcap::DcapVerificationError, measurements::MeasurementPolicy};
+
+const GCP_METADATA_API: &str =
+    "http://metadata.google.internal/computeMetadata/v1/project/project-id";
 
 /// This is the type sent over the channel to provide an attestation
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode)]
@@ -66,6 +71,26 @@ impl AttestationType {
             AttestationType::DcapTdx => "dcap-tdx",
         }
     }
+
+    /// Detect what platform we are on by attempting an attestation
+    pub async fn detect() -> Result<Self, AttestationError> {
+        // First attempt azure, if the feature is present
+        #[cfg(feature = "azure")]
+        {
+            if azure::create_azure_attestation([0; 64]).await.is_ok() {
+                return Ok(AttestationType::AzureTdx);
+            }
+        }
+        // Otherwise try DCAP quote - this internally checks that the quote provider is `tdx_guest`
+        if configfs_tsm::create_tdx_quote([0; 64]).is_ok() {
+            if running_on_gcp().await? {
+                return Ok(AttestationType::GcpTdx);
+            } else {
+                return Ok(AttestationType::DcapTdx);
+            }
+        }
+        Ok(AttestationType::None)
+    }
 }
 
 /// SCALE encode (used over the wire)
@@ -92,13 +117,14 @@ impl Display for AttestationType {
 }
 
 /// Can generate a local attestation based on attestation type
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AttestationGenerator {
     pub attestation_type: AttestationType,
     dummy_dcap_url: Option<String>,
 }
 
 impl AttestationGenerator {
+    /// Create an attesation generator with given attestation type
     pub fn new(
         attestation_type: AttestationType,
         dummy_dcap_url: Option<String>,
@@ -109,6 +135,13 @@ impl AttestationGenerator {
         }
     }
 
+    /// Detect what confidential compute platform is present and create the approprate attestation
+    /// generator
+    pub async fn detect() -> Result<Self, AttestationError> {
+        Self::new_with_detection(None, None).await
+    }
+
+    /// Do not generate attestations
     pub fn with_no_attestation() -> Self {
         Self {
             attestation_type: AttestationType::None,
@@ -116,6 +149,25 @@ impl AttestationGenerator {
         }
     }
 
+    /// Create an [AttestationGenerator] detecting the attestation type if it is not given
+    pub async fn new_with_detection(
+        attestation_type_string: Option<String>,
+        dummy_dcap_url: Option<String>,
+    ) -> Result<Self, AttestationError> {
+        let attestation_type_string = attestation_type_string.unwrap_or_else(|| "auto".to_string());
+        let attestaton_type = if attestation_type_string == "auto" {
+            tracing::info!("Doing attestation type detection...");
+            AttestationType::detect().await?
+        } else {
+            serde_json::from_value(serde_json::Value::String(attestation_type_string))?
+        };
+        tracing::info!("Local platform: {attestaton_type}");
+
+        Self::new(attestaton_type, dummy_dcap_url)
+    }
+
+    /// Create an [AttestationGenerator] without a given dummy DCAP url - meaning Dummy attestation
+    /// type will not be possible
     pub fn new_not_dummy(attestation_type: AttestationType) -> Result<Self, AttestationError> {
         if attestation_type == AttestationType::Dummy {
             return Err(AttestationError::DummyUrl);
@@ -127,6 +179,7 @@ impl AttestationGenerator {
         })
     }
 
+    /// Create a dummy [AttestationGenerator]
     pub fn new_dummy(dummy_dcap_url: Option<String>) -> Result<Self, AttestationError> {
         match dummy_dcap_url {
             Some(url) => {
@@ -147,7 +200,7 @@ impl AttestationGenerator {
         }
     }
 
-    /// Generate an attestation exchange message
+    /// Generate an attestation exchange message with given input data
     pub async fn generate_attestation(
         &self,
         input_data: [u8; 64],
@@ -158,7 +211,7 @@ impl AttestationGenerator {
         })
     }
 
-    /// Generate attestation evidence bytes based on attestation type
+    /// Generate attestation evidence bytes based on attestation type, with given input data
     async fn generate_attestation_bytes(
         &self,
         input_data: [u8; 64],
@@ -181,6 +234,9 @@ impl AttestationGenerator {
         }
     }
 
+    /// Generate a dummy attestaion by using an external service for the attestation generation
+    ///
+    /// This is for testing only
     async fn generate_dummy_attestation(
         &self,
         input_data: [u8; 64],
@@ -285,19 +341,12 @@ impl AttestationVerifier {
                 .await?
             }
             _ => {
-                if cfg!(test) {
-                    dcap::mock_verify_dcap(
-                        attestation_exchange_message.attestation,
-                        expected_input_data,
-                    )?
-                } else {
-                    dcap::verify_dcap_attestation(
-                        attestation_exchange_message.attestation,
-                        expected_input_data,
-                        self.pccs_url.clone(),
-                    )
-                    .await?
-                }
+                dcap::verify_dcap_attestation(
+                    attestation_exchange_message.attestation,
+                    expected_input_data,
+                    self.pccs_url.clone(),
+                )
+                .await?
             }
         };
 
@@ -329,6 +378,32 @@ async fn log_attestation(attestation: &AttestationExchangeMessage) {
     }
 }
 
+/// Test whether it looks like we are running on GCP by hitting the metadata API
+async fn running_on_gcp() -> Result<bool, AttestationError> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "Metadata-Flavor",
+        "Google".parse().expect("Cannot parse header"),
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(200))
+        .default_headers(headers)
+        .build()?;
+
+    let resp = client.get(GCP_METADATA_API).send().await;
+
+    if let Ok(r) = resp {
+        return Ok(r.status().is_success()
+            && r.headers()
+                .get("Metadata-Flavor")
+                .map(|v| v == "Google")
+                .unwrap_or(false));
+    }
+
+    Ok(false)
+}
+
 /// An error when generating or verifying an attestation
 #[derive(Error, Debug)]
 pub enum AttestationError {
@@ -357,4 +432,24 @@ pub enum AttestationError {
     DummyUrl,
     #[error("Dummy server: {0}")]
     DummyServer(String),
+    #[error("JSON: {0}")]
+    SerdeJson(#[from] serde_json::Error),
+    #[error("HTTP client: {0}")]
+    Reqwest(#[from] reqwest::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn attestation_detection_does_not_panic() {
+        // We dont enforce what platform the test is run on, only that the function does not panic
+        let _ = AttestationGenerator::new_with_detection(None, None).await;
+    }
+
+    #[tokio::test]
+    async fn running_on_gcp_check_does_not_panic() {
+        let _ = running_on_gcp().await;
+    }
 }

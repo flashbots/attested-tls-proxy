@@ -8,8 +8,11 @@ use tracing::level_filters::LevelFilter;
 use attested_tls_proxy::{
     attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
     attested_get::attested_get,
+    attested_tls::{get_tls_cert, TlsCertAndKey},
     file_server::attested_file_server,
-    get_tls_cert, AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey,
+    health_check,
+    normalize_pem::normalize_private_key_pem_to_pkcs8,
+    AttestationGenerator, ProxyClient, ProxyServer,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -17,9 +20,9 @@ use attested_tls_proxy::{
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
-    /// Optional path to file containing JSON measurements to be enforced on the remote party
+    /// Path to file, or URL, containing JSON measurements to be enforced on the remote party
     #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
-    measurements_file: Option<PathBuf>,
+    measurements_file: Option<String>,
     /// If no measurements file is specified, a single attestion type to allow
     #[arg(long, global = true)]
     allowed_remote_attestation_type: Option<String>,
@@ -46,7 +49,7 @@ enum CliCommand {
         listen_addr: SocketAddr,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
-        /// Type of attestation to present (dafaults to none)
+        /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
         client_attestation_type: Option<String>,
@@ -63,22 +66,25 @@ enum CliCommand {
         /// dummy
         #[arg(long)]
         dev_dummy_dcap: Option<String>,
+        // Address to listen on for health checks
+        #[arg(long)]
+        listen_addr_healthcheck: Option<SocketAddr>,
     },
     /// Run a proxy server
     Server {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
-        /// Socket address of the target service to forward traffic to
-        target_addr: SocketAddr,
-        /// Type of attestation to present (dafaults to none)
+        /// The hostname:port or ip:port of the target service to forward traffic to
+        target_addr: String,
+        /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
         server_attestation_type: Option<String>,
         /// The path to a PEM encoded private key
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: PathBuf,
-        /// The path to a PEM encoded certificate chain
+        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: PathBuf,
         /// Whether to use client authentication. If the client is running in a CVM this must be
@@ -89,16 +95,17 @@ enum CliCommand {
         /// dummy
         #[arg(long)]
         dev_dummy_dcap: Option<String>,
-        // TODO missing:
-        // Name:    "listen-addr-healthcheck",
-        // EnvVars: []string{"LISTEN_ADDR_HEALTHCHECK"},
-        // Value:   "",
-        // Usage:   "address to listen on for health checks",
+        // Address to listen on for health checks
+        #[arg(long)]
+        listen_addr_healthcheck: Option<SocketAddr>,
     },
     /// Retrieve the attested TLS certificate from a proxy server
     GetTlsCert {
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         server: String,
+        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
+        #[arg(long)]
+        tls_ca_certificate: Option<PathBuf>,
     },
     /// Serve a filesystem path over an attested channel
     AttestedFileServer {
@@ -114,7 +121,7 @@ enum CliCommand {
         /// The path to a PEM encoded private key
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: PathBuf,
-        /// The path to a PEM encoded certificate chain
+        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: PathBuf,
         /// URL of the remote dummy attestation service. Only use with --server-attestation-type
@@ -145,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
         "Exactly one of --measurements-file or --allowed-remote-attestation-type must be provided"
     );
 
-    let crate_name = env!("CARGO_PKG_NAME");
+    let crate_name = env!("CARGO_CRATE_NAME");
 
     let env_filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(LevelFilter::WARN.into()) // global default
@@ -167,7 +174,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let measurement_policy = match cli.measurements_file {
-        Some(server_measurements) => MeasurementPolicy::from_file(server_measurements).await?,
+        Some(server_measurements) => {
+            MeasurementPolicy::from_file_or_url(server_measurements).await?
+        }
         None => {
             let allowed_server_attestation_type: AttestationType = serde_json::from_value(
                 serde_json::Value::String(cli.allowed_remote_attestation_type.ok_or(anyhow!(
@@ -193,11 +202,16 @@ async fn main() -> anyhow::Result<()> {
             tls_certificate_path,
             tls_ca_certificate,
             dev_dummy_dcap,
+            listen_addr_healthcheck,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
                 .unwrap_or(&target_addr)
                 .to_string();
+
+            if let Some(listen_addr_healthcheck) = listen_addr_healthcheck {
+                health_check::server(listen_addr_healthcheck).await?;
+            }
 
             let tls_cert_and_chain = if let Some(private_key) = tls_private_key_path {
                 Some(load_tls_cert_and_key(
@@ -213,10 +227,6 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
-            let client_attestation_type: AttestationType = serde_json::from_value(
-                serde_json::Value::String(client_attestation_type.unwrap_or("none".to_string())),
-            )?;
-
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
                     load_certs_pem(remote_cert_filename)?
@@ -228,7 +238,8 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let client_attestation_generator =
-                AttestationGenerator::new(client_attestation_type, dev_dummy_dcap)?;
+                AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
+                    .await?;
 
             let client = ProxyClient::new(
                 tls_cert_and_chain,
@@ -254,16 +265,18 @@ async fn main() -> anyhow::Result<()> {
             client_auth,
             server_attestation_type,
             dev_dummy_dcap,
+            listen_addr_healthcheck,
         } => {
+            if let Some(listen_addr_healthcheck) = listen_addr_healthcheck {
+                health_check::server(listen_addr_healthcheck).await?;
+            }
+
             let tls_cert_and_chain =
                 load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
 
-            let server_attestation_type: AttestationType = serde_json::from_value(
-                serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
-            )?;
-
             let local_attestation_generator =
-                AttestationGenerator::new(server_attestation_type, dev_dummy_dcap)?;
+                AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)
+                    .await?;
 
             let server = ProxyServer::new(
                 tls_cert_and_chain,
@@ -281,8 +294,20 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        CliCommand::GetTlsCert { server } => {
-            let cert_chain = get_tls_cert(server, attestation_verifier).await?;
+        CliCommand::GetTlsCert {
+            server,
+            tls_ca_certificate,
+        } => {
+            let remote_tls_cert = match tls_ca_certificate {
+                Some(remote_cert_filename) => Some(
+                    load_certs_pem(remote_cert_filename)?
+                        .first()
+                        .ok_or(anyhow!("Filename given but no ceritificates found"))?
+                        .clone(),
+                ),
+                None => None,
+            };
+            let cert_chain = get_tls_cert(server, attestation_verifier, remote_tls_cert).await?;
             println!("{}", certs_to_pem_string(&cert_chain)?);
         }
         CliCommand::AttestedFileServer {
@@ -368,14 +393,8 @@ fn load_certs_pem(path: PathBuf) -> std::io::Result<Vec<CertificateDer<'static>>
 
 /// load TLS private key from a PEM-encoded file
 fn load_private_key_pem(path: PathBuf) -> anyhow::Result<PrivateKeyDer<'static>> {
-    let mut reader = std::io::BufReader::new(File::open(path)?);
-
-    // Tries to read the key as PKCS#8, PKCS#1, or SEC1
-    let pks8_key = rustls_pemfile::pkcs8_private_keys(&mut reader)
-        .next()
-        .ok_or(anyhow!("No PKS8 Key"))??;
-
-    Ok(PrivateKeyDer::Pkcs8(pks8_key))
+    let pem_bytes = std::fs::read(path)?;
+    normalize_private_key_pem_to_pkcs8(&pem_bytes)
 }
 
 /// Given a certificate chain, convert it to a PEM encoded string
