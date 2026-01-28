@@ -3,7 +3,7 @@ use axum::response::IntoResponse;
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{Arc, Once},
 };
 use tokio::net::TcpListener;
 use tokio_rustls::rustls::{
@@ -11,6 +11,9 @@ use tokio_rustls::rustls::{
     server::{danger::ClientCertVerifier, WebPkiClientVerifier},
     ClientConfig, RootCertStore, ServerConfig,
 };
+use tracing_subscriber::{fmt, EnvFilter};
+
+static INIT: Once = Once::new();
 
 use crate::{
     attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
@@ -170,4 +173,15 @@ pub fn mock_dcap_measurements() -> MultiMeasurements {
         (DcapMeasurementRegister::RTMR2, [0u8; 48]),
         (DcapMeasurementRegister::RTMR3, [0u8; 48]),
     ]))
+}
+
+pub fn init_tracing() {
+    INIT.call_once(|| {
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+        fmt()
+            .with_env_filter(filter)
+            .with_test_writer() // <-- IMPORTANT for tests
+            .init();
+    });
 }
