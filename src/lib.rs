@@ -54,6 +54,9 @@ static X_REAL_IP: HeaderName = HeaderName::from_static("x-real-ip");
 /// The longest time in seconds to wait between reconnection attempts
 const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 
+const KEEP_ALIVE_INTERVAL: u64 = 30;
+const KEEP_ALIVE_TIMEOUT: u64 = 10;
+
 type RequestWithResponseSender = (
     http::Request<hyper::body::Incoming>,
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
@@ -246,8 +249,8 @@ impl ProxyServer {
         // Setup an HTTP server
         hyper::server::conn::http2::Builder::new(TokioExecutor)
             .timer(hyper_util::rt::tokio::TokioTimer::new())
-            .keep_alive_interval(Some(Duration::from_secs(30)))
-            .keep_alive_timeout(Duration::from_secs(10))
+            .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
+            .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
             .serve_connection(io, service)
             .await?;
 
@@ -599,8 +602,8 @@ impl ProxyClient {
         let outbound_io = TokioIo::new(tls_stream);
         let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
             .timer(hyper_util::rt::tokio::TokioTimer::new())
-            .keep_alive_interval(Some(Duration::from_secs(30)))
-            .keep_alive_timeout(Duration::from_secs(10))
+            .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
+            .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
             .keep_alive_while_idle(true)
             .handshake::<_, hyper::body::Incoming>(outbound_io)
             .await?;
