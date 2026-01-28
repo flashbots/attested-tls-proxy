@@ -245,9 +245,9 @@ impl ProxyServer {
 
         // Setup an HTTP server
         hyper::server::conn::http2::Builder::new(TokioExecutor)
-            // .timer(hyper_util::rt::tokio::TokioTimer::new())
-            // .keep_alive_interval(Some(Duration::from_secs(30)))
-            // .keep_alive_timeout(Duration::from_secs(10))
+            .timer(hyper_util::rt::tokio::TokioTimer::new())
+            .keep_alive_interval(Some(Duration::from_secs(30)))
+            .keep_alive_timeout(Duration::from_secs(10))
             .serve_connection(io, service)
             .await?;
 
