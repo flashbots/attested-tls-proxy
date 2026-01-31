@@ -6,6 +6,7 @@ use hyper_util::rt::TokioIo;
 use std::{
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 use thiserror::Error;
@@ -17,13 +18,35 @@ use crate::{
     TokioExecutor,
 };
 
+pub enum HttpVersion {
+    Http1,
+    Http2,
+}
+
 /// An attested TLS client which can create RpcClients for attested connections
 pub struct AttestedRpcClient {
     /// The underlying attested TLS client
     pub inner: AttestedTlsClient,
+    pub http_version: HttpVersion,
 }
 
 impl AttestedRpcClient {
+    /// Start an RPC client based on HTTP1.1
+    pub fn new_http1(inner: AttestedTlsClient) -> Self {
+        Self {
+            inner,
+            http_version: HttpVersion::Http1,
+        }
+    }
+
+    /// Start an RPC client based on HTTP2
+    pub fn new_http2(inner: AttestedTlsClient) -> Self {
+        Self {
+            inner,
+            http_version: HttpVersion::Http2,
+        }
+    }
+
     /// Connect to an attested RPC server
     ///
     /// This could be a regular JSON RPC server behind an attested TLS proxy
@@ -40,21 +63,52 @@ impl AttestedRpcClient {
         // exchange
         let (stream, measurements, attestation_type) = self.inner.connect_tcp(server).await?;
 
-        // Setup HTTP2 client
+        // Setup HTTP client
         let io = TokioIo::new(stream);
-        let (sender, conn) = conn::http2::handshake(TokioExecutor, io).await?;
 
-        // Drive the HTTP2 connection for the lifetime of `sender`
-        tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                tracing::error!("AttestedRpcClient connection error: {e}");
+        let rpc_client = match self.http_version {
+            HttpVersion::Http1 => {
+                let (sender, conn) = conn::http1::handshake(io).await?;
+                // Drive the connection for the lifetime of `sender`
+                tokio::spawn(async move {
+                    if let Err(e) = conn.await {
+                        tracing::error!("AttestedRpcClient connection error: {e}");
+                    }
+                });
+                let url = url::Url::parse(&format!("http://{server}"))?;
+                Self::make_attested_http1_rpc_client(url, sender, is_local).await?
             }
-        });
-
-        let url = url::Url::parse(&format!("http://{server}"))?;
-        let rpc_client = Self::make_attested_http2_rpc_client(url, sender, is_local).await?;
+            HttpVersion::Http2 => {
+                let (sender, conn) = conn::http2::handshake(TokioExecutor, io).await?;
+                // Drive the connection for the lifetime of `sender`
+                tokio::spawn(async move {
+                    if let Err(e) = conn.await {
+                        tracing::error!("AttestedRpcClient connection error: {e}");
+                    }
+                });
+                let url = url::Url::parse(&format!("http://{server}"))?;
+                Self::make_attested_http2_rpc_client(url, sender, is_local).await?
+            }
+        };
 
         Ok((rpc_client, measurements, attestation_type))
+    }
+
+    /// Given an HTTP1 connection, setup RPC client
+    async fn make_attested_http1_rpc_client(
+        rpc_url: url::Url,
+        sender: hyper::client::conn::http1::SendRequest<http_body_util::Full<bytes::Bytes>>,
+        is_local: bool,
+    ) -> Result<RpcClient, AttestedRpcError> {
+        let service = Http1ClientConnectionService::new(sender);
+
+        let hyper_transport =
+            HyperClient::<http_body_util::Full<bytes::Bytes>, _>::with_service(service);
+        let http = Http::with_client(hyper_transport, rpc_url);
+
+        let rpc_client = RpcClient::new(http, is_local);
+
+        Ok(rpc_client)
     }
 
     /// Given an HTTP2 connection, setup RPC client
@@ -72,6 +126,46 @@ impl AttestedRpcClient {
         let rpc_client = RpcClient::new(http, is_local);
 
         Ok(rpc_client)
+    }
+}
+
+/// Wrap hyper's HTTP1 client connection so we can implement a tower service for it
+#[derive(Debug, Clone)]
+struct Http1ClientConnectionService {
+    sender: Arc<
+        tokio::sync::Mutex<
+            hyper::client::conn::http1::SendRequest<http_body_util::Full<hyper::body::Bytes>>,
+        >,
+    >,
+}
+
+impl Http1ClientConnectionService {
+    fn new(
+        sender: hyper::client::conn::http1::SendRequest<http_body_util::Full<hyper::body::Bytes>>,
+    ) -> Self {
+        Self {
+            sender: tokio::sync::Mutex::new(sender).into(),
+        }
+    }
+}
+
+impl Service<Request<http_body_util::Full<hyper::body::Bytes>>> for Http1ClientConnectionService {
+    type Response = Response<hyper::body::Incoming>;
+    type Error = hyper::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<http_body_util::Full<hyper::body::Bytes>>) -> Self::Future {
+        let sender = self.sender.clone();
+
+        Box::pin(async move {
+            let mut sender = sender.lock().await;
+            futures_util::future::poll_fn(|cx| sender.poll_ready(cx)).await?;
+            sender.send_request(req).await
+        })
     }
 }
 
@@ -180,7 +274,7 @@ mod tests {
         .await
         .unwrap();
 
-        let attested_rpc_client = AttestedRpcClient { inner: client };
+        let attested_rpc_client = AttestedRpcClient::new_http2(client);
 
         let (rpc_client, _measurements, _attestation_type) = attested_rpc_client
             .connect(&proxy_addr.to_string(), true)
@@ -234,7 +328,7 @@ mod tests {
         .await
         .unwrap();
 
-        let attested_rpc_client = AttestedRpcClient { inner: client };
+        let attested_rpc_client = AttestedRpcClient::new_http2(client);
 
         let (rpc_client, _measurements, _attestation_type) = attested_rpc_client
             .connect(&proxy_addr.to_string(), true)
