@@ -7,6 +7,7 @@ use tokio_rustls::rustls::{
 };
 use x509_parser::prelude::{FromDer, X509Certificate};
 
+/// Generate a self signed certifcate
 pub fn generate_self_signed_cert(
     subject_alt_names: &str,
 ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), rcgen::Error> {
@@ -19,6 +20,7 @@ pub fn generate_self_signed_cert(
     ))
 }
 
+/// Used to allow verification of self-signed certificates
 #[derive(Debug)]
 pub struct SkipServerVerification {
     verify_hostname: String,
@@ -45,6 +47,7 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
         _ocsp_response: &[u8],
         _now: pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        // Ensure the hostname matches
         if server_name.to_str() != self.verify_hostname {
             return Err(rustls::Error::InvalidCertificate(
                 rustls::CertificateError::NotValidForName,
@@ -107,6 +110,7 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     }
 }
 
+/// Used to allow verification of self-signed certificates during client authentication
 #[derive(Debug)]
 pub struct SkipClientVerification {
     supported_algs: rustls::crypto::WebPkiSupportedAlgorithms,

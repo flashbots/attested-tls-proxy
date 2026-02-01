@@ -79,7 +79,7 @@ impl AttestedTlsServer {
 
         Self::new_with_tls_config(
             cert_and_key.cert_chain,
-            server_config.into(),
+            server_config,
             attestation_generator,
             attestation_verifier,
         )
@@ -91,11 +91,22 @@ impl AttestedTlsServer {
     /// This is not fully public as it allows dangerous configuration
     pub(crate) async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
-        server_config: Arc<ServerConfig>,
+        mut server_config: ServerConfig,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, AttestedTlsError> {
-        let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
+        for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
+            let alpn_vec = alpn.to_vec();
+            if !server_config
+                .alpn_protocols
+                .iter()
+                .any(|p| p.as_slice() == alpn_vec.as_slice())
+            {
+                server_config.alpn_protocols.push(alpn_vec);
+            }
+        }
+
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
 
         Ok(Self {
             attestation_generator,
@@ -227,7 +238,7 @@ impl AttestedTlsClient {
         };
 
         // Setup TLS client configuration, with or without client auth
-        let mut client_config = if let Some(ref cert_and_key) = cert_and_key {
+        let client_config = if let Some(ref cert_and_key) = cert_and_key {
             ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_client_auth_cert(
@@ -240,13 +251,8 @@ impl AttestedTlsClient {
                 .with_no_client_auth()
         };
 
-        client_config.alpn_protocols = SUPPORTED_ALPN_PROTOCOL_VERSIONS
-            .into_iter()
-            .map(|p| p.to_vec())
-            .collect();
-
         Self::new_with_tls_config(
-            client_config.into(),
+            client_config,
             attestation_generator,
             attestation_verifier,
             cert_and_key.map(|c| c.cert_chain),
@@ -255,15 +261,24 @@ impl AttestedTlsClient {
     }
 
     /// Create a new proxy client with given TLS configuration
-    ///
-    /// This not fully public as it allows dangerous configuration but is used in tests
-    pub(crate) async fn new_with_tls_config(
-        client_config: Arc<ClientConfig>,
+    pub async fn new_with_tls_config(
+        mut client_config: ClientConfig,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, AttestedTlsError> {
-        let connector = TlsConnector::from(client_config.clone());
+        for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
+            let alpn_vec = alpn.to_vec();
+            if !client_config
+                .alpn_protocols
+                .iter()
+                .any(|p| p.as_slice() == alpn_vec.as_slice())
+            {
+                client_config.alpn_protocols.push(alpn_vec);
+            }
+        }
+
+        let connector = TlsConnector::from(Arc::new(client_config));
 
         Ok(Self {
             connector,
@@ -418,7 +433,7 @@ pub async fn get_tls_cert(
 pub(crate) async fn get_tls_cert_with_config(
     server_name: &str,
     attestation_verifier: AttestationVerifier,
-    client_config: Arc<ClientConfig>,
+    client_config: ClientConfig,
 ) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
     let attested_tls_client = AttestedTlsClient::new_with_tls_config(
         client_config,
