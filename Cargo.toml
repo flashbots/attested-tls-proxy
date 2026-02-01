@@ -3,7 +3,7 @@ members = [".", "dummy-attestation-server"]
 
 [package]
 name = "attested-tls-proxy"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 license = "MIT"
 description = "An HTTP attested TLS proxy server and client for secure communication with CVM services"
@@ -25,17 +25,17 @@ anyhow = "1.0.100"
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
 configfs-tsm = "0.0.2"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-dcap-qvl = "0.3.4"
+dcap-qvl = "0.3.10"
 hex = "0.4.3"
 hyper = { version = "1.7.0", features = ["server", "http2"] }
-hyper-util = "0.1.17"
+hyper-util = { version = "0.1.17", features = ["tokio"] }
 http-body-util = "0.1.3"
 bytes = "1.10.1"
 http = "1.3.1"
 serde_json = "1.0.145"
 serde = "1.0.228"
 base64 = "0.22.1"
-reqwest = { version = "0.12.23", default-features = false, features = [
+reqwest = { version = "0.12.24", default-features = false, features = [
   "rustls-tls-webpki-roots-no-provider",
 ] }
 tracing = "0.1.41"
@@ -50,6 +50,10 @@ time = "0.3.44"
 once_cell = "1.21.3"
 axum = "0.8.6"
 tower-http = { version = "0.6.7", features = ["fs"] }
+rsa   = { version = "0.9", default-features = false }
+p256 = { version = "0.13.2", features = ["pkcs8"] }
+pkcs1 = "0.7.5"
+pkcs8 = "0.10.2"
 
 # For websockets
 tokio-tungstenite = { version = "0.28.0", optional = true }
@@ -86,3 +90,29 @@ rpc = [
   "url",
   "futures-util",
 ]
+
+[package.metadata.deb]
+maintainer = "Flashbots Team <devops+ci@flashbots.net>"
+depends = "$auto"
+section = "network"
+priority = "optional"
+maintainer-scripts = "pkg/debian"
+assets = [
+    [
+        "target/reproducible/attested-tls-proxy",
+        "usr/bin/",
+        "755",
+    ],
+    [
+        "LICENSE",
+        "usr/share/doc/attested-tls-proxy/",
+        "644",
+    ],
+]
+systemd-units = { enable = false, start = false, unit-name = "attested-tls-proxy" }
+
+[profile.reproducible]
+inherits = "release"
+lto = "thin"
+panic = "abort"
+incremental = false
