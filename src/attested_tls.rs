@@ -255,9 +255,7 @@ impl AttestedTlsClient {
     }
 
     /// Create a new proxy client with given TLS configuration
-    ///
-    /// This not fully public as it allows dangerous configuration but is used in tests
-    pub(crate) async fn new_with_tls_config(
+    pub async fn new_with_tls_config(
         client_config: Arc<ClientConfig>,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,

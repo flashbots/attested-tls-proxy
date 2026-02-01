@@ -6,8 +6,11 @@ pub mod file_server;
 pub mod health_check;
 pub mod normalize_pem;
 
-#[cfg(feature = "azure")]
+#[cfg(feature = "ws")]
 pub mod websockets;
+
+#[cfg(feature = "rpc")]
+pub mod attested_rpc;
 
 pub use attestation::AttestationGenerator;
 
@@ -497,18 +500,18 @@ impl ProxyClient {
     }
 
     /// Accept an incoming connection and handle it in a separate task
-    pub async fn accept(&self) -> io::Result<()> {
+    pub async fn accept(&self) -> io::Result<tokio::task::JoinHandle<()>> {
         let (inbound, _client_addr) = self.listener.accept().await?;
 
         let requests_tx = self.requests_tx.clone();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             if let Err(err) = Self::handle_connection(inbound, requests_tx).await {
                 warn!("Failed to handle connection from source client: {err}");
             }
         });
 
-        Ok(())
+        Ok(handle)
     }
 
     /// Handle an incoming connection from the source client
@@ -688,7 +691,7 @@ pub(crate) fn host_to_host_with_port(host: &str) -> String {
 
 /// An Executor for hyper that uses the tokio runtime
 #[derive(Clone)]
-struct TokioExecutor;
+pub(crate) struct TokioExecutor;
 
 // Implement the `hyper::rt::Executor` trait for `TokioExecutor` so that it can be used to spawn
 // tasks in the hyper runtime.
