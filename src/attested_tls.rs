@@ -87,9 +87,7 @@ impl AttestedTlsServer {
     }
 
     /// Start with preconfigured TLS
-    ///
-    /// This is not fully public as it allows dangerous configuration
-    pub(crate) async fn new_with_tls_config(
+    pub async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
         mut server_config: ServerConfig,
         attestation_generator: AttestationGenerator,
@@ -267,6 +265,10 @@ impl AttestedTlsClient {
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, AttestedTlsError> {
+        if client_config.client_auth_cert_resolver.has_certs() && cert_chain.is_none() {
+            return Err(AttestedTlsError::ClientAuthWithoutClientCert);
+        }
+
         for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
             let alpn_vec = alpn.to_vec();
             if !client_config
@@ -495,6 +497,8 @@ pub enum AttestedTlsError {
     Serialization(#[from] parity_scale_codec::Error),
     #[error("Protocol negotiation failed - remote peer does not support this protocol")]
     AlpnFailed,
+    #[error("Client authentication is enabled but a client ceritifcate was not given")]
+    ClientAuthWithoutClientCert,
 }
 
 /// Given a byte array, encode its length as a 4 byte big endian u32

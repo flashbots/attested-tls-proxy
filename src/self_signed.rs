@@ -197,7 +197,7 @@ mod tests {
     use super::*;
     use crate::{
         attestation::{AttestationType, AttestationVerifier},
-        attested_tls::{AttestedTlsClient, AttestedTlsServer, SUPPORTED_ALPN_PROTOCOL_VERSIONS},
+        attested_tls::{AttestedTlsClient, AttestedTlsServer},
         AttestationGenerator,
     };
     use tokio::net::TcpListener;
@@ -206,17 +206,10 @@ mod tests {
     async fn self_signed_server_attestation() {
         let (cert_chain, private_key) = generate_self_signed_cert("127.0.0.1").unwrap();
 
-        let mut server_config = rustls::ServerConfig::builder()
+        let server_config = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(cert_chain.clone().to_vec(), private_key.clone_key())
             .unwrap();
-
-        let supported_protocols: Vec<_> = SUPPORTED_ALPN_PROTOCOL_VERSIONS
-            .into_iter()
-            .map(|p| p.to_vec())
-            .collect();
-
-        server_config.alpn_protocols = supported_protocols.clone();
 
         let server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
@@ -236,12 +229,10 @@ mod tests {
                 server.handle_connection(tcp_stream).await.unwrap();
         });
 
-        let mut client_config = rustls::ClientConfig::builder()
+        let client_config = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(SkipServerVerification::new("127.0.0.1"))
             .with_no_client_auth();
-
-        client_config.alpn_protocols = supported_protocols.clone();
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config.into(),
