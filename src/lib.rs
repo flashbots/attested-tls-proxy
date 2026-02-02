@@ -6,6 +6,8 @@ pub mod file_server;
 pub mod health_check;
 pub mod normalize_pem;
 
+pub mod self_signed;
+
 #[cfg(feature = "ws")]
 pub mod websockets;
 
@@ -30,10 +32,7 @@ mod test_helpers;
 use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
-use tokio_rustls::rustls::pki_types::CertificateDer;
-
-#[cfg(test)]
-use tokio_rustls::rustls::{ClientConfig, ServerConfig};
+use tokio_rustls::rustls::{pki_types::CertificateDer, ClientConfig, ServerConfig};
 
 use crate::{
     attestation::{
@@ -109,12 +108,9 @@ impl ProxyServer {
     }
 
     /// Start with preconfigured TLS
-    ///
-    /// This is not public as it allows dangerous configuration
-    #[cfg(test)]
-    async fn new_with_tls_config(
+    pub async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
-        server_config: Arc<ServerConfig>,
+        server_config: ServerConfig,
         local: impl ToSocketAddrs,
         target: String,
         attestation_generator: AttestationGenerator,
@@ -330,11 +326,8 @@ impl ProxyClient {
     }
 
     /// Create a new proxy client with given TLS configuration
-    ///
-    /// This is private as it allows dangerous configuration but is used in tests
-    #[cfg(test)]
-    async fn new_with_tls_config(
-        client_config: Arc<ClientConfig>,
+    pub async fn new_with_tls_config(
+        client_config: ClientConfig,
         address: impl ToSocketAddrs,
         target_name: String,
         attestation_generator: AttestationGenerator,

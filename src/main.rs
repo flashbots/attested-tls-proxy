@@ -1,6 +1,10 @@
 use anyhow::{anyhow, ensure};
 use clap::{Parser, Subcommand};
-use std::{fs::File, net::SocketAddr, path::PathBuf};
+use std::{
+    fs::File,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 use tokio::io::AsyncWriteExt;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
@@ -69,6 +73,9 @@ enum CliCommand {
         // Address to listen on for health checks
         #[arg(long)]
         listen_addr_healthcheck: Option<SocketAddr>,
+        /// Enables verification of self-signed TLS certificates
+        #[arg(long)]
+        allow_self_signed: bool,
     },
     /// Run a proxy server
     Server {
@@ -83,10 +90,10 @@ enum CliCommand {
         server_attestation_type: Option<String>,
         /// The path to a PEM encoded private key
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
-        tls_private_key_path: PathBuf,
+        tls_private_key_path: Option<PathBuf>,
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
-        tls_certificate_path: PathBuf,
+        tls_certificate_path: Option<PathBuf>,
         /// Whether to use client authentication. If the client is running in a CVM this must be
         /// enabled.
         #[arg(long)]
@@ -203,6 +210,7 @@ async fn main() -> anyhow::Result<()> {
             tls_ca_certificate,
             dev_dummy_dcap,
             listen_addr_healthcheck,
+            allow_self_signed,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
@@ -241,15 +249,29 @@ async fn main() -> anyhow::Result<()> {
                 AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
                     .await?;
 
-            let client = ProxyClient::new(
-                tls_cert_and_chain,
-                listen_addr,
-                target_addr,
-                client_attestation_generator,
-                attestation_verifier,
-                remote_tls_cert,
-            )
-            .await?;
+            let client = if allow_self_signed {
+                let client_tls_config =
+                    attested_tls_proxy::self_signed::client_tls_config_allow_self_signed()?;
+                ProxyClient::new_with_tls_config(
+                    client_tls_config,
+                    listen_addr,
+                    target_addr,
+                    client_attestation_generator,
+                    attestation_verifier,
+                    None,
+                )
+                .await?
+            } else {
+                ProxyClient::new(
+                    tls_cert_and_chain,
+                    listen_addr,
+                    target_addr,
+                    client_attestation_generator,
+                    attestation_verifier,
+                    remote_tls_cert,
+                )
+                .await?
+            };
 
             loop {
                 if let Err(err) = client.accept().await {
@@ -271,8 +293,11 @@ async fn main() -> anyhow::Result<()> {
                 health_check::server(listen_addr_healthcheck).await?;
             }
 
-            let tls_cert_and_chain =
-                load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
+            let tls_cert_and_chain = load_tls_cert_and_key_server(
+                tls_certificate_path,
+                tls_private_key_path,
+                listen_addr.ip(),
+            )?;
 
             let local_attestation_generator =
                 AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)
@@ -373,6 +398,27 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn load_tls_cert_and_key_server(
+    cert_chain: Option<PathBuf>,
+    private_key: Option<PathBuf>,
+    ip: IpAddr,
+) -> anyhow::Result<TlsCertAndKey> {
+    if let Some(private_key) = private_key {
+        load_tls_cert_and_key(
+            cert_chain.ok_or(anyhow!("Private key given but no certificate chain"))?,
+            private_key,
+        )
+    } else {
+        if cert_chain.is_some() {
+            return Err(anyhow!("Certificate chain provided but no private key"));
+        }
+        tracing::warn!("No TLS ceritifcate provided - generating self-signed");
+        Ok(attested_tls_proxy::self_signed::generate_self_signed_cert(
+            ip,
+        )?)
+    }
 }
 
 /// Load TLS details from storage
