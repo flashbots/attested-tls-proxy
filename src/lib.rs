@@ -29,6 +29,8 @@ use tracing::{debug, error, warn};
 #[cfg(test)]
 mod test_helpers;
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -63,13 +65,85 @@ type RequestWithResponseSender = (
     http::Request<hyper::body::Incoming>,
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
 );
+
+enum HttpVersion {
+    Http1,
+    Http2,
+}
+type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
+
 type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
+
+type Http1Connection = hyper::client::conn::http1::Connection<
+    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+    hyper::body::Incoming,
+>;
 
 type Http2Connection = hyper::client::conn::http2::Connection<
     TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
     hyper::body::Incoming,
     TokioExecutor,
 >;
+
+enum HttpSender {
+    Http1(Http1Sender),
+    Http2(Http2Sender),
+}
+
+impl From<Http1Sender> for HttpSender {
+    fn from(inner: Http1Sender) -> Self {
+        Self::Http1(inner)
+    }
+}
+
+impl From<Http2Sender> for HttpSender {
+    fn from(inner: Http2Sender) -> Self {
+        Self::Http2(inner)
+    }
+}
+
+impl HttpSender {
+    async fn send_request(
+        &mut self,
+        request: http::Request<hyper::body::Incoming>,
+    ) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
+        match self {
+            Self::Http1(sender) => sender.send_request(request).await,
+            Self::Http2(sender) => sender.send_request(request).await,
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[project = HttpConnectionProj]
+    pub enum HttpConnection {
+        Http1 { #[pin] inner: Http1Connection },
+        Http2 { #[pin] inner: Http2Connection },
+    }
+}
+
+impl From<Http1Connection> for HttpConnection {
+    fn from(inner: Http1Connection) -> Self {
+        Self::Http1 { inner }
+    }
+}
+
+impl From<Http2Connection> for HttpConnection {
+    fn from(inner: Http2Connection) -> Self {
+        Self::Http2 { inner }
+    }
+}
+
+impl Future for HttpConnection {
+    type Output = Result<(), hyper::Error>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.project() {
+            HttpConnectionProj::Http1 { inner } => inner.poll(cx),
+            HttpConnectionProj::Http2 { inner } => inner.poll(cx),
+        }
+    }
+}
 
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer {
@@ -375,7 +449,7 @@ impl ProxyClient {
             'reconnect: loop {
                 let (mut sender, conn, measurements, remote_attestation_type) =
                     // Connect to the proxy server and provide / verify attestation
-                    match Self::setup_connection_with_backoff(&target, &attested_tls_client, first)
+                    match Self::setup_connection_with_backoff(&target, &attested_tls_client, first, &HttpVersion::Http2)
                         .await
                     {
                         Ok(output) => {
@@ -545,10 +619,11 @@ impl ProxyClient {
         target: &str,
         attested_tls_client: &AttestedTlsClient,
         should_bail: bool,
+        http_version: &HttpVersion,
     ) -> Result<
         (
-            Http2Sender,
-            Http2Connection,
+            HttpSender,
+            HttpConnection,
             Option<MultiMeasurements>,
             AttestationType,
         ),
@@ -558,7 +633,7 @@ impl ProxyClient {
         let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
 
         loop {
-            match Self::setup_connection(attested_tls_client, target).await {
+            match Self::setup_connection(attested_tls_client, target, http_version).await {
                 Ok(output) => {
                     return Ok(output);
                 }
@@ -582,10 +657,11 @@ impl ProxyClient {
     async fn setup_connection(
         inner: &AttestedTlsClient,
         target: &str,
+        http_version: &HttpVersion,
     ) -> Result<
         (
-            Http2Sender,
-            Http2Connection,
+            HttpSender,
+            HttpConnection,
             Option<MultiMeasurements>,
             AttestationType,
         ),
@@ -596,13 +672,24 @@ impl ProxyClient {
         // The attestation exchange is now complete - setup an HTTP client
 
         let outbound_io = TokioIo::new(tls_stream);
-        let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
-            .timer(hyper_util::rt::tokio::TokioTimer::new())
-            .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
-            .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
-            .keep_alive_while_idle(true)
-            .handshake::<_, hyper::body::Incoming>(outbound_io)
-            .await?;
+        let (sender, conn) = match http_version {
+            HttpVersion::Http2 => {
+                let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
+                    .timer(hyper_util::rt::tokio::TokioTimer::new())
+                    .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
+                    .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
+                    .keep_alive_while_idle(true)
+                    .handshake::<_, hyper::body::Incoming>(outbound_io)
+                    .await?;
+                (sender.into(), conn.into())
+            }
+            HttpVersion::Http1 => {
+                let (sender, conn) = hyper::client::conn::http1::Builder::new()
+                    .handshake::<_, hyper::body::Incoming>(outbound_io)
+                    .await?;
+                (sender.into(), conn.into())
+            }
+        };
 
         // Return the HTTP client, as well as remote measurements
         Ok((sender, conn, measurements, remote_attestation_type))

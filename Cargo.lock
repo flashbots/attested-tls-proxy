@@ -529,6 +529,7 @@ dependencies = [
  "p256",
  "parity-scale-codec",
  "pem-rfc7468",
+ "pin-project-lite",
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",

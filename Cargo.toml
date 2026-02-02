@@ -69,6 +69,7 @@ alloy-transport-http = { version = "1.4.3", features = [
   "hyper",
 ], optional = true }
 url = { version = "2.5.7", optional = true }
+pin-project-lite = "0.2.16"
 
 [dev-dependencies]
 tempfile = "3.23.0"
