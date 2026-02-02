@@ -6,7 +6,6 @@ pub mod file_server;
 pub mod health_check;
 pub mod normalize_pem;
 
-#[cfg(feature = "self-signed")]
 pub mod self_signed;
 
 #[cfg(feature = "ws")]

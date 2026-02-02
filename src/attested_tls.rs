@@ -58,7 +58,7 @@ impl AttestedTlsServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, AttestedTlsError> {
-        let mut server_config = if client_auth {
+        let server_config = if client_auth {
             let root_store =
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
@@ -71,11 +71,6 @@ impl AttestedTlsServer {
                 .with_no_client_auth()
                 .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         };
-
-        server_config.alpn_protocols = SUPPORTED_ALPN_PROTOCOL_VERSIONS
-            .into_iter()
-            .map(|p| p.to_vec())
-            .collect();
 
         Self::new_with_tls_config(
             cert_and_key.cert_chain,
@@ -499,6 +494,8 @@ pub enum AttestedTlsError {
     AlpnFailed,
     #[error("Client authentication is enabled but a client ceritifcate was not given")]
     ClientAuthWithoutClientCert,
+    #[error("No cryptography provider available - this implies a bad build")]
+    NoCryptoProvider,
 }
 
 /// Given a byte array, encode its length as a 4 byte big endian u32
