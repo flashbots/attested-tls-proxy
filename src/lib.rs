@@ -218,7 +218,7 @@ impl ProxyServer {
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
-        for protocol in vec![ALPN_H2, ALPN_HTTP11] {
+        for protocol in [ALPN_H2, ALPN_HTTP11] {
             let already_present = server_config
                 .alpn_protocols
                 .iter()
@@ -460,7 +460,7 @@ impl ProxyClient {
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, ProxyError> {
-        for protocol in vec![ALPN_H2, ALPN_HTTP11] {
+        for protocol in [ALPN_H2, ALPN_HTTP11] {
             let already_present = client_config
                 .alpn_protocols
                 .iter()
