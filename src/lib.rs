@@ -61,6 +61,9 @@ const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 const KEEP_ALIVE_INTERVAL: u64 = 30;
 const KEEP_ALIVE_TIMEOUT: u64 = 10;
 
+const ALPN_H2: &[u8] = b"h2";
+const ALPN_HTTP11: &[u8] = b"http/1.1";
+
 type RequestWithResponseSender = (
     http::Request<hyper::body::Incoming>,
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
@@ -70,6 +73,31 @@ enum HttpVersion {
     Http1,
     Http2,
 }
+
+impl HttpVersion {
+    fn from_negotiated_protocol_server<IO>(tls: &tokio_rustls::server::TlsStream<IO>) -> Self {
+        let (_io, conn) = tls.get_ref();
+
+        match conn.alpn_protocol() {
+            Some(ALPN_H2) => HttpVersion::Http2,
+            Some(ALPN_HTTP11) => HttpVersion::Http1,
+            _ => HttpVersion::Http1,
+        }
+    }
+
+    fn from_negotiated_protocol_client<IO>(tls: &tokio_rustls::client::TlsStream<IO>) -> Self {
+        let (_io, conn) = tls.get_ref();
+        const ALPN_H2: &[u8] = b"h2";
+        const ALPN_HTTP11: &[u8] = b"http/1.1";
+
+        match conn.alpn_protocol() {
+            Some(ALPN_H2) => HttpVersion::Http2,
+            Some(ALPN_HTTP11) => HttpVersion::Http1,
+            _ => HttpVersion::Http1,
+        }
+    }
+}
+
 type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
 
 type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
@@ -184,12 +212,23 @@ impl ProxyServer {
     /// Start with preconfigured TLS
     pub async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
-        server_config: ServerConfig,
+        mut server_config: ServerConfig,
         local: impl ToSocketAddrs,
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
+        for protocol in vec![ALPN_H2, ALPN_HTTP11] {
+            let already_present = server_config
+                .alpn_protocols
+                .iter()
+                .any(|p| p.as_slice() == protocol);
+
+            if !already_present {
+                server_config.alpn_protocols.push(protocol.to_vec());
+            }
+        }
+
         let attested_tls_server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
@@ -253,6 +292,8 @@ impl ProxyServer {
         client_addr: SocketAddr,
     ) -> Result<(), ProxyError> {
         debug!("[proxy-server] accepted connection");
+
+        let http_version = HttpVersion::from_negotiated_protocol_server(&tls_stream);
 
         // Setup a request handler
         let service = service_fn(move |mut req| {
@@ -320,12 +361,23 @@ impl ProxyServer {
         let io = TokioIo::new(tls_stream);
 
         // Setup an HTTP server
-        hyper::server::conn::http2::Builder::new(TokioExecutor)
-            .timer(hyper_util::rt::tokio::TokioTimer::new())
-            .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
-            .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
-            .serve_connection(io, service)
-            .await?;
+        match http_version {
+            HttpVersion::Http2 => {
+                hyper::server::conn::http2::Builder::new(TokioExecutor)
+                    .timer(hyper_util::rt::tokio::TokioTimer::new())
+                    .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
+                    .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
+                    .serve_connection(io, service)
+                    .await?;
+            }
+            HttpVersion::Http1 => {
+                hyper::server::conn::http1::Builder::new()
+                    .timer(hyper_util::rt::tokio::TokioTimer::new())
+                    .keep_alive(true)
+                    .serve_connection(io, service)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -401,13 +453,24 @@ impl ProxyClient {
 
     /// Create a new proxy client with given TLS configuration
     pub async fn new_with_tls_config(
-        client_config: ClientConfig,
+        mut client_config: ClientConfig,
         address: impl ToSocketAddrs,
         target_name: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, ProxyError> {
+        for protocol in vec![ALPN_H2, ALPN_HTTP11] {
+            let already_present = client_config
+                .alpn_protocols
+                .iter()
+                .any(|p| p.as_slice() == protocol);
+
+            if !already_present {
+                client_config.alpn_protocols.push(protocol.to_vec());
+            }
+        }
+
         let attested_tls_client = AttestedTlsClient::new_with_tls_config(
             client_config,
             attestation_generator,
@@ -449,7 +512,7 @@ impl ProxyClient {
             'reconnect: loop {
                 let (mut sender, conn, measurements, remote_attestation_type) =
                     // Connect to the proxy server and provide / verify attestation
-                    match Self::setup_connection_with_backoff(&target, &attested_tls_client, first, &HttpVersion::Http2)
+                    match Self::setup_connection_with_backoff(&target, &attested_tls_client, first)
                         .await
                     {
                         Ok(output) => {
@@ -619,7 +682,6 @@ impl ProxyClient {
         target: &str,
         attested_tls_client: &AttestedTlsClient,
         should_bail: bool,
-        http_version: &HttpVersion,
     ) -> Result<
         (
             HttpSender,
@@ -633,7 +695,7 @@ impl ProxyClient {
         let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
 
         loop {
-            match Self::setup_connection(attested_tls_client, target, http_version).await {
+            match Self::setup_connection(attested_tls_client, target).await {
                 Ok(output) => {
                     return Ok(output);
                 }
@@ -657,7 +719,6 @@ impl ProxyClient {
     async fn setup_connection(
         inner: &AttestedTlsClient,
         target: &str,
-        http_version: &HttpVersion,
     ) -> Result<
         (
             HttpSender,
@@ -670,6 +731,7 @@ impl ProxyClient {
         let (tls_stream, measurements, remote_attestation_type) = inner.connect_tcp(target).await?;
 
         // The attestation exchange is now complete - setup an HTTP client
+        let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
 
         let outbound_io = TokioIo::new(tls_stream);
         let (sender, conn) = match http_version {
