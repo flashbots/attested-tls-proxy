@@ -216,7 +216,7 @@ mod tests {
     use crate::{
         attestation::{AttestationGenerator, AttestationType, AttestationVerifier},
         test_helpers::{generate_certificate_chain, generate_tls_config},
-        ProxyServer,
+        ProxyServer, ALPN_H2,
     };
     use jsonrpsee::server::{ServerBuilder, ServerHandle};
     use jsonrpsee::RpcModule;
@@ -244,7 +244,8 @@ mod tests {
     #[tokio::test]
     async fn server_attestation_rpc_client() {
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
-        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+        let (server_config, mut client_config) =
+            generate_tls_config(cert_chain.clone(), private_key);
 
         let (target_addr, _handle) = spawn_test_rpc_server().await;
 
@@ -264,6 +265,7 @@ mod tests {
         tokio::spawn(async move {
             proxy_server.accept().await.unwrap();
         });
+        client_config.alpn_protocols.push(ALPN_H2.to_vec());
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config,
@@ -288,7 +290,8 @@ mod tests {
     #[tokio::test]
     async fn server_attestation_rpc_client_drops_connection() {
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
-        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+        let (server_config, mut client_config) =
+            generate_tls_config(cert_chain.clone(), private_key);
 
         let (target_addr, _handle) = spawn_test_rpc_server().await;
 
@@ -318,6 +321,8 @@ mod tests {
 
             proxy_server.accept().await.unwrap();
         });
+
+        client_config.alpn_protocols.push(ALPN_H2.to_vec());
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config,
