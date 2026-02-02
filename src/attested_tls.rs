@@ -109,7 +109,7 @@ impl AttestedTlsServer {
         })
     }
 
-    /// Handle an incoming connection from a proxy-client
+    /// Handle an incoming connection from an [AttestedTlsClient]
     ///
     /// This is transport agnostic and will work with any asynchronous stream
     pub async fn handle_connection<IO>(
@@ -186,6 +186,23 @@ impl AttestedTlsServer {
         };
 
         Ok((tls_stream, measurements, remote_attestation_type))
+    }
+
+    /// Handle an incoming connection from an [AttestedTlsClient]
+    ///
+    /// This is transport agnostic and will work with any asynchronous stream
+    ///
+    /// This is the same as handle_connection except it returns only the stream and not the
+    /// attestation details, in order to provide a similar API to [TlsAcceptor::accept]
+    pub async fn accept<IO>(
+        &self,
+        inbound: IO,
+    ) -> Result<tokio_rustls::server::TlsStream<IO>, AttestedTlsError>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin,
+    {
+        let (stream, _measurements, _attestation_type) = self.handle_connection(inbound).await?;
+        Ok(stream)
     }
 }
 
