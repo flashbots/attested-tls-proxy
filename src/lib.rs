@@ -5,7 +5,6 @@ pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
 pub mod normalize_pem;
-
 pub mod self_signed;
 
 #[cfg(feature = "ws")]
@@ -15,32 +14,31 @@ pub mod websockets;
 pub mod attested_rpc;
 
 pub use attestation::AttestationGenerator;
+mod http_version;
+
+#[cfg(test)]
+mod test_helpers;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::service_fn, Response};
 use hyper_util::rt::TokioIo;
-use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
-use tokio_rustls::rustls::server::VerifierBuilderError;
-use tracing::{debug, error, warn};
-
-#[cfg(test)]
-mod test_helpers;
-
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
+use thiserror::Error;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::sync::{mpsc, oneshot};
+use tokio_rustls::rustls::server::VerifierBuilderError;
 use tokio_rustls::rustls::{pki_types::CertificateDer, ClientConfig, ServerConfig};
+use tracing::{debug, error, warn};
 
 use crate::{
     attestation::{
         measurements::MultiMeasurements, AttestationError, AttestationType, AttestationVerifier,
     },
     attested_tls::{AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey},
+    http_version::{HttpConnection, HttpSender, HttpVersion, ALPN_H2, ALPN_HTTP11},
 };
 
 /// The header name for giving attestation type
@@ -61,117 +59,10 @@ const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 const KEEP_ALIVE_INTERVAL: u64 = 30;
 const KEEP_ALIVE_TIMEOUT: u64 = 10;
 
-const ALPN_H2: &[u8] = b"h2";
-const ALPN_HTTP11: &[u8] = b"http/1.1";
-
 type RequestWithResponseSender = (
     http::Request<hyper::body::Incoming>,
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
 );
-
-enum HttpVersion {
-    Http1,
-    Http2,
-}
-
-impl HttpVersion {
-    fn from_negotiated_protocol_server<IO>(tls: &tokio_rustls::server::TlsStream<IO>) -> Self {
-        let (_io, conn) = tls.get_ref();
-
-        match conn.alpn_protocol() {
-            Some(ALPN_H2) => HttpVersion::Http2,
-            Some(ALPN_HTTP11) => HttpVersion::Http1,
-            _ => HttpVersion::Http1,
-        }
-    }
-
-    fn from_negotiated_protocol_client<IO>(tls: &tokio_rustls::client::TlsStream<IO>) -> Self {
-        let (_io, conn) = tls.get_ref();
-        const ALPN_H2: &[u8] = b"h2";
-        const ALPN_HTTP11: &[u8] = b"http/1.1";
-
-        match conn.alpn_protocol() {
-            Some(ALPN_H2) => HttpVersion::Http2,
-            Some(ALPN_HTTP11) => HttpVersion::Http1,
-            _ => HttpVersion::Http1,
-        }
-    }
-}
-
-type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
-
-type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
-
-type Http1Connection = hyper::client::conn::http1::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
->;
-
-type Http2Connection = hyper::client::conn::http2::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
-    TokioExecutor,
->;
-
-enum HttpSender {
-    Http1(Http1Sender),
-    Http2(Http2Sender),
-}
-
-impl From<Http1Sender> for HttpSender {
-    fn from(inner: Http1Sender) -> Self {
-        Self::Http1(inner)
-    }
-}
-
-impl From<Http2Sender> for HttpSender {
-    fn from(inner: Http2Sender) -> Self {
-        Self::Http2(inner)
-    }
-}
-
-impl HttpSender {
-    async fn send_request(
-        &mut self,
-        request: http::Request<hyper::body::Incoming>,
-    ) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
-        match self {
-            Self::Http1(sender) => sender.send_request(request).await,
-            Self::Http2(sender) => sender.send_request(request).await,
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[project = HttpConnectionProj]
-    pub enum HttpConnection {
-        Http1 { #[pin] inner: Http1Connection },
-        Http2 { #[pin] inner: Http2Connection },
-    }
-}
-
-impl From<Http1Connection> for HttpConnection {
-    fn from(inner: Http1Connection) -> Self {
-        Self::Http1 { inner }
-    }
-}
-
-impl From<Http2Connection> for HttpConnection {
-    fn from(inner: Http2Connection) -> Self {
-        Self::Http2 { inner }
-    }
-}
-
-impl Future for HttpConnection {
-    type Output = Result<(), hyper::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.project() {
-            HttpConnectionProj::Http1 { inner } => inner.poll(cx),
-            HttpConnectionProj::Http2 { inner } => inner.poll(cx),
-        }
-    }
-}
 
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer {
@@ -1396,6 +1287,80 @@ mod tests {
         connection_breaker_tx.send(()).unwrap();
 
         // Make another request
+        let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+            .await
+            .unwrap();
+
+        let headers = res.headers();
+
+        let attestation_type = headers
+            .get(ATTESTATION_TYPE_HEADER)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+
+        let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
+        let measurements =
+            MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
+                .unwrap();
+        assert_eq!(measurements, mock_dcap_measurements());
+
+        let res_body = res.text().await.unwrap();
+        assert_eq!(res_body, "No measurements");
+    }
+
+    // Use HTTP 1.1
+    #[tokio::test]
+    async fn http_proxy_with_http1() {
+        let target_addr = example_http_service().await;
+
+        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (mut server_config, client_config) =
+            generate_tls_config(cert_chain.clone(), private_key);
+
+        server_config.alpn_protocols.push(ALPN_HTTP11.to_vec());
+
+        let attested_tls_server = AttestedTlsServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+
+        let proxy_server = ProxyServer {
+            attested_tls_server,
+            listener: listener.into(),
+            target: target_addr.to_string(),
+        };
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let proxy_client = ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0".to_string(),
+            proxy_addr.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+        });
+
         let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
             .await
             .unwrap();

@@ -15,13 +15,9 @@ use tower_service::Service;
 use crate::{
     attestation::{measurements::MultiMeasurements, AttestationType},
     attested_tls::{AttestedTlsClient, AttestedTlsError},
+    http_version::HttpVersion,
     TokioExecutor,
 };
-
-pub enum HttpVersion {
-    Http1,
-    Http2,
-}
 
 /// An attested TLS client which can create RpcClients for attested connections
 pub struct AttestedRpcClient {
