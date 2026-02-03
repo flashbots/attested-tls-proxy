@@ -88,16 +88,8 @@ impl AttestedTlsServer {
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, AttestedTlsError> {
-        for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
-            let alpn_vec = alpn.to_vec();
-            if !server_config
-                .alpn_protocols
-                .iter()
-                .any(|p| p.as_slice() == alpn_vec.as_slice())
-            {
-                server_config.alpn_protocols.push(alpn_vec);
-            }
-        }
+        // Ensure protocol version compatibility
+        server_config.alpn_protocols = map_alpn_protocols(server_config.alpn_protocols);
 
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
 
@@ -280,17 +272,8 @@ impl AttestedTlsClient {
         if client_config.client_auth_cert_resolver.has_certs() && cert_chain.is_none() {
             return Err(AttestedTlsError::ClientAuthWithoutClientCert);
         }
-
-        for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
-            let alpn_vec = alpn.to_vec();
-            if !client_config
-                .alpn_protocols
-                .iter()
-                .any(|p| p.as_slice() == alpn_vec.as_slice())
-            {
-                client_config.alpn_protocols.push(alpn_vec);
-            }
-        }
+        // Ensure protocol version compatibility
+        client_config.alpn_protocols = map_alpn_protocols(client_config.alpn_protocols);
 
         let connector = TlsConnector::from(Arc::new(client_config));
 
@@ -533,6 +516,34 @@ fn server_name_from_host(
     let host_part = host_part.trim_matches(|c| c == '[' || c == ']');
 
     ServerName::try_from(host_part.to_string())
+}
+
+/// Ensure protocol compatibility with the other party by adding 'flashbots-ratls/<version>' to the
+/// protocol names of all supported protocols
+fn map_alpn_protocols(existing_protocols: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+    let mut mapped_protocols = Vec::new();
+    for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
+        let alpn = alpn.to_vec();
+        let new_p: Vec<_> = existing_protocols
+            .clone()
+            .into_iter()
+            .map(|p| {
+                let mut updated_protocol_name = alpn.clone();
+                updated_protocol_name.extend(b"+");
+                updated_protocol_name.extend(p);
+                updated_protocol_name
+            })
+            .collect();
+
+        mapped_protocols.extend(new_p);
+    }
+
+    // For the case that no existing protocols are specified by the remote party:
+    for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
+        mapped_protocols.push(alpn.to_vec());
+    }
+
+    mapped_protocols
 }
 
 #[cfg(test)]

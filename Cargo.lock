@@ -504,7 +504,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "attested-tls-proxy"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "alloy-rpc-client",
  "alloy-transport-http",
@@ -529,6 +529,7 @@ dependencies = [
  "p256",
  "parity-scale-codec",
  "pem-rfc7468",
+ "pin-project-lite",
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",

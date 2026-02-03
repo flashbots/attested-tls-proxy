@@ -5,7 +5,6 @@ pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
 pub mod normalize_pem;
-
 pub mod self_signed;
 
 #[cfg(feature = "ws")]
@@ -15,30 +14,31 @@ pub mod websockets;
 pub mod attested_rpc;
 
 pub use attestation::AttestationGenerator;
+mod http_version;
+
+#[cfg(test)]
+mod test_helpers;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{service::service_fn, Response};
 use hyper_util::rt::TokioIo;
-use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
-use tokio_rustls::rustls::server::VerifierBuilderError;
-use tracing::{debug, error, warn};
-
-#[cfg(test)]
-mod test_helpers;
-
 use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
+use thiserror::Error;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::sync::{mpsc, oneshot};
+use tokio_rustls::rustls::server::VerifierBuilderError;
 use tokio_rustls::rustls::{pki_types::CertificateDer, ClientConfig, ServerConfig};
+use tracing::{debug, error, warn};
 
 use crate::{
     attestation::{
         measurements::MultiMeasurements, AttestationError, AttestationType, AttestationVerifier,
     },
     attested_tls::{AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey},
+    http_version::{HttpConnection, HttpSender, HttpVersion, ALPN_H2, ALPN_HTTP11},
 };
 
 /// The header name for giving attestation type
@@ -63,13 +63,6 @@ type RequestWithResponseSender = (
     http::Request<hyper::body::Incoming>,
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
 );
-type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
-
-type Http2Connection = hyper::client::conn::http2::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
-    TokioExecutor,
->;
 
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer {
@@ -110,12 +103,23 @@ impl ProxyServer {
     /// Start with preconfigured TLS
     pub async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
-        server_config: ServerConfig,
+        mut server_config: ServerConfig,
         local: impl ToSocketAddrs,
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
+        for protocol in [ALPN_H2, ALPN_HTTP11] {
+            let already_present = server_config
+                .alpn_protocols
+                .iter()
+                .any(|p| p.as_slice() == protocol);
+
+            if !already_present {
+                server_config.alpn_protocols.push(protocol.to_vec());
+            }
+        }
+
         let attested_tls_server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
@@ -179,6 +183,8 @@ impl ProxyServer {
         client_addr: SocketAddr,
     ) -> Result<(), ProxyError> {
         debug!("[proxy-server] accepted connection");
+
+        let http_version = HttpVersion::from_negotiated_protocol_server(&tls_stream);
 
         // Setup a request handler
         let service = service_fn(move |mut req| {
@@ -246,12 +252,23 @@ impl ProxyServer {
         let io = TokioIo::new(tls_stream);
 
         // Setup an HTTP server
-        hyper::server::conn::http2::Builder::new(TokioExecutor)
-            .timer(hyper_util::rt::tokio::TokioTimer::new())
-            .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
-            .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
-            .serve_connection(io, service)
-            .await?;
+        match http_version {
+            HttpVersion::Http2 => {
+                hyper::server::conn::http2::Builder::new(TokioExecutor)
+                    .timer(hyper_util::rt::tokio::TokioTimer::new())
+                    .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
+                    .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
+                    .serve_connection(io, service)
+                    .await?;
+            }
+            HttpVersion::Http1 => {
+                hyper::server::conn::http1::Builder::new()
+                    .timer(hyper_util::rt::tokio::TokioTimer::new())
+                    .keep_alive(true)
+                    .serve_connection(io, service)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -327,13 +344,24 @@ impl ProxyClient {
 
     /// Create a new proxy client with given TLS configuration
     pub async fn new_with_tls_config(
-        client_config: ClientConfig,
+        mut client_config: ClientConfig,
         address: impl ToSocketAddrs,
         target_name: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, ProxyError> {
+        for protocol in [ALPN_H2, ALPN_HTTP11] {
+            let already_present = client_config
+                .alpn_protocols
+                .iter()
+                .any(|p| p.as_slice() == protocol);
+
+            if !already_present {
+                client_config.alpn_protocols.push(protocol.to_vec());
+            }
+        }
+
         let attested_tls_client = AttestedTlsClient::new_with_tls_config(
             client_config,
             attestation_generator,
@@ -547,8 +575,8 @@ impl ProxyClient {
         should_bail: bool,
     ) -> Result<
         (
-            Http2Sender,
-            Http2Connection,
+            HttpSender,
+            HttpConnection,
             Option<MultiMeasurements>,
             AttestationType,
         ),
@@ -584,8 +612,8 @@ impl ProxyClient {
         target: &str,
     ) -> Result<
         (
-            Http2Sender,
-            Http2Connection,
+            HttpSender,
+            HttpConnection,
             Option<MultiMeasurements>,
             AttestationType,
         ),
@@ -594,15 +622,27 @@ impl ProxyClient {
         let (tls_stream, measurements, remote_attestation_type) = inner.connect_tcp(target).await?;
 
         // The attestation exchange is now complete - setup an HTTP client
+        let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
 
         let outbound_io = TokioIo::new(tls_stream);
-        let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
-            .timer(hyper_util::rt::tokio::TokioTimer::new())
-            .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
-            .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
-            .keep_alive_while_idle(true)
-            .handshake::<_, hyper::body::Incoming>(outbound_io)
-            .await?;
+        let (sender, conn) = match http_version {
+            HttpVersion::Http2 => {
+                let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
+                    .timer(hyper_util::rt::tokio::TokioTimer::new())
+                    .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
+                    .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
+                    .keep_alive_while_idle(true)
+                    .handshake::<_, hyper::body::Incoming>(outbound_io)
+                    .await?;
+                (sender.into(), conn.into())
+            }
+            HttpVersion::Http1 => {
+                let (sender, conn) = hyper::client::conn::http1::Builder::new()
+                    .handshake::<_, hyper::body::Incoming>(outbound_io)
+                    .await?;
+                (sender.into(), conn.into())
+            }
+        };
 
         // Return the HTTP client, as well as remote measurements
         Ok((sender, conn, measurements, remote_attestation_type))
@@ -1247,6 +1287,80 @@ mod tests {
         connection_breaker_tx.send(()).unwrap();
 
         // Make another request
+        let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+            .await
+            .unwrap();
+
+        let headers = res.headers();
+
+        let attestation_type = headers
+            .get(ATTESTATION_TYPE_HEADER)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+
+        let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
+        let measurements =
+            MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
+                .unwrap();
+        assert_eq!(measurements, mock_dcap_measurements());
+
+        let res_body = res.text().await.unwrap();
+        assert_eq!(res_body, "No measurements");
+    }
+
+    // Use HTTP 1.1
+    #[tokio::test]
+    async fn http_proxy_with_http1() {
+        let target_addr = example_http_service().await;
+
+        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (mut server_config, client_config) =
+            generate_tls_config(cert_chain.clone(), private_key);
+
+        server_config.alpn_protocols.push(ALPN_HTTP11.to_vec());
+
+        let attested_tls_server = AttestedTlsServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+
+        let proxy_server = ProxyServer {
+            attested_tls_server,
+            listener: listener.into(),
+            target: target_addr.to_string(),
+        };
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let proxy_client = ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0".to_string(),
+            proxy_addr.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+        });
+
         let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
             .await
             .unwrap();
