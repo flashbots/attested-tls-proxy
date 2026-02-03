@@ -166,20 +166,32 @@ pub enum MeasurementFormatError {
     Reqwest(#[from] reqwest::Error),
 }
 
+/// Represents a set of acceptable measurement values for policy enforcement
+///
+/// Unlike `MultiMeasurements` which stores single values (for actual quote measurements),
+/// this stores multiple acceptable values per register with OR semantics - any matching value
+/// is accepted.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PolicyMeasurements {
+    Dcap(HashMap<DcapMeasurementRegister, Vec<[u8; 48]>>),
+    Azure(HashMap<u32, Vec<[u8; 32]>>),
+    NoAttestation,
+}
+
 /// An accepted measurement value given in the measurements file
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeasurementRecord {
     /// An identifier, for example the name and version of the corresponding OS image
     pub measurement_id: String,
-    /// The expected measurement register values
-    pub measurements: MultiMeasurements,
+    /// The expected measurement register values (supports multiple acceptable values per register)
+    pub measurements: PolicyMeasurements,
 }
 
 impl MeasurementRecord {
     pub fn allow_no_attestation() -> Self {
         Self {
             measurement_id: "Allow no attestation".to_string(),
-            measurements: MultiMeasurements::NoAttestation,
+            measurements: PolicyMeasurements::NoAttestation,
         }
     }
 
@@ -187,9 +199,9 @@ impl MeasurementRecord {
         Self {
             measurement_id: format!("Any measurement for {attestation_type}"),
             measurements: match attestation_type {
-                AttestationType::None => MultiMeasurements::NoAttestation,
-                AttestationType::AzureTdx => MultiMeasurements::Azure(HashMap::new()),
-                _ => MultiMeasurements::Dcap(HashMap::new()),
+                AttestationType::None => PolicyMeasurements::NoAttestation,
+                AttestationType::AzureTdx => PolicyMeasurements::Azure(HashMap::new()),
+                _ => PolicyMeasurements::Dcap(HashMap::new()),
             },
         }
     }
@@ -241,12 +253,12 @@ impl MeasurementPolicy {
         Self {
             accepted_measurements: vec![MeasurementRecord {
                 measurement_id: "test".to_string(),
-                measurements: MultiMeasurements::Dcap(HashMap::from([
-                    (DcapMeasurementRegister::MRTD, [0; 48]),
-                    (DcapMeasurementRegister::RTMR0, [0; 48]),
-                    (DcapMeasurementRegister::RTMR1, [0; 48]),
-                    (DcapMeasurementRegister::RTMR2, [0; 48]),
-                    (DcapMeasurementRegister::RTMR3, [0; 48]),
+                measurements: PolicyMeasurements::Dcap(HashMap::from([
+                    (DcapMeasurementRegister::MRTD, vec![[0; 48]]),
+                    (DcapMeasurementRegister::RTMR0, vec![[0; 48]]),
+                    (DcapMeasurementRegister::RTMR1, vec![[0; 48]]),
+                    (DcapMeasurementRegister::RTMR2, vec![[0; 48]]),
+                    (DcapMeasurementRegister::RTMR3, vec![[0; 48]]),
                 ])),
             }],
         }
@@ -262,11 +274,13 @@ impl MeasurementPolicy {
             .iter()
             .any(|measurement_record| match measurements {
                 MultiMeasurements::Dcap(dcap_measurements) => {
-                    if let MultiMeasurements::Dcap(d) = measurement_record.measurements.clone() {
-                        // All measurements in our policy must be given and must match
-                        for (k, v) in d.iter() {
+                    if let PolicyMeasurements::Dcap(d) = &measurement_record.measurements {
+                        // All measurements in our policy must be given and must match at least one expected value
+                        for (k, acceptable_values) in d.iter() {
                             match dcap_measurements.get(k) {
-                                Some(value) if value == v => {}
+                                // Check if actual value matches ANY of the acceptable values (OR semantics)
+                                Some(actual_value)
+                                    if acceptable_values.iter().any(|v| actual_value == v) => {}
                                 _ => return false,
                             }
                         }
@@ -275,10 +289,12 @@ impl MeasurementPolicy {
                     false
                 }
                 MultiMeasurements::Azure(azure_measurements) => {
-                    if let MultiMeasurements::Azure(a) = measurement_record.measurements.clone() {
-                        for (k, v) in a.iter() {
+                    if let PolicyMeasurements::Azure(a) = &measurement_record.measurements {
+                        for (k, acceptable_values) in a.iter() {
                             match azure_measurements.get(k) {
-                                Some(value) if value == v => {}
+                                // Check if actual value matches ANY of the acceptable values (OR semantics)
+                                Some(actual_value)
+                                    if acceptable_values.iter().any(|v| actual_value == v) => {}
                                 _ => return false,
                             }
                         }
@@ -287,10 +303,10 @@ impl MeasurementPolicy {
                     false
                 }
                 MultiMeasurements::NoAttestation => {
-                    if MultiMeasurements::NoAttestation == measurement_record.measurements.clone() {
-                        return true;
-                    }
-                    false
+                    matches!(
+                        measurement_record.measurements,
+                        PolicyMeasurements::NoAttestation
+                    )
                 }
             })
         {
@@ -305,7 +321,7 @@ impl MeasurementPolicy {
         !self
             .accepted_measurements
             .iter()
-            .any(|a| a.measurements == MultiMeasurements::NoAttestation)
+            .any(|a| a.measurements == PolicyMeasurements::NoAttestation)
     }
 
     /// Given either a URL or the path to a file, parse the measurement policy from JSON
@@ -333,9 +349,26 @@ impl MeasurementPolicy {
             measurements: Option<HashMap<String, MeasurementEntry>>,
         }
 
+        /// Represents the `expected` field which can be either a single string or a list of strings
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum ExpectedValue {
+            Single(String),
+            Multiple(Vec<String>),
+        }
+
+        impl ExpectedValue {
+            fn into_vec(self) -> Vec<String> {
+                match self {
+                    ExpectedValue::Single(s) => vec![s],
+                    ExpectedValue::Multiple(v) => v,
+                }
+            }
+        }
+
         #[derive(Debug, Deserialize)]
         struct MeasurementEntry {
-            expected: String,
+            expected: ExpectedValue,
         }
 
         let measurements_simple: Vec<MeasurementRecordSimple> =
@@ -348,7 +381,7 @@ impl MeasurementPolicy {
                 serde_json::from_value(serde_json::Value::String(measurement.attestation_type))?;
 
             if let Some(measurements) = measurement.measurements {
-                let multi_measurement = match attestation_type {
+                let policy_measurement = match attestation_type {
                     AttestationType::AzureTdx => {
                         let azure_measurements = measurements
                             .into_iter()
@@ -359,31 +392,45 @@ impl MeasurementPolicy {
                                     return Err(MeasurementFormatError::BadRegisterIndex);
                                 }
 
-                                Ok((
-                                    index,
-                                    hex::decode(entry.expected)?
-                                        .try_into()
-                                        .map_err(|_| MeasurementFormatError::BadLength)?,
-                                ))
+                                let values = entry
+                                    .expected
+                                    .into_vec()
+                                    .into_iter()
+                                    .map(|hex_str| {
+                                        hex::decode(hex_str)?
+                                            .try_into()
+                                            .map_err(|_| MeasurementFormatError::BadLength)
+                                    })
+                                    .collect::<Result<Vec<[u8; 32]>, MeasurementFormatError>>()?;
+
+                                Ok((index, values))
                             })
-                            .collect::<Result<HashMap<u32, [u8; 32]>, MeasurementFormatError>>()?;
-                        MultiMeasurements::Azure(azure_measurements)
+                            .collect::<Result<HashMap<u32, Vec<[u8; 32]>>, MeasurementFormatError>>(
+                            )?;
+                        PolicyMeasurements::Azure(azure_measurements)
                     }
-                    AttestationType::None => MultiMeasurements::NoAttestation,
-                    _ => MultiMeasurements::Dcap(
+                    AttestationType::None => PolicyMeasurements::NoAttestation,
+                    _ => PolicyMeasurements::Dcap(
                         measurements
                             .into_iter()
                             .map(|(index, entry)| {
                                 let index: u8 = index.parse()?;
-                                Ok((
-                                    DcapMeasurementRegister::try_from(index)?,
-                                    hex::decode(entry.expected)?
-                                        .try_into()
-                                        .map_err(|_| MeasurementFormatError::BadLength)?,
-                                ))
+
+                                let values = entry
+                                    .expected
+                                    .into_vec()
+                                    .into_iter()
+                                    .map(|hex_str| {
+                                        hex::decode(hex_str)?
+                                            .try_into()
+                                            .map_err(|_| MeasurementFormatError::BadLength)
+                                    })
+                                    .collect::<Result<Vec<[u8; 48]>, MeasurementFormatError>>()?;
+
+                                Ok((DcapMeasurementRegister::try_from(index)?, values))
                             })
                             .collect::<Result<
-                                HashMap<DcapMeasurementRegister, [u8; 48]>,
+                                HashMap<DcapMeasurementRegister, Vec<[u8; 48]>>,
                                 MeasurementFormatError,
                             >>()?,
                     ),
@@ -391,7 +438,7 @@ impl MeasurementPolicy {
 
                 measurement_policy.push(MeasurementRecord {
                     measurement_id: measurement.measurement_id.unwrap_or_default(),
-                    measurements: multi_measurement,
+                    measurements: policy_measurement,
                 });
             } else {
                 measurement_policy.push(MeasurementRecord::allow_any_measurement(attestation_type));
@@ -422,7 +469,7 @@ mod tests {
         assert_eq!(specific_measurements.accepted_measurements.len(), 3);
 
         let m = &specific_measurements.accepted_measurements[0];
-        if let MultiMeasurements::Azure(a) = &m.measurements {
+        if let PolicyMeasurements::Azure(a) = &m.measurements {
             assert_eq!(
                 a.keys().collect::<HashSet<_>>(),
                 HashSet::from([&9, &4, &11])
@@ -432,14 +479,14 @@ mod tests {
         }
 
         let m = &specific_measurements.accepted_measurements[1];
-        if let MultiMeasurements::Azure(a) = &m.measurements {
+        if let PolicyMeasurements::Azure(a) = &m.measurements {
             assert_eq!(a.keys().collect::<HashSet<_>>(), HashSet::from([&9, &4]));
         } else {
             panic!("Unexpected measurement type");
         }
 
         let m = &specific_measurements.accepted_measurements[2];
-        if let MultiMeasurements::Dcap(d) = &m.measurements {
+        if let PolicyMeasurements::Dcap(d) = &m.measurements {
             assert!(d.contains_key(&DcapMeasurementRegister::MRTD));
             assert!(d.contains_key(&DcapMeasurementRegister::RTMR0));
             assert!(d.contains_key(&DcapMeasurementRegister::RTMR1));
@@ -520,5 +567,155 @@ mod tests {
                 .unwrap_err(),
             AttestationError::MeasurementsNotAccepted
         ));
+    }
+
+    #[tokio::test]
+    async fn test_expected_list_values_or_semantics() {
+        // Test that list of expected values works with OR semantics
+        let json = r#"[
+            {
+                "measurement_id": "dcap-list-test",
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": {
+                        "expected": [
+                            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                            "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+                        ]
+                    },
+                    "1": {
+                        "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    }
+                }
+            }
+        ]"#;
+
+        let policy = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec())
+            .await
+            .unwrap();
+
+        // Should match the first expected value for register 0
+        let measurements_first = MultiMeasurements::Dcap(HashMap::from([
+            (DcapMeasurementRegister::MRTD, [0; 48]),
+            (DcapMeasurementRegister::RTMR0, [0; 48]),
+        ]));
+        policy.check_measurement(&measurements_first).unwrap();
+
+        // Should match the second expected value for register 0
+        let measurements_second = MultiMeasurements::Dcap(HashMap::from([
+            (DcapMeasurementRegister::MRTD, [0x11; 48]),
+            (DcapMeasurementRegister::RTMR0, [0; 48]),
+        ]));
+        policy.check_measurement(&measurements_second).unwrap();
+
+        // Should fail when neither expected value matches
+        let measurements_neither = MultiMeasurements::Dcap(HashMap::from([
+            (DcapMeasurementRegister::MRTD, [0x22; 48]),
+            (DcapMeasurementRegister::RTMR0, [0; 48]),
+        ]));
+        assert!(matches!(
+            policy
+                .check_measurement(&measurements_neither)
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_expected_list_values_azure() {
+        // Test that list of expected values works for Azure measurements
+        let json = r#"[
+            {
+                "measurement_id": "azure-list-test",
+                "attestation_type": "azure-tdx",
+                "measurements": {
+                    "4": {
+                        "expected": [
+                            "0000000000000000000000000000000000000000000000000000000000000000",
+                            "1111111111111111111111111111111111111111111111111111111111111111"
+                        ]
+                    }
+                }
+            }
+        ]"#;
+
+        let policy = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec())
+            .await
+            .unwrap();
+
+        // Should match the first expected value
+        let measurements_first = MultiMeasurements::Azure(HashMap::from([(4, [0; 32])]));
+        policy.check_measurement(&measurements_first).unwrap();
+
+        // Should match the second expected value
+        let measurements_second = MultiMeasurements::Azure(HashMap::from([(4, [0x11; 32])]));
+        policy.check_measurement(&measurements_second).unwrap();
+
+        // Should fail when neither expected value matches
+        let measurements_neither = MultiMeasurements::Azure(HashMap::from([(4, [0x22; 32])]));
+        assert!(matches!(
+            policy
+                .check_measurement(&measurements_neither)
+                .unwrap_err(),
+            AttestationError::MeasurementsNotAccepted
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_backwards_compatibility_single_string() {
+        // Test that single string values still work (backwards compatibility)
+        let json = r#"[
+            {
+                "measurement_id": "single-value-test",
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": {
+                        "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    }
+                }
+            }
+        ]"#;
+
+        let policy = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec())
+            .await
+            .unwrap();
+
+        let measurements = MultiMeasurements::Dcap(HashMap::from([(
+            DcapMeasurementRegister::MRTD,
+            [0; 48],
+        )]));
+        policy.check_measurement(&measurements).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_read_measurements_file_with_list() {
+        // Test reading measurement file that contains list values
+        let policy = MeasurementPolicy::from_file("test-assets/measurements_list.json".into())
+            .await
+            .unwrap();
+
+        assert_eq!(policy.accepted_measurements.len(), 1);
+
+        let m = &policy.accepted_measurements[0];
+        if let PolicyMeasurements::Dcap(d) = &m.measurements {
+            // Check that MRTD has multiple acceptable values
+            let mrtd_values = d.get(&DcapMeasurementRegister::MRTD).unwrap();
+            assert_eq!(mrtd_values.len(), 2);
+        } else {
+            panic!("Expected Dcap measurements");
+        }
+
+        // Should match either of the two MRTD values
+        let measurements_first = MultiMeasurements::Dcap(HashMap::from([
+            (DcapMeasurementRegister::MRTD, [0; 48]),
+            (DcapMeasurementRegister::RTMR0, [0; 48]),
+        ]));
+        policy.check_measurement(&measurements_first).unwrap();
+
+        let measurements_second = MultiMeasurements::Dcap(HashMap::from([
+            (DcapMeasurementRegister::MRTD, [0x11; 48]),
+            (DcapMeasurementRegister::RTMR0, [0; 48]),
+        ]));
+        policy.check_measurement(&measurements_second).unwrap();
     }
 }

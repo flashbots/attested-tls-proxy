@@ -31,8 +31,18 @@ This aims to match the formatting used by `cvm-reverse-proxy`.
 
 These objects have the following fields:
 - `measurement_id` - a name used to describe the entry. For example the name and version of the CVM OS image that these measurements correspond to.
-- `attestation_type` - a string containing one of the attestation types (confidential computing platforms) described below. 
+- `attestation_type` - a string containing one of the attestation types (confidential computing platforms) described below.
 - `measurements` - an object with fields referring to the five measurement registers. Field names are the same as for the measurement headers (see below).
+
+Each measurement register entry has an `expected` field containing a list of acceptable hex-encoded values:
+
+```json
+"expected": ["abcd1234...", "efgh5678..."]
+```
+
+The attestation is accepted if the actual measurement matches **any** of the expected values (OR semantics). This is useful when multiple valid OS images or configurations should be accepted.
+
+> **Note:** Using a single string value (`"expected": "abcd1234..."`) is deprecated and discouraged. Always use a list, even for single values: `"expected": ["abcd1234..."]`. Single string values are still supported for backwards compatibility but may be removed in a future version.
 
 Example:
 
@@ -43,19 +53,53 @@ Example:
         "attestation_type": "dcap-tdx",
         "measurements": {
             "0": {
-                "expected": "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323"
+                "expected": [
+                    "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323"
+                ]
             },
             "1": {
-                "expected": "da6e07866635cb34a9ffcdc26ec6622f289e625c42c39b320f29cdf1dc84390b4f89dd0b073be52ac38ca7b0a0f375bb"
+                "expected": [
+                    "da6e07866635cb34a9ffcdc26ec6622f289e625c42c39b320f29cdf1dc84390b4f89dd0b073be52ac38ca7b0a0f375bb"
+                ]
             },
             "2": {
-                "expected": "a7157e7c5f932e9babac9209d4527ec9ed837b8e335a931517677fa746db51ee56062e3324e266e3f39ec26a516f4f71"
+                "expected": [
+                    "a7157e7c5f932e9babac9209d4527ec9ed837b8e335a931517677fa746db51ee56062e3324e266e3f39ec26a516f4f71"
+                ]
             },
             "3": {
-                "expected": "e63560e50830e22fbc9b06cdce8afe784bf111e4251256cf104050f1347cd4ad9f30da408475066575145da0b098a124"
+                "expected": [
+                    "e63560e50830e22fbc9b06cdce8afe784bf111e4251256cf104050f1347cd4ad9f30da408475066575145da0b098a124"
+                ]
             },
             "4": {
-                "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                "expected": [
+                    "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                ]
+            }
+        }
+    }
+]
+```
+
+Example with multiple acceptable values per register:
+
+```JSON
+[
+    {
+        "measurement_id": "dcap-tdx-multiple-images",
+        "attestation_type": "dcap-tdx",
+        "measurements": {
+            "0": {
+                "expected": [
+                    "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323",
+                    "58b2dd185c025ef9607cbe1fe24e61e672be2f00d8f8dd641bc97eb8fb50aad14f68f8eb930a9dcb0d730e4081614434"
+                ]
+            },
+            "1": {
+                "expected": [
+                    "da6e07866635cb34a9ffcdc26ec6622f289e625c42c39b320f29cdf1dc84390b4f89dd0b073be52ac38ca7b0a0f375bb"
+                ]
             }
         }
     }
