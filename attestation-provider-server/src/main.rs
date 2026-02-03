@@ -1,8 +1,8 @@
+use attestation_provider_server::{attestation_provider_client, attestation_provider_server};
 use attested_tls_proxy::attestation::{
     measurements::MeasurementPolicy, AttestationGenerator, AttestationType, AttestationVerifier,
 };
 use clap::{Parser, Subcommand};
-use dummy_attestation_server::{dummy_attestation_client, dummy_attestation_server};
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::TcpListener;
 use tracing::level_filters::LevelFilter;
@@ -33,7 +33,7 @@ enum CliCommand {
         server_attestation_type: Option<String>,
     },
     Client {
-        /// Socket address of a dummy attestation server
+        /// Socket address of a attestation provider server
         server_addr: SocketAddr,
         /// Optional path to file containing JSON measurements to be enforced on the remote party
         #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
             let listener = TcpListener::bind(listen_addr).await?;
 
             println!("Listening on {}", listener.local_addr()?);
-            dummy_attestation_server(listener, attestation_generator).await?;
+            attestation_provider_server(listener, attestation_generator).await?;
         }
         CliCommand::Client {
             server_addr,
@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let attestation_message =
-                dummy_attestation_client(server_addr, attestation_verifier).await?;
+                attestation_provider_client(server_addr, attestation_verifier).await?;
 
             println!("{attestation_message:?}")
         }

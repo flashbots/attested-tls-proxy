@@ -120,7 +120,7 @@ impl Display for AttestationType {
 #[derive(Debug, Clone)]
 pub struct AttestationGenerator {
     pub attestation_type: AttestationType,
-    dummy_dcap_url: Option<String>,
+    attestation_provider_url: Option<String>,
 }
 
 impl AttestationGenerator {
@@ -145,7 +145,7 @@ impl AttestationGenerator {
     pub fn with_no_attestation() -> Self {
         Self {
             attestation_type: AttestationType::None,
-            dummy_dcap_url: None,
+            attestation_provider_url: None,
         }
     }
 
@@ -175,7 +175,7 @@ impl AttestationGenerator {
 
         Ok(Self {
             attestation_type,
-            dummy_dcap_url: None,
+            attestation_provider_url: None,
         })
     }
 
@@ -193,7 +193,7 @@ impl AttestationGenerator {
 
                 Ok(Self {
                     attestation_type: AttestationType::Dummy,
-                    dummy_dcap_url: Some(url),
+                    attestation_provider_url: Some(url),
                 })
             }
             None => Err(AttestationError::DummyUrl),
@@ -243,7 +243,7 @@ impl AttestationGenerator {
     ) -> Result<Vec<u8>, AttestationError> {
         let url = format!(
             "{}/attest/{}",
-            self.dummy_dcap_url
+            self.attestation_provider_url
                 .clone()
                 .ok_or(AttestationError::DummyUrl)?,
             hex::encode(input_data)

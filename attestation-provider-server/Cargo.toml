@@ -1,5 +1,5 @@
 [package]
-name = "dummy-attestation-server"
+name = "attestation-provider-server"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
