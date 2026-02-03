@@ -41,6 +41,33 @@ pub enum MultiMeasurements {
     NoAttestation,
 }
 
+/// Expected measurement value(s) for a single register - can be one value or multiple (OR semantics)
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExpectedMeasurement<const N: usize> {
+    /// A single expected value (used for backwards compatibility with deprecated `expected` field)
+    Single([u8; N]),
+    /// Multiple acceptable values - any value in the list is accepted (OR semantics)
+    Any(Vec<[u8; N]>),
+}
+
+impl<const N: usize> ExpectedMeasurement<N> {
+    /// Check if an actual value matches any of the expected values
+    fn matches(&self, actual: &[u8; N]) -> bool {
+        match self {
+            ExpectedMeasurement::Single(expected) => actual == expected,
+            ExpectedMeasurement::Any(expected_list) => expected_list.iter().any(|e| actual == e),
+        }
+    }
+}
+
+/// Expected measurement values for policy enforcement
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExpectedMeasurements {
+    Dcap(HashMap<DcapMeasurementRegister, ExpectedMeasurement<48>>),
+    Azure(HashMap<u32, ExpectedMeasurement<32>>),
+    NoAttestation,
+}
+
 impl MultiMeasurements {
     /// Convert to the JSON format used in HTTP headers
     pub fn to_header_format(&self) -> Result<HeaderValue, MeasurementFormatError> {
@@ -164,6 +191,12 @@ pub enum MeasurementFormatError {
     ParseInt(#[from] std::num::ParseIntError),
     #[error("Failed to read measurements from URL: {0}")]
     Reqwest(#[from] reqwest::Error),
+    #[error("Measurement entry for register '{0}' has both 'expected' and 'expected_any'")]
+    BothExpectedAndExpectedAny(String),
+    #[error("Measurement entry for register '{0}' has neither 'expected' nor 'expected_any'")]
+    NoExpectedValue(String),
+    #[error("Measurement entry for register '{0}' has empty 'expected_any' list")]
+    EmptyExpectedAny(String),
 }
 
 /// An accepted measurement value given in the measurements file
@@ -172,14 +205,14 @@ pub struct MeasurementRecord {
     /// An identifier, for example the name and version of the corresponding OS image
     pub measurement_id: String,
     /// The expected measurement register values
-    pub measurements: MultiMeasurements,
+    pub measurements: ExpectedMeasurements,
 }
 
 impl MeasurementRecord {
     pub fn allow_no_attestation() -> Self {
         Self {
             measurement_id: "Allow no attestation".to_string(),
-            measurements: MultiMeasurements::NoAttestation,
+            measurements: ExpectedMeasurements::NoAttestation,
         }
     }
 
@@ -187,9 +220,9 @@ impl MeasurementRecord {
         Self {
             measurement_id: format!("Any measurement for {attestation_type}"),
             measurements: match attestation_type {
-                AttestationType::None => MultiMeasurements::NoAttestation,
-                AttestationType::AzureTdx => MultiMeasurements::Azure(HashMap::new()),
-                _ => MultiMeasurements::Dcap(HashMap::new()),
+                AttestationType::None => ExpectedMeasurements::NoAttestation,
+                AttestationType::AzureTdx => ExpectedMeasurements::Azure(HashMap::new()),
+                _ => ExpectedMeasurements::Dcap(HashMap::new()),
             },
         }
     }
@@ -241,12 +274,12 @@ impl MeasurementPolicy {
         Self {
             accepted_measurements: vec![MeasurementRecord {
                 measurement_id: "test".to_string(),
-                measurements: MultiMeasurements::Dcap(HashMap::from([
-                    (DcapMeasurementRegister::MRTD, [0; 48]),
-                    (DcapMeasurementRegister::RTMR0, [0; 48]),
-                    (DcapMeasurementRegister::RTMR1, [0; 48]),
-                    (DcapMeasurementRegister::RTMR2, [0; 48]),
-                    (DcapMeasurementRegister::RTMR3, [0; 48]),
+                measurements: ExpectedMeasurements::Dcap(HashMap::from([
+                    (DcapMeasurementRegister::MRTD, ExpectedMeasurement::Single([0; 48])),
+                    (DcapMeasurementRegister::RTMR0, ExpectedMeasurement::Single([0; 48])),
+                    (DcapMeasurementRegister::RTMR1, ExpectedMeasurement::Single([0; 48])),
+                    (DcapMeasurementRegister::RTMR2, ExpectedMeasurement::Single([0; 48])),
+                    (DcapMeasurementRegister::RTMR3, ExpectedMeasurement::Single([0; 48])),
                 ])),
             }],
         }
@@ -262,11 +295,11 @@ impl MeasurementPolicy {
             .iter()
             .any(|measurement_record| match measurements {
                 MultiMeasurements::Dcap(dcap_measurements) => {
-                    if let MultiMeasurements::Dcap(d) = measurement_record.measurements.clone() {
+                    if let ExpectedMeasurements::Dcap(expected) = &measurement_record.measurements {
                         // All measurements in our policy must be given and must match
-                        for (k, v) in d.iter() {
+                        for (k, v) in expected.iter() {
                             match dcap_measurements.get(k) {
-                                Some(value) if value == v => {}
+                                Some(actual) if v.matches(actual) => {}
                                 _ => return false,
                             }
                         }
@@ -275,10 +308,11 @@ impl MeasurementPolicy {
                     false
                 }
                 MultiMeasurements::Azure(azure_measurements) => {
-                    if let MultiMeasurements::Azure(a) = measurement_record.measurements.clone() {
-                        for (k, v) in a.iter() {
+                    if let ExpectedMeasurements::Azure(expected) = &measurement_record.measurements
+                    {
+                        for (k, v) in expected.iter() {
                             match azure_measurements.get(k) {
-                                Some(value) if value == v => {}
+                                Some(actual) if v.matches(actual) => {}
                                 _ => return false,
                             }
                         }
@@ -287,10 +321,10 @@ impl MeasurementPolicy {
                     false
                 }
                 MultiMeasurements::NoAttestation => {
-                    if MultiMeasurements::NoAttestation == measurement_record.measurements.clone() {
-                        return true;
-                    }
-                    false
+                    matches!(
+                        measurement_record.measurements,
+                        ExpectedMeasurements::NoAttestation
+                    )
                 }
             })
         {
@@ -305,7 +339,7 @@ impl MeasurementPolicy {
         !self
             .accepted_measurements
             .iter()
-            .any(|a| a.measurements == MultiMeasurements::NoAttestation)
+            .any(|a| a.measurements == ExpectedMeasurements::NoAttestation)
     }
 
     /// Given either a URL or the path to a file, parse the measurement policy from JSON
@@ -333,9 +367,52 @@ impl MeasurementPolicy {
             measurements: Option<HashMap<String, MeasurementEntry>>,
         }
 
+        /// Measurement entry for a single register in the measurements JSON file.
+        /// Use `expected_any` for new configurations; `expected` is deprecated.
         #[derive(Debug, Deserialize)]
         struct MeasurementEntry {
-            expected: String,
+            /// Deprecated: use `expected_any` instead. Single hex-encoded expected value.
+            #[serde(default)]
+            expected: Option<String>,
+            /// List of acceptable hex-encoded values (OR semantics - any value matches).
+            #[serde(default)]
+            expected_any: Option<Vec<String>>,
+        }
+
+        fn parse_measurement_entry<const N: usize>(
+            entry: &MeasurementEntry,
+            register_name: &str,
+        ) -> Result<ExpectedMeasurement<N>, MeasurementFormatError> {
+            match (&entry.expected, &entry.expected_any) {
+                (Some(single), None) => {
+                    let bytes: [u8; N] = hex::decode(single)?
+                        .try_into()
+                        .map_err(|_| MeasurementFormatError::BadLength)?;
+                    Ok(ExpectedMeasurement::Single(bytes))
+                }
+                (None, Some(any_list)) => {
+                    if any_list.is_empty() {
+                        return Err(MeasurementFormatError::EmptyExpectedAny(
+                            register_name.to_string(),
+                        ));
+                    }
+                    let values = any_list
+                        .iter()
+                        .map(|hex_str| {
+                            hex::decode(hex_str)?
+                                .try_into()
+                                .map_err(|_| MeasurementFormatError::BadLength)
+                        })
+                        .collect::<Result<Vec<[u8; N]>, _>>()?;
+                    Ok(ExpectedMeasurement::Any(values))
+                }
+                (Some(_), Some(_)) => Err(MeasurementFormatError::BothExpectedAndExpectedAny(
+                    register_name.to_string(),
+                )),
+                (None, None) => Err(MeasurementFormatError::NoExpectedValue(
+                    register_name.to_string(),
+                )),
+            }
         }
 
         let measurements_simple: Vec<MeasurementRecordSimple> =
@@ -348,42 +425,38 @@ impl MeasurementPolicy {
                 serde_json::from_value(serde_json::Value::String(measurement.attestation_type))?;
 
             if let Some(measurements) = measurement.measurements {
-                let multi_measurement = match attestation_type {
+                let expected_measurements = match attestation_type {
                     AttestationType::AzureTdx => {
                         let azure_measurements = measurements
-                            .into_iter()
-                            .map(|(index, entry)| {
-                                let index = index.parse()?;
+                            .iter()
+                            .map(|(index_str, entry)| {
+                                let index: u32 = index_str.parse()?;
 
                                 if index > 23 {
                                     return Err(MeasurementFormatError::BadRegisterIndex);
                                 }
 
-                                Ok((
-                                    index,
-                                    hex::decode(entry.expected)?
-                                        .try_into()
-                                        .map_err(|_| MeasurementFormatError::BadLength)?,
-                                ))
+                                Ok((index, parse_measurement_entry::<32>(entry, index_str)?))
                             })
-                            .collect::<Result<HashMap<u32, [u8; 32]>, MeasurementFormatError>>()?;
-                        MultiMeasurements::Azure(azure_measurements)
+                            .collect::<Result<
+                                HashMap<u32, ExpectedMeasurement<32>>,
+                                MeasurementFormatError,
+                            >>()?;
+                        ExpectedMeasurements::Azure(azure_measurements)
                     }
-                    AttestationType::None => MultiMeasurements::NoAttestation,
-                    _ => MultiMeasurements::Dcap(
+                    AttestationType::None => ExpectedMeasurements::NoAttestation,
+                    _ => ExpectedMeasurements::Dcap(
                         measurements
-                            .into_iter()
-                            .map(|(index, entry)| {
-                                let index: u8 = index.parse()?;
+                            .iter()
+                            .map(|(index_str, entry)| {
+                                let index: u8 = index_str.parse()?;
                                 Ok((
                                     DcapMeasurementRegister::try_from(index)?,
-                                    hex::decode(entry.expected)?
-                                        .try_into()
-                                        .map_err(|_| MeasurementFormatError::BadLength)?,
+                                    parse_measurement_entry::<48>(entry, index_str)?,
                                 ))
                             })
                             .collect::<Result<
-                                HashMap<DcapMeasurementRegister, [u8; 48]>,
+                                HashMap<DcapMeasurementRegister, ExpectedMeasurement<48>>,
                                 MeasurementFormatError,
                             >>()?,
                     ),
@@ -391,7 +464,7 @@ impl MeasurementPolicy {
 
                 measurement_policy.push(MeasurementRecord {
                     measurement_id: measurement.measurement_id.unwrap_or_default(),
-                    measurements: multi_measurement,
+                    measurements: expected_measurements,
                 });
             } else {
                 measurement_policy.push(MeasurementRecord::allow_any_measurement(attestation_type));
@@ -422,7 +495,7 @@ mod tests {
         assert_eq!(specific_measurements.accepted_measurements.len(), 3);
 
         let m = &specific_measurements.accepted_measurements[0];
-        if let MultiMeasurements::Azure(a) = &m.measurements {
+        if let ExpectedMeasurements::Azure(a) = &m.measurements {
             assert_eq!(
                 a.keys().collect::<HashSet<_>>(),
                 HashSet::from([&9, &4, &11])
@@ -432,14 +505,14 @@ mod tests {
         }
 
         let m = &specific_measurements.accepted_measurements[1];
-        if let MultiMeasurements::Azure(a) = &m.measurements {
+        if let ExpectedMeasurements::Azure(a) = &m.measurements {
             assert_eq!(a.keys().collect::<HashSet<_>>(), HashSet::from([&9, &4]));
         } else {
             panic!("Unexpected measurement type");
         }
 
         let m = &specific_measurements.accepted_measurements[2];
-        if let MultiMeasurements::Dcap(d) = &m.measurements {
+        if let ExpectedMeasurements::Dcap(d) = &m.measurements {
             assert!(d.contains_key(&DcapMeasurementRegister::MRTD));
             assert!(d.contains_key(&DcapMeasurementRegister::RTMR0));
             assert!(d.contains_key(&DcapMeasurementRegister::RTMR1));
@@ -520,5 +593,204 @@ mod tests {
                 .unwrap_err(),
             AttestationError::MeasurementsNotAccepted
         ));
+    }
+
+    #[test]
+    fn test_expected_measurement_single_match() {
+        let expected = ExpectedMeasurement::Single([1u8; 48]);
+        assert!(expected.matches(&[1u8; 48]));
+        assert!(!expected.matches(&[2u8; 48]));
+    }
+
+    #[test]
+    fn test_expected_measurement_any_match() {
+        let expected = ExpectedMeasurement::Any(vec![[1u8; 48], [2u8; 48], [3u8; 48]]);
+        assert!(expected.matches(&[1u8; 48]));
+        assert!(expected.matches(&[2u8; 48]));
+        assert!(expected.matches(&[3u8; 48]));
+        assert!(!expected.matches(&[4u8; 48]));
+    }
+
+    #[tokio::test]
+    async fn test_parse_expected_any() {
+        let json = r#"[
+            {
+                "measurement_id": "test-any",
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": {
+                        "expected_any": [
+                            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                            "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+                        ]
+                    }
+                }
+            }
+        ]"#;
+
+        let policy = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec())
+            .await
+            .unwrap();
+        assert_eq!(policy.accepted_measurements.len(), 1);
+
+        let record = &policy.accepted_measurements[0];
+        if let ExpectedMeasurements::Dcap(dcap) = &record.measurements {
+            let expected = dcap.get(&DcapMeasurementRegister::MRTD).unwrap();
+            if let ExpectedMeasurement::Any(values) = expected {
+                assert_eq!(values.len(), 2);
+            } else {
+                panic!("Expected ExpectedMeasurement::Any");
+            }
+        } else {
+            panic!("Expected ExpectedMeasurements::Dcap");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_measurement_with_or_semantics() {
+        let json = r#"[
+            {
+                "measurement_id": "test-or",
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": {
+                        "expected_any": [
+                            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                            "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+                        ]
+                    }
+                }
+            }
+        ]"#;
+
+        let policy = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec())
+            .await
+            .unwrap();
+
+        // First value should match
+        let measurements1 = MultiMeasurements::Dcap(HashMap::from([(
+            DcapMeasurementRegister::MRTD,
+            [0u8; 48],
+        )]));
+        assert!(policy.check_measurement(&measurements1).is_ok());
+
+        // Second value should also match
+        let measurements2 = MultiMeasurements::Dcap(HashMap::from([(
+            DcapMeasurementRegister::MRTD,
+            [0x11u8; 48],
+        )]));
+        assert!(policy.check_measurement(&measurements2).is_ok());
+
+        // Different value should not match
+        let measurements3 = MultiMeasurements::Dcap(HashMap::from([(
+            DcapMeasurementRegister::MRTD,
+            [0x22u8; 48],
+        )]));
+        assert!(policy.check_measurement(&measurements3).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_parse_both_expected_and_expected_any_error() {
+        let json = r#"[
+            {
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": {
+                        "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "expected_any": ["111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"]
+                    }
+                }
+            }
+        ]"#;
+
+        let result = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec()).await;
+        assert!(matches!(
+            result,
+            Err(MeasurementFormatError::BothExpectedAndExpectedAny(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_parse_neither_expected_nor_expected_any_error() {
+        let json = r#"[
+            {
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": {}
+                }
+            }
+        ]"#;
+
+        let result = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec()).await;
+        assert!(matches!(
+            result,
+            Err(MeasurementFormatError::NoExpectedValue(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_parse_empty_expected_any_error() {
+        let json = r#"[
+            {
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": {
+                        "expected_any": []
+                    }
+                }
+            }
+        ]"#;
+
+        let result = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec()).await;
+        assert!(matches!(
+            result,
+            Err(MeasurementFormatError::EmptyExpectedAny(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_mixed_expected_and_expected_any_in_different_registers() {
+        let json = r#"[
+            {
+                "measurement_id": "mixed-test",
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": {
+                        "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    "1": {
+                        "expected_any": [
+                            "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+                            "222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+                        ]
+                    }
+                }
+            }
+        ]"#;
+
+        let policy = MeasurementPolicy::from_json_bytes(json.as_bytes().to_vec())
+            .await
+            .unwrap();
+
+        // Both match (single + first of any)
+        let measurements1 = MultiMeasurements::Dcap(HashMap::from([
+            (DcapMeasurementRegister::MRTD, [0u8; 48]),
+            (DcapMeasurementRegister::RTMR0, [0x11u8; 48]),
+        ]));
+        assert!(policy.check_measurement(&measurements1).is_ok());
+
+        // Both match (single + second of any)
+        let measurements2 = MultiMeasurements::Dcap(HashMap::from([
+            (DcapMeasurementRegister::MRTD, [0u8; 48]),
+            (DcapMeasurementRegister::RTMR0, [0x22u8; 48]),
+        ]));
+        assert!(policy.check_measurement(&measurements2).is_ok());
+
+        // Single matches but any doesn't
+        let measurements3 = MultiMeasurements::Dcap(HashMap::from([
+            (DcapMeasurementRegister::MRTD, [0u8; 48]),
+            (DcapMeasurementRegister::RTMR0, [0x33u8; 48]),
+        ]));
+        assert!(policy.check_measurement(&measurements3).is_err());
     }
 }
