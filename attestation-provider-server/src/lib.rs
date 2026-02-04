@@ -16,8 +16,8 @@ struct SharedState {
     attestation_generator: AttestationGenerator,
 }
 
-/// An HTTP server which produces test attestations
-pub async fn dummy_attestation_server(
+/// An HTTP server which provides attestations
+pub async fn attestation_provider_server(
     listener: TcpListener,
     attestation_generator: AttestationGenerator,
 ) -> anyhow::Result<()> {
@@ -52,7 +52,7 @@ async fn get_attest(
 }
 
 /// A client helper which makes a request to `/attest`
-pub async fn dummy_attestation_client(
+pub async fn attestation_provider_client(
     server_addr: SocketAddr,
     attestation_verifier: AttestationVerifier,
 ) -> anyhow::Result<AttestationExchangeMessage> {
@@ -100,18 +100,18 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_dummy_server() {
+    async fn test_attestation_provider_server() {
         let attestation_generator = AttestationGenerator::with_no_attestation();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let server_addr = listener.local_addr().unwrap();
 
         tokio::spawn(async move {
-            dummy_attestation_server(listener, attestation_generator)
+            attestation_provider_server(listener, attestation_generator)
                 .await
                 .unwrap();
         });
-        dummy_attestation_client(server_addr, AttestationVerifier::expect_none())
+        attestation_provider_client(server_addr, AttestationVerifier::expect_none())
             .await
             .unwrap();
     }

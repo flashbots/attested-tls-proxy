@@ -240,7 +240,6 @@ impl MeasurementPolicy {
         Self {
             accepted_measurements: vec![
                 MeasurementRecord::allow_no_attestation(),
-                MeasurementRecord::allow_any_measurement(AttestationType::Dummy),
                 MeasurementRecord::allow_any_measurement(AttestationType::DcapTdx),
                 MeasurementRecord::allow_any_measurement(AttestationType::QemuTdx),
                 MeasurementRecord::allow_any_measurement(AttestationType::GcpTdx),

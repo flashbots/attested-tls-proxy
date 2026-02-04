@@ -768,7 +768,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -862,7 +862,7 @@ mod tests {
             client_tls_client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             Some(client_cert_chain),
         )
@@ -933,7 +933,7 @@ mod tests {
             client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             None,
         )
@@ -997,7 +997,7 @@ mod tests {
             server_tls_server_config,
             "127.0.0.1:0",
             target_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::mock(),
         )
         .await
@@ -1014,7 +1014,7 @@ mod tests {
             client_tls_client_config,
             "127.0.0.1:0",
             proxy_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::mock(),
             Some(client_cert_chain),
         )
@@ -1096,7 +1096,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1177,7 +1177,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1238,7 +1238,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -1324,7 +1324,7 @@ mod tests {
         let attested_tls_server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
