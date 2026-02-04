@@ -10,6 +10,7 @@ use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
+    net::IpAddr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -47,8 +48,6 @@ impl AttestationExchangeMessage {
 pub enum AttestationType {
     /// No attestion
     None,
-    /// Forwards the attestaion to a remote service (for testing purposes)
-    Dummy,
     /// TDX on Google Cloud Platform
     GcpTdx,
     /// TDX on Azure, with MAA
@@ -64,7 +63,6 @@ impl AttestationType {
     pub fn as_str(&self) -> &'static str {
         match self {
             AttestationType::None => "none",
-            AttestationType::Dummy => "dummy",
             AttestationType::AzureTdx => "azure-tdx",
             AttestationType::QemuTdx => "qemu-tdx",
             AttestationType::GcpTdx => "gcp-tdx",
@@ -120,22 +118,27 @@ impl Display for AttestationType {
 #[derive(Debug, Clone)]
 pub struct AttestationGenerator {
     pub attestation_type: AttestationType,
-    dummy_dcap_url: Option<String>,
+    attestation_provider_url: Option<String>,
 }
 
 impl AttestationGenerator {
     /// Create an attesation generator with given attestation type
     pub fn new(
         attestation_type: AttestationType,
-        dummy_dcap_url: Option<String>,
+        attestation_provider_url: Option<String>,
     ) -> Result<Self, AttestationError> {
-        match attestation_type {
-            AttestationType::Dummy => Self::new_dummy(dummy_dcap_url),
-            _ => Self::new_not_dummy(attestation_type),
-        }
+        // If an attestation provider is given, normalize the URL and check that it looks like a local IP
+        let attestation_provider_url = attestation_provider_url
+            .map(map_attestation_provider_url)
+            .transpose()?;
+
+        Ok(Self {
+            attestation_type,
+            attestation_provider_url,
+        })
     }
 
-    /// Detect what confidential compute platform is present and create the approprate attestation
+    /// Detect what confidential compute platform is present and create the appropriate attestation
     /// generator
     pub async fn detect() -> Result<Self, AttestationError> {
         Self::new_with_detection(None, None).await
@@ -145,59 +148,33 @@ impl AttestationGenerator {
     pub fn with_no_attestation() -> Self {
         Self {
             attestation_type: AttestationType::None,
-            dummy_dcap_url: None,
+            attestation_provider_url: None,
         }
     }
 
     /// Create an [AttestationGenerator] detecting the attestation type if it is not given
     pub async fn new_with_detection(
         attestation_type_string: Option<String>,
-        dummy_dcap_url: Option<String>,
+        attestation_provider_url: Option<String>,
     ) -> Result<Self, AttestationError> {
+        if attestation_provider_url.is_some() {
+            // If a remote provide is used, dont do detection
+            let attestation_type = serde_json::from_value(serde_json::Value::String(
+                attestation_type_string.ok_or(AttestationError::AttestationTypeNotGiven)?,
+            ))?;
+            return Self::new(attestation_type, attestation_provider_url);
+        };
+
         let attestation_type_string = attestation_type_string.unwrap_or_else(|| "auto".to_string());
-        let attestaton_type = if attestation_type_string == "auto" {
+        let attestation_type = if attestation_type_string == "auto" {
             tracing::info!("Doing attestation type detection...");
             AttestationType::detect().await?
         } else {
             serde_json::from_value(serde_json::Value::String(attestation_type_string))?
         };
-        tracing::info!("Local platform: {attestaton_type}");
+        tracing::info!("Local platform: {attestation_type}");
 
-        Self::new(attestaton_type, dummy_dcap_url)
-    }
-
-    /// Create an [AttestationGenerator] without a given dummy DCAP url - meaning Dummy attestation
-    /// type will not be possible
-    pub fn new_not_dummy(attestation_type: AttestationType) -> Result<Self, AttestationError> {
-        if attestation_type == AttestationType::Dummy {
-            return Err(AttestationError::DummyUrl);
-        }
-
-        Ok(Self {
-            attestation_type,
-            dummy_dcap_url: None,
-        })
-    }
-
-    /// Create a dummy [AttestationGenerator]
-    pub fn new_dummy(dummy_dcap_url: Option<String>) -> Result<Self, AttestationError> {
-        match dummy_dcap_url {
-            Some(url) => {
-                let url = if url.starts_with("http://") || url.starts_with("https://") {
-                    url.to_string()
-                } else {
-                    format!("http://{}", url.trim_start_matches("http://"))
-                };
-
-                let url = url.strip_suffix('/').unwrap_or(&url).to_string();
-
-                Ok(Self {
-                    attestation_type: AttestationType::Dummy,
-                    dummy_dcap_url: Some(url),
-                })
-            }
-            None => Err(AttestationError::DummyUrl),
-        }
+        Self::new(attestation_type, None)
     }
 
     /// Generate an attestation exchange message with given input data
@@ -216,45 +193,40 @@ impl AttestationGenerator {
         &self,
         input_data: [u8; 64],
     ) -> Result<Vec<u8>, AttestationError> {
-        match self.attestation_type {
-            AttestationType::None => Ok(Vec::new()),
-            AttestationType::AzureTdx => {
-                #[cfg(feature = "azure")]
-                {
-                    Ok(azure::create_azure_attestation(input_data).await?)
+        if let Some(url) = &self.attestation_provider_url {
+            Self::use_attestation_provider(url, input_data).await
+        } else {
+            match self.attestation_type {
+                AttestationType::None => Ok(Vec::new()),
+                AttestationType::AzureTdx => {
+                    #[cfg(feature = "azure")]
+                    {
+                        Ok(azure::create_azure_attestation(input_data).await?)
+                    }
+                    #[cfg(not(feature = "azure"))]
+                    {
+                        tracing::error!("Attempted to generate an azure attestation but the `azure` feature not enabled");
+                        Err(AttestationError::AttestationTypeNotSupported)
+                    }
                 }
-                #[cfg(not(feature = "azure"))]
-                {
-                    tracing::error!("Attempted to generate an azure attestation but the `azure` feature not enabled");
-                    Err(AttestationError::AttestationTypeNotSupported)
-                }
+                _ => dcap::create_dcap_attestation(input_data).await,
             }
-            AttestationType::Dummy => self.generate_dummy_attestation(input_data).await,
-            _ => dcap::create_dcap_attestation(input_data).await,
         }
     }
 
-    /// Generate a dummy attestaion by using an external service for the attestation generation
-    ///
-    /// This is for testing only
-    async fn generate_dummy_attestation(
-        &self,
+    /// Generate an attestation by using an external service for the attestation generation
+    async fn use_attestation_provider(
+        url: &str,
         input_data: [u8; 64],
     ) -> Result<Vec<u8>, AttestationError> {
-        let url = format!(
-            "{}/attest/{}",
-            self.dummy_dcap_url
-                .clone()
-                .ok_or(AttestationError::DummyUrl)?,
-            hex::encode(input_data)
-        );
+        let url = format!("{}/attest/{}", url, hex::encode(input_data));
 
         Ok(reqwest::get(url)
             .await
-            .map_err(|err| AttestationError::DummyServer(err.to_string()))?
+            .map_err(|err| AttestationError::AttestationProvider(err.to_string()))?
             .bytes()
             .await
-            .map_err(|err| AttestationError::DummyServer(err.to_string()))?
+            .map_err(|err| AttestationError::AttestationProvider(err.to_string()))?
             .to_vec())
     }
 }
@@ -331,15 +303,6 @@ impl AttestationVerifier {
                     return Err(AttestationError::AttestationTypeNotSupported);
                 }
             }
-            AttestationType::Dummy => {
-                // Dummy assumes dummy DCAP
-                dcap::verify_dcap_attestation(
-                    attestation_exchange_message.attestation,
-                    expected_input_data,
-                    self.pccs_url.clone(),
-                )
-                .await?
-            }
             _ => {
                 dcap::verify_dcap_attestation(
                     attestation_exchange_message.attestation,
@@ -404,6 +367,54 @@ async fn running_on_gcp() -> Result<bool, AttestationError> {
     Ok(false)
 }
 
+/// If an attestion provider service is used, we ensure that it looks like a local IP
+///
+/// This is to avoid dangerous configuration where the attestation is provided by a remote machine
+///
+/// This by no means guarantees a safe configuration
+fn map_attestation_provider_url(url: String) -> Result<String, AttestationError> {
+    // Fist put it in the format that reqwest expects
+    let url = if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_string()
+    } else {
+        format!("http://{}", url.trim_start_matches("http://"))
+    };
+
+    url.strip_suffix('/').unwrap_or(&url).to_string();
+
+    // If compiled in test mode, skip this check
+    if !cfg!(test) {
+        let parsed = url
+            .parse::<std::net::SocketAddr>()
+            .or_else(|_| {
+                // Try parsing as a URL to extract host
+                let parsed = url.parse::<http::Uri>().map_err(|_| "Invalid URL")?;
+
+                let host = parsed.host().ok_or("URL missing host")?;
+
+                host.parse::<std::net::IpAddr>()
+                    .map_err(|_| "Only local IP addresses may be used as attestation provider URL")
+                    .map(|ip| std::net::SocketAddr::new(ip, 0))
+            })
+            .map_err(|e| AttestationError::AttestationProviderUrl(e.to_string()))?;
+
+        if !is_local_ip(parsed.ip()) {
+            return Err(AttestationError::AttestationProviderUrl(
+                "Given URL does not appear to contain a local IP address".to_string(),
+            ));
+        }
+    }
+    Ok(url)
+}
+
+/// Check if an IP address looks like it is local
+fn is_local_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
+}
+
 /// An error when generating or verifying an attestation
 #[derive(Error, Debug)]
 pub enum AttestationError {
@@ -428,10 +439,12 @@ pub enum AttestationError {
     #[cfg(feature = "azure")]
     #[error("MAA: {0}")]
     Maa(#[from] azure::MaaError),
-    #[error("Dummy attestation type requires dummy service URL")]
-    DummyUrl,
-    #[error("Dummy server: {0}")]
-    DummyServer(String),
+    #[error("If using a an attestation provider an attestation type must be given")]
+    AttestationTypeNotGiven,
+    #[error("Attestation provider server: {0}")]
+    AttestationProvider(String),
+    #[error("Attestation provider URL: {0}")]
+    AttestationProviderUrl(String),
     #[error("JSON: {0}")]
     SerdeJson(#[from] serde_json::Error),
     #[error("HTTP client: {0}")]
