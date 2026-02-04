@@ -9,7 +9,10 @@ use crate::{
 use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
+use tokio_rustls::rustls::{
+    self,
+    server::{VerifierBuilderError, WebPkiClientVerifier},
+};
 use x509_parser::parse_x509_certificate;
 
 use std::num::TryFromIntError;
@@ -63,11 +66,11 @@ impl AttestedTlsServer {
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
 
-            ServerConfig::builder()
+            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_client_cert_verifier(verifier)
                 .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         } else {
-            ServerConfig::builder()
+            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_no_client_auth()
                 .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         };
@@ -123,6 +126,11 @@ impl AttestedTlsServer {
         // Do TLS handshake
         let mut tls_stream = self.acceptor.accept(inbound).await?;
         let (_io, connection) = tls_stream.get_ref();
+
+        // Ensure TLS 1.3
+        if connection.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+            return Err(AttestedTlsError::NotTls13);
+        }
 
         // Ensure that we agreed a protocol
         let _negotiated_protocol = connection
@@ -241,14 +249,14 @@ impl AttestedTlsClient {
 
         // Setup TLS client configuration, with or without client auth
         let client_config = if let Some(ref cert_and_key) = cert_and_key {
-            ClientConfig::builder()
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(root_store)
                 .with_client_auth_cert(
                     cert_and_key.cert_chain.clone(),
                     cert_and_key.key.clone_key(),
                 )?
         } else {
-            ClientConfig::builder()
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(root_store)
                 .with_no_client_auth()
         };
@@ -311,6 +319,11 @@ impl AttestedTlsClient {
             .await?;
 
         let (_io, server_connection) = tls_stream.get_ref();
+
+        // Ensure TLS 1.3
+        if server_connection.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+            return Err(AttestedTlsError::NotTls13);
+        }
 
         // Ensure that we agreed a protocol
         let _negotiated_protocol = server_connection
@@ -496,6 +509,8 @@ pub enum AttestedTlsError {
     ClientAuthWithoutClientCert,
     #[error("No cryptography provider available - this implies a bad build")]
     NoCryptoProvider,
+    #[error("Only TLS 1.3 is supported")]
+    NotTls13,
 }
 
 /// Given a byte array, encode its length as a 4 byte big endian u32
