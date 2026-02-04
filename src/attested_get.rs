@@ -82,7 +82,7 @@ mod tests {
             server_config,
             "127.0.0.1:0",
             target_addr.to_string(),
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await

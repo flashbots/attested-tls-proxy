@@ -1,6 +1,6 @@
 use attestation_provider_server::{attestation_provider_client, attestation_provider_server};
 use attested_tls_proxy::attestation::{
-    measurements::MeasurementPolicy, AttestationGenerator, AttestationType, AttestationVerifier,
+    measurements::MeasurementPolicy, AttestationGenerator, AttestationVerifier,
 };
 use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf};
@@ -28,7 +28,7 @@ enum CliCommand {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
-        /// Type of attestation to present (defaults to none)
+        /// Type of attestation to present (will attempt to detect if not given)
         #[arg(long)]
         server_attestation_type: Option<String>,
     },
@@ -72,12 +72,8 @@ async fn main() -> anyhow::Result<()> {
             listen_addr,
             server_attestation_type,
         } => {
-            let server_attestation_type: AttestationType = serde_json::from_value(
-                serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
-            )?;
-
             let attestation_generator =
-                AttestationGenerator::new_not_dummy(server_attestation_type)?;
+                AttestationGenerator::new_with_detection(server_attestation_type, None).await?;
 
             let listener = TcpListener::bind(listen_addr).await?;
 

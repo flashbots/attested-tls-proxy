@@ -100,7 +100,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_dummy_server() {
+    async fn test_attestation_provider_server() {
         let attestation_generator = AttestationGenerator::with_no_attestation();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

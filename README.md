@@ -95,7 +95,6 @@ These are the attestation type names used in the HTTP headers, and the measureme
 
 - `auto` - detect attestation type (used only when specifying the local attestation type as a command-line argument)
 - `none` - No attestation provided
-- `dummy` - Forwards the attestation to a remote service (for testing purposes, not yet supported)
 - `gcp-tdx` - DCAP TDX on Google Cloud Platform
 - `azure-tdx` - TDX on Azure, with MAA (not yet supported)
 - `qemu-tdx` - TDX on Qemu (no cloud platform)
