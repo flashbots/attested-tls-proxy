@@ -505,7 +505,7 @@ fn length_prefix(input: &[u8]) -> [u8; 4] {
 }
 
 /// Given a hostname with or without port number, create a TLS [ServerName] with just the host part
-fn server_name_from_host(
+pub(crate) fn server_name_from_host(
     host: &str,
 ) -> Result<ServerName<'static>, tokio_rustls::rustls::pki_types::InvalidDnsNameError> {
     // If host contains ':', try to split off the port.
