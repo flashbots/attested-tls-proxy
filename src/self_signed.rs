@@ -201,7 +201,8 @@ mod tests {
     use super::*;
     use crate::{
         attestation::{AttestationType, AttestationVerifier},
-        attested_tls::{AttestedTlsClient, AttestedTlsServer},
+        attested_tls::{server_name_from_host, AttestedTlsClient, AttestedTlsServer},
+        test_helpers::{generate_certificate_chain, generate_tls_config},
         AttestationGenerator,
     };
     use tokio::net::TcpListener;
@@ -249,5 +250,79 @@ mod tests {
 
         let (_stream, _measurements, _attestation_type) =
             client.connect_tcp(&server_addr.to_string()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn nested_tls_with_self_signed_server_attestation() {
+        // Outer TLS setup
+        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (outer_server_config, outer_client_config) =
+            generate_tls_config(cert_chain.clone(), private_key);
+
+        let outer_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(outer_server_config));
+        let outer_connector = tokio_rustls::TlsConnector::from(Arc::new(outer_client_config));
+
+        // Inner TLS setup
+        let cert_and_key = generate_self_signed_cert("127.0.0.1".parse().unwrap()).unwrap();
+
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                cert_and_key.cert_chain.clone().to_vec(),
+                cert_and_key.key.clone_key(),
+            )
+            .unwrap();
+
+        let server = AttestedTlsServer::new_with_tls_config(
+            cert_and_key.cert_chain,
+            server_config.into(),
+            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (tcp_stream, _) = listener.accept().await.unwrap();
+
+            // Do outer TLS handshake
+            let tls_stream = outer_acceptor.accept(tcp_stream).await.unwrap();
+
+            // Do inner (attested) TLS
+            let (_stream, _measurements, _attestation_type) =
+                server.handle_connection(tls_stream).await.unwrap();
+        });
+
+        // Inner TLS config
+        let client_config = client_tls_config_allow_self_signed().unwrap();
+
+        let client = AttestedTlsClient::new_with_tls_config(
+            client_config.into(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let client_tcp_stream = tokio::net::TcpStream::connect(&server_addr).await.unwrap();
+
+        // Outer TLS handshake
+        let tls_stream = outer_connector
+            .connect(
+                server_name_from_host(&server_addr.to_string()).unwrap(),
+                client_tcp_stream,
+            )
+            .await
+            .unwrap();
+
+        // Inner (attested) TLS
+        let (_stream, _measurements, _attestation_type) = client
+            .connect(&server_addr.to_string(), tls_stream)
+            .await
+            .unwrap();
     }
 }
