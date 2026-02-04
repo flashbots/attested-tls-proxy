@@ -704,8 +704,7 @@ mod tests {
 
     use crate::{
         attestation::measurements::{
-            DcapMeasurementRegister, ExpectedMeasurement, ExpectedMeasurements, MeasurementPolicy,
-            MeasurementRecord,
+            DcapMeasurementRegister, ExpectedMeasurements, MeasurementPolicy, MeasurementRecord,
         },
         attested_tls::get_tls_cert_with_config,
     };
@@ -1155,11 +1154,11 @@ mod tests {
                 accepted_measurements: vec![MeasurementRecord {
                     measurement_id: "test".to_string(),
                     measurements: ExpectedMeasurements::Dcap(HashMap::from([
-                        (DcapMeasurementRegister::MRTD, ExpectedMeasurement::Single([0; 48])),
-                        (DcapMeasurementRegister::RTMR0, ExpectedMeasurement::Single([0; 48])),
-                        (DcapMeasurementRegister::RTMR1, ExpectedMeasurement::Single([1; 48])), // This differs from the mock measurements
-                        (DcapMeasurementRegister::RTMR2, ExpectedMeasurement::Single([0; 48])),
-                        (DcapMeasurementRegister::RTMR3, ExpectedMeasurement::Single([0; 48])),
+                        (DcapMeasurementRegister::MRTD, vec![[0; 48]]),
+                        (DcapMeasurementRegister::RTMR0, vec![[0; 48]]),
+                        (DcapMeasurementRegister::RTMR1, vec![[1; 48]]), // This differs from the mock measurements
+                        (DcapMeasurementRegister::RTMR2, vec![[0; 48]]),
+                        (DcapMeasurementRegister::RTMR3, vec![[0; 48]]),
                     ])),
                 }],
             },

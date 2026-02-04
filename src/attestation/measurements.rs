@@ -41,30 +41,11 @@ pub enum MultiMeasurements {
     NoAttestation,
 }
 
-/// Expected measurement value(s) for a single register - can be one value or multiple (OR semantics)
-#[derive(Clone, Debug, PartialEq)]
-pub enum ExpectedMeasurement<const N: usize> {
-    /// A single expected value (used for backwards compatibility with deprecated `expected` field)
-    Single([u8; N]),
-    /// Multiple acceptable values - any value in the list is accepted (OR semantics)
-    Any(Vec<[u8; N]>),
-}
-
-impl<const N: usize> ExpectedMeasurement<N> {
-    /// Check if an actual value matches any of the expected values
-    fn matches(&self, actual: &[u8; N]) -> bool {
-        match self {
-            ExpectedMeasurement::Single(expected) => actual == expected,
-            ExpectedMeasurement::Any(expected_list) => expected_list.iter().any(|e| actual == e),
-        }
-    }
-}
-
 /// Expected measurement values for policy enforcement
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExpectedMeasurements {
-    Dcap(HashMap<DcapMeasurementRegister, ExpectedMeasurement<48>>),
-    Azure(HashMap<u32, ExpectedMeasurement<32>>),
+    Dcap(HashMap<DcapMeasurementRegister, Vec<[u8; 48]>>),
+    Azure(HashMap<u32, Vec<[u8; 32]>>),
     NoAttestation,
 }
 
@@ -275,11 +256,11 @@ impl MeasurementPolicy {
             accepted_measurements: vec![MeasurementRecord {
                 measurement_id: "test".to_string(),
                 measurements: ExpectedMeasurements::Dcap(HashMap::from([
-                    (DcapMeasurementRegister::MRTD, ExpectedMeasurement::Single([0; 48])),
-                    (DcapMeasurementRegister::RTMR0, ExpectedMeasurement::Single([0; 48])),
-                    (DcapMeasurementRegister::RTMR1, ExpectedMeasurement::Single([0; 48])),
-                    (DcapMeasurementRegister::RTMR2, ExpectedMeasurement::Single([0; 48])),
-                    (DcapMeasurementRegister::RTMR3, ExpectedMeasurement::Single([0; 48])),
+                    (DcapMeasurementRegister::MRTD, vec![[0; 48]]),
+                    (DcapMeasurementRegister::RTMR0, vec![[0; 48]]),
+                    (DcapMeasurementRegister::RTMR1, vec![[0; 48]]),
+                    (DcapMeasurementRegister::RTMR2, vec![[0; 48]]),
+                    (DcapMeasurementRegister::RTMR3, vec![[0; 48]]),
                 ])),
             }],
         }
@@ -299,7 +280,7 @@ impl MeasurementPolicy {
                         // All measurements in our policy must be given and must match
                         for (k, v) in expected.iter() {
                             match dcap_measurements.get(k) {
-                                Some(actual) if v.matches(actual) => {}
+                                Some(actual_value) if v.iter().any(|v| actual_value == v) => {}
                                 _ => return false,
                             }
                         }
@@ -312,7 +293,7 @@ impl MeasurementPolicy {
                     {
                         for (k, v) in expected.iter() {
                             match azure_measurements.get(k) {
-                                Some(actual) if v.matches(actual) => {}
+                                Some(actual_value) if v.iter().any(|v| actual_value == v) => {}
                                 _ => return false,
                             }
                         }
@@ -382,13 +363,13 @@ impl MeasurementPolicy {
         fn parse_measurement_entry<const N: usize>(
             entry: &MeasurementEntry,
             register_name: &str,
-        ) -> Result<ExpectedMeasurement<N>, MeasurementFormatError> {
+        ) -> Result<Vec<[u8; N]>, MeasurementFormatError> {
             match (&entry.expected, &entry.expected_any) {
                 (Some(single), None) => {
                     let bytes: [u8; N] = hex::decode(single)?
                         .try_into()
                         .map_err(|_| MeasurementFormatError::BadLength)?;
-                    Ok(ExpectedMeasurement::Single(bytes))
+                    Ok(vec![bytes])
                 }
                 (None, Some(any_list)) => {
                     if any_list.is_empty() {
@@ -404,7 +385,7 @@ impl MeasurementPolicy {
                                 .map_err(|_| MeasurementFormatError::BadLength)
                         })
                         .collect::<Result<Vec<[u8; N]>, _>>()?;
-                    Ok(ExpectedMeasurement::Any(values))
+                    Ok(values)
                 }
                 (Some(_), Some(_)) => Err(MeasurementFormatError::BothExpectedAndExpectedAny(
                     register_name.to_string(),
@@ -438,10 +419,8 @@ impl MeasurementPolicy {
 
                                 Ok((index, parse_measurement_entry::<32>(entry, index_str)?))
                             })
-                            .collect::<Result<
-                                HashMap<u32, ExpectedMeasurement<32>>,
-                                MeasurementFormatError,
-                            >>()?;
+                            .collect::<Result<HashMap<u32, Vec<[u8; 32]>>, MeasurementFormatError>>(
+                            )?;
                         ExpectedMeasurements::Azure(azure_measurements)
                     }
                     AttestationType::None => ExpectedMeasurements::NoAttestation,
@@ -456,7 +435,7 @@ impl MeasurementPolicy {
                                 ))
                             })
                             .collect::<Result<
-                                HashMap<DcapMeasurementRegister, ExpectedMeasurement<48>>,
+                                HashMap<DcapMeasurementRegister, Vec<[u8; 48]>>,
                                 MeasurementFormatError,
                             >>()?,
                     ),
@@ -595,22 +574,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_expected_measurement_single_match() {
-        let expected = ExpectedMeasurement::Single([1u8; 48]);
-        assert!(expected.matches(&[1u8; 48]));
-        assert!(!expected.matches(&[2u8; 48]));
-    }
-
-    #[test]
-    fn test_expected_measurement_any_match() {
-        let expected = ExpectedMeasurement::Any(vec![[1u8; 48], [2u8; 48], [3u8; 48]]);
-        assert!(expected.matches(&[1u8; 48]));
-        assert!(expected.matches(&[2u8; 48]));
-        assert!(expected.matches(&[3u8; 48]));
-        assert!(!expected.matches(&[4u8; 48]));
-    }
-
     #[tokio::test]
     async fn test_parse_expected_any() {
         let json = r#"[
@@ -636,11 +599,7 @@ mod tests {
         let record = &policy.accepted_measurements[0];
         if let ExpectedMeasurements::Dcap(dcap) = &record.measurements {
             let expected = dcap.get(&DcapMeasurementRegister::MRTD).unwrap();
-            if let ExpectedMeasurement::Any(values) = expected {
-                assert_eq!(values.len(), 2);
-            } else {
-                panic!("Expected ExpectedMeasurement::Any");
-            }
+            assert_eq!(expected.len(), 2);
         } else {
             panic!("Expected ExpectedMeasurements::Dcap");
         }
@@ -668,10 +627,8 @@ mod tests {
             .unwrap();
 
         // First value should match
-        let measurements1 = MultiMeasurements::Dcap(HashMap::from([(
-            DcapMeasurementRegister::MRTD,
-            [0u8; 48],
-        )]));
+        let measurements1 =
+            MultiMeasurements::Dcap(HashMap::from([(DcapMeasurementRegister::MRTD, [0u8; 48])]));
         assert!(policy.check_measurement(&measurements1).is_ok());
 
         // Second value should also match
