@@ -1,5 +1,6 @@
 [package]
 name = "attestation-provider-server"
+description = "An HTTP server which provides attestations"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
@@ -18,5 +19,3 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 parity-scale-codec = "3.7.5"
 reqwest = { version = "0.12.23", default-features = false }
-
-[dev-dependencies]
