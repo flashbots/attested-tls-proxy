@@ -52,7 +52,7 @@ pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, Prox
 
 #[cfg(test)]
 mod tests {
-    use crate::{attestation::AttestationType, ProxyClient};
+    use crate::{attestation::AttestationType, http_version::HttpVersion, ProxyClient};
 
     use super::*;
     use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
@@ -122,6 +122,7 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
+            HttpVersion::Http2,
         )
         .await
         .unwrap();

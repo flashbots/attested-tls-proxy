@@ -1,8 +1,7 @@
 //! HTTP Version support and negotiation
 use hyper::Response;
-use hyper_util::rt::TokioIo;
+use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
 
 pub const ALPN_H2: &[u8] = b"h2";
 pub const ALPN_HTTP11: &[u8] = b"http/1.1";
@@ -47,17 +46,6 @@ impl HttpVersion {
 type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
 type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
 
-type Http1Connection = hyper::client::conn::http1::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
->;
-
-type Http2Connection = hyper::client::conn::http2::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
-    crate::TokioExecutor,
->;
-
 /// A protocol version agnostic HTTP sender
 pub enum HttpSender {
     Http1(Http1Sender),
@@ -88,34 +76,5 @@ impl HttpSender {
     }
 }
 
-pin_project_lite::pin_project! {
-    /// A protocol version agnostic HTTP connection
-    #[project = HttpConnectionProj]
-    pub enum HttpConnection {
-        Http1 { #[pin] inner: Http1Connection },
-        Http2 { #[pin] inner: Http2Connection },
-    }
-}
-
-impl From<Http1Connection> for HttpConnection {
-    fn from(inner: Http1Connection) -> Self {
-        Self::Http1 { inner }
-    }
-}
-
-impl From<Http2Connection> for HttpConnection {
-    fn from(inner: Http2Connection) -> Self {
-        Self::Http2 { inner }
-    }
-}
-
-impl Future for HttpConnection {
-    type Output = Result<(), hyper::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.project() {
-            HttpConnectionProj::Http1 { inner } => inner.poll(cx),
-            HttpConnectionProj::Http2 { inner } => inner.poll(cx),
-        }
-    }
-}
+/// A protocol version agnostic HTTP connection future
+pub type HttpConnection = Pin<Box<dyn Future<Output = Result<(), hyper::Error>> + Send>>;
