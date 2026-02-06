@@ -15,9 +15,9 @@ use attested_tls_proxy::{
     attested_tls::{get_tls_cert, TlsCertAndKey},
     file_server::attested_file_server,
     health_check,
+    http_version::HttpVersion,
     normalize_pem::normalize_private_key_pem_to_pkcs8,
     AttestationGenerator, ProxyClient, ProxyServer,
-    ProxyClientHttpMode,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -261,8 +261,8 @@ async fn main() -> anyhow::Result<()> {
                     .await?;
 
             let http_mode = match http_mode {
-                ClientHttpMode::Http1 => ProxyClientHttpMode::Http1,
-                ClientHttpMode::Http2 => ProxyClientHttpMode::Http2,
+                ClientHttpMode::Http1 => HttpVersion::Http1,
+                ClientHttpMode::Http2 => HttpVersion::Http2,
             };
 
             let client = if allow_self_signed {

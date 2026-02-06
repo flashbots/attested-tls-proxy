@@ -1,6 +1,6 @@
 //! A one-shot attested TLS proxy client which sends a single GET request and returns the response
 use crate::{
-    AttestationGenerator, AttestationVerifier, ProxyClient, ProxyClientHttpMode, ProxyError,
+    http_version::HttpVersion, AttestationGenerator, AttestationVerifier, ProxyClient, ProxyError,
 };
 use tokio_rustls::rustls::pki_types::CertificateDer;
 
@@ -19,7 +19,7 @@ pub async fn attested_get(
         AttestationGenerator::with_no_attestation(),
         attestation_verifier,
         remote_certificate,
-        ProxyClientHttpMode::Http2,
+        HttpVersion::Http2,
     )
     .await?;
 
@@ -106,7 +106,7 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
-            ProxyClientHttpMode::Http2,
+            HttpVersion::Http2,
         )
         .await
         .unwrap();

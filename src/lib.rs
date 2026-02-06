@@ -4,6 +4,7 @@ pub mod attested_get;
 pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
+pub mod http_version;
 pub mod normalize_pem;
 pub mod self_signed;
 
@@ -14,7 +15,6 @@ pub mod websockets;
 pub mod attested_rpc;
 
 pub use attestation::AttestationGenerator;
-mod http_version;
 
 #[cfg(test)]
 mod test_helpers;
@@ -352,15 +352,6 @@ pub struct ProxyClient {
     requests_tx: mpsc::Sender<RequestWithResponseSender>,
 }
 
-/// Controls which HTTP version the proxy client uses to talk to the proxy server.
-#[derive(Clone, Copy, Debug)]
-pub enum ProxyClientHttpMode {
-    /// Use HTTP/1.1 (supports WS upgrades).
-    Http1,
-    /// Use HTTP/2 (no WS upgrades).
-    Http2,
-}
-
 impl ProxyClient {
     /// Start with optional TLS client auth
     pub async fn new(
@@ -370,7 +361,7 @@ impl ProxyClient {
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
-        http_mode: ProxyClientHttpMode,
+        http_mode: HttpVersion,
     ) -> Result<Self, ProxyError> {
         let root_store = match remote_certificate {
             Some(remote_certificate) => {
@@ -414,11 +405,11 @@ impl ProxyClient {
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
-        http_mode: ProxyClientHttpMode,
+        http_mode: HttpVersion,
     ) -> Result<Self, ProxyError> {
         client_config.alpn_protocols = match http_mode {
-            ProxyClientHttpMode::Http1 => vec![ALPN_HTTP11.to_vec()],
-            ProxyClientHttpMode::Http2 => vec![ALPN_H2.to_vec()],
+            HttpVersion::Http1 => vec![ALPN_HTTP11.to_vec()],
+            HttpVersion::Http2 => vec![ALPN_H2.to_vec()],
         };
 
         let attested_tls_client = AttestedTlsClient::new_with_tls_config(
@@ -891,7 +882,7 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
-            ProxyClientHttpMode::Http2,
+            HttpVersion::Http2,
         )
         .await
         .unwrap();
@@ -970,7 +961,7 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             Some(client_cert_chain),
-            ProxyClientHttpMode::Http2,
+            HttpVersion::Http2,
         )
         .await
         .unwrap();
@@ -1042,7 +1033,7 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             None,
-            ProxyClientHttpMode::Http2,
+            HttpVersion::Http2,
         )
         .await
         .unwrap();
@@ -1124,7 +1115,7 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::mock(),
             Some(client_cert_chain),
-            ProxyClientHttpMode::Http2,
+            HttpVersion::Http2,
         )
         .await
         .unwrap();
@@ -1260,7 +1251,7 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
-            ProxyClientHttpMode::Http2,
+            HttpVersion::Http2,
         )
         .await;
 
@@ -1322,7 +1313,7 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             attestation_verifier,
             None,
-            ProxyClientHttpMode::Http2,
+            HttpVersion::Http2,
         )
         .await;
 
@@ -1378,7 +1369,7 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
-            ProxyClientHttpMode::Http2,
+            HttpVersion::Http2,
         )
         .await
         .unwrap();
@@ -1462,7 +1453,7 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
-            ProxyClientHttpMode::Http1,
+            HttpVersion::Http1,
         )
         .await
         .unwrap();
@@ -1540,7 +1531,7 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
             None,
-            ProxyClientHttpMode::Http1,
+            HttpVersion::Http1,
         )
         .await
         .unwrap();
