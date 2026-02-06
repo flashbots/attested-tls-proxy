@@ -69,6 +69,11 @@ alloy-transport-http = { version = "1.4.3", features = [
 ], optional = true }
 url = { version = "2.5.7", optional = true }
 
+[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))'.dependencies]
+# tss-esapi-sys does not ship prebuilt bindings for aarch64-apple-darwin.
+# Enable bindgen on this target so the azure feature can still compile.
+tss-esapi = { version = "7.6.0", optional = true, features = ["generate-bindings"] }
+
 [dev-dependencies]
 tempfile = "3.23.0"
 tdx-quote = { version = "0.0.5", features = ["mock"] }
