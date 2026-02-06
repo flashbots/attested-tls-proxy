@@ -57,6 +57,11 @@ az-tdx-vtpm = { version = "0.7.4", optional = true }
 tss-esapi = { version = "7.6.0", optional = true }
 openssl = { version = "0.10.75", optional = true }
 
+[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))'.dependencies]
+# tss-esapi-sys does not ship prebuilt bindings for aarch64-apple-darwin.
+# Enable bindgen on this target so the azure feature can still compile.
+tss-esapi = { version = "7.6.0", optional = true, features = ["generate-bindings"] }
+
 # For websockets
 tokio-tungstenite = { version = "0.28.0", optional = true }
 futures-util = { version = "0.3.31", optional = true }
