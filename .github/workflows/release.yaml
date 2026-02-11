@@ -187,7 +187,7 @@ jobs:
             type=semver,pattern={{version}},value=${{ env.VERSION }}
             type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
             type=semver,pattern={{major}},value=${{ env.VERSION }}
-            type=sha,prefix=
+            type=sha,prefix=sha-
             type=raw,value=latest,enable=${{ !contains(env.VERSION, '-') }}
 
       - name: Build and push
