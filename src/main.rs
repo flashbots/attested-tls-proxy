@@ -1,5 +1,5 @@
 use anyhow::{anyhow, ensure};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::{
     fs::File,
     net::{IpAddr, SocketAddr},
@@ -15,6 +15,7 @@ use attested_tls_proxy::{
     attested_tls::{get_tls_cert, TlsCertAndKey},
     file_server::attested_file_server,
     health_check,
+    http_version::HttpVersion,
     normalize_pem::normalize_private_key_pem_to_pkcs8,
     AttestationGenerator, ProxyClient, ProxyServer,
 };
@@ -76,6 +77,9 @@ enum CliCommand {
         /// Enables verification of self-signed TLS certificates
         #[arg(long)]
         allow_self_signed: bool,
+        /// HTTP mode for the proxy client: http1 is HTTP/1.1 only, http2 prefers HTTP/2 with HTTP/1.1 fallback
+        #[arg(long, value_enum, default_value = "http2")]
+        http_mode: ClientHttpMode,
     },
     /// Run a proxy server
     Server {
@@ -150,6 +154,12 @@ enum CliCommand {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ClientHttpMode {
+    Http1,
+    Http2,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -211,6 +221,7 @@ async fn main() -> anyhow::Result<()> {
             dev_dummy_dcap,
             listen_addr_healthcheck,
             allow_self_signed,
+            http_mode,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
@@ -249,6 +260,11 @@ async fn main() -> anyhow::Result<()> {
                 AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
                     .await?;
 
+            let http_mode = match http_mode {
+                ClientHttpMode::Http1 => HttpVersion::Http1,
+                ClientHttpMode::Http2 => HttpVersion::Http2,
+            };
+
             let client = if allow_self_signed {
                 let client_tls_config =
                     attested_tls_proxy::self_signed::client_tls_config_allow_self_signed()?;
@@ -259,6 +275,7 @@ async fn main() -> anyhow::Result<()> {
                     client_attestation_generator,
                     attestation_verifier,
                     None,
+                    http_mode,
                 )
                 .await?
             } else {
@@ -269,6 +286,7 @@ async fn main() -> anyhow::Result<()> {
                     client_attestation_generator,
                     attestation_verifier,
                     remote_tls_cert,
+                    http_mode,
                 )
                 .await?
             };

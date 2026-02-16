@@ -50,7 +50,6 @@ p256 = { version = "0.13.2", features = ["pkcs8"] }
 pkcs1 = "0.7.5"
 pkcs8 = "0.10.2"
 rcgen = "0.14.5"
-pin-project-lite = "0.2.16"
 
 # For Azure vTPM attestation
 az-tdx-vtpm = { version = "0.7.4", optional = true }
