@@ -4,16 +4,30 @@ on: [push, pull_request]
 
 jobs:
   build_and_test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    - name: Install system dependencies
+    - name: Install system dependencies (Ubuntu)
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y pkg-config libtss2-dev
+
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install pkgconf tpm2-tss openssl@3
+        {
+          echo "PKG_CONFIG_PATH=$(brew --prefix tpm2-tss)/lib/pkgconfig:$(brew --prefix openssl@3)/lib/pkgconfig"
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)"
+        } >> "$GITHUB_ENV"
 
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
