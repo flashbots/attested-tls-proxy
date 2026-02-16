@@ -29,7 +29,11 @@ jobs:
         git clone --depth 1 https://github.com/tpm2-software/tpm2-tss.git "$RUNNER_TEMP/tpm2-tss"
         cd "$RUNNER_TEMP/tpm2-tss"
         ./bootstrap
-        ./configure --prefix="$HOME/.local/tpm2-tss" --disable-doxygen-doc --disable-fapi
+        ./configure \
+          --prefix="$HOME/.local/tpm2-tss" \
+          --disable-doxygen-doc \
+          --disable-fapi \
+          --disable-tcti-cmd
         make -j"$(sysctl -n hw.ncpu)"
         make install
 
