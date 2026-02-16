@@ -517,7 +517,9 @@ impl ProxyClient {
                                             ATTESTATION_TYPE_HEADER,
                                             remote_attestation_type.as_str(),
                                         );
-                                        (Ok(resp.map(|b| b.boxed())), false)
+                                        let should_reconnect =
+                                            resp.status() == hyper::StatusCode::SWITCHING_PROTOCOLS;
+                                        (Ok(resp.map(|b| b.boxed())), should_reconnect)
                                     }
                                     Err(e) => {
                                         warn!("Failed to send request to proxy-server: {e}");
@@ -535,7 +537,7 @@ impl ProxyClient {
 
                                 if should_reconnect {
                                     // Leave the inner loop and continue on the reconnect loop
-                                    warn!("Reconnecting to proxy-server due to failed request");
+                                    warn!("Reconnecting to proxy-server to rotate upstream connection");
                                     break;
                                 }
                             } else {
@@ -849,6 +851,10 @@ mod tests {
     #[cfg(feature = "ws")]
     use futures_util::{SinkExt, StreamExt};
     #[cfg(feature = "ws")]
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[cfg(feature = "ws")]
+    use std::sync::Arc;
+    #[cfg(feature = "ws")]
     use tokio_tungstenite::{accept_async, connect_async, tungstenite::Message};
 
     // Server has mock DCAP, client has no attestation and no client auth
@@ -871,7 +877,6 @@ mod tests {
         .unwrap();
 
         let proxy_addr = proxy_server.local_addr().unwrap();
-
         tokio::spawn(async move {
             proxy_server.accept().await.unwrap();
         });
@@ -1240,7 +1245,6 @@ mod tests {
         .unwrap();
 
         let proxy_addr = proxy_server.local_addr().unwrap();
-
         tokio::spawn(async move {
             proxy_server.accept().await.unwrap();
         });
@@ -1550,5 +1554,102 @@ mod tests {
         ws.send(Message::Text("ping".into())).await.unwrap();
         let msg = ws.next().await.unwrap().unwrap();
         assert_eq!(msg.to_text().unwrap(), "ping");
+    }
+
+    #[cfg(feature = "ws")]
+    #[tokio::test]
+    async fn http_proxy_websocket_upgrade_two_clients_concurrent() {
+        init_tracing();
+
+        let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = target_listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            loop {
+                let (stream, _addr) = target_listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut ws = accept_async(stream).await.unwrap();
+                    while let Some(msg) = ws.next().await {
+                        let msg = msg.unwrap();
+                        if msg.is_text() {
+                            ws.send(msg).await.unwrap();
+                        }
+                    }
+                });
+            }
+        });
+
+        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+
+        let proxy_server = ProxyServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            "127.0.0.1:0",
+            target_addr.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+        let upstream_accept_count = Arc::new(AtomicUsize::new(0));
+        let upstream_accept_count_clone = upstream_accept_count.clone();
+
+        tokio::spawn(async move {
+            loop {
+                match proxy_server.accept().await {
+                    Ok(_handle) => {
+                        upstream_accept_count_clone.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let proxy_client = ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0".to_string(),
+            proxy_addr.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            None,
+            HttpVersion::Http1,
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                if proxy_client.accept().await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let (mut ws1, _response1) = connect_async(format!("ws://{}", proxy_client_addr))
+            .await
+            .unwrap();
+        ws1.send(Message::Text("ping-1".into())).await.unwrap();
+        let msg1 = ws1.next().await.unwrap().unwrap();
+        assert_eq!(msg1.to_text().unwrap(), "ping-1");
+
+        let (mut ws2, _response2) = connect_async(format!("ws://{}", proxy_client_addr))
+            .await
+            .unwrap();
+        ws2.send(Message::Text("ping-2".into())).await.unwrap();
+        let msg2 = ws2.next().await.unwrap().unwrap();
+        assert_eq!(msg2.to_text().unwrap(), "ping-2");
+
+        ws1.send(Message::Text("ping-after-second-ws".into()))
+            .await
+            .unwrap();
+        let msg_after_second_ws = ws1.next().await.unwrap().unwrap();
+        assert_eq!(msg_after_second_ws.to_text().unwrap(), "ping-after-second-ws");
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(upstream_accept_count.load(Ordering::SeqCst) >= 2);
     }
 }
