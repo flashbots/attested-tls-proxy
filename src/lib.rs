@@ -409,7 +409,8 @@ impl ProxyClient {
     ) -> Result<Self, ProxyError> {
         client_config.alpn_protocols = match http_mode {
             HttpVersion::Http1 => vec![ALPN_HTTP11.to_vec()],
-            HttpVersion::Http2 => vec![ALPN_H2.to_vec()],
+            // Prefer HTTP/2 but allow HTTP/1.1 fallback if the server does not support h2.
+            HttpVersion::Http2 => vec![ALPN_H2.to_vec(), ALPN_HTTP11.to_vec()],
         };
 
         let attested_tls_client = AttestedTlsClient::new_with_tls_config(

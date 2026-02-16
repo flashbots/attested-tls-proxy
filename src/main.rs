@@ -77,7 +77,7 @@ enum CliCommand {
         /// Enables verification of self-signed TLS certificates
         #[arg(long)]
         allow_self_signed: bool,
-        /// HTTP mode for the proxy client: http1 supports WS upgrades, http2 does not
+        /// HTTP mode for the proxy client: http1 is HTTP/1.1 only, http2 prefers HTTP/2 with HTTP/1.1 fallback
         #[arg(long, value_enum, default_value = "http2")]
         http_mode: ClientHttpMode,
     },
