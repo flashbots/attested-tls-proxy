@@ -23,10 +23,19 @@ jobs:
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install pkgconf tpm2-tss openssl@3
+        brew install pkgconf openssl@3 autoconf automake libtool autoconf-archive json-c libusb
+
+        git clone --depth 1 --branch 4.1.3 https://github.com/tpm2-software/tpm2-tss.git "$RUNNER_TEMP/tpm2-tss"
+        cd "$RUNNER_TEMP/tpm2-tss"
+        ./bootstrap
+        ./configure --prefix="$HOME/.local/tpm2-tss" --disable-doxygen-doc --disable-fapi
+        make -j"$(sysctl -n hw.ncpu)"
+        make install
+
         {
-          echo "PKG_CONFIG_PATH=$(brew --prefix tpm2-tss)/lib/pkgconfig:$(brew --prefix openssl@3)/lib/pkgconfig"
+          echo "PKG_CONFIG_PATH=$HOME/.local/tpm2-tss/lib/pkgconfig:$(brew --prefix openssl@3)/lib/pkgconfig"
           echo "OPENSSL_DIR=$(brew --prefix openssl@3)"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$HOME/.local/tpm2-tss/lib:$(brew --prefix openssl@3)/lib"
         } >> "$GITHUB_ENV"
 
     - name: Set up Rust
