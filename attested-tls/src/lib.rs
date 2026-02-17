@@ -4,6 +4,9 @@ pub mod attestation;
 #[cfg(feature = "ws")]
 pub mod websockets;
 
+#[cfg(feature = "rpc")]
+pub mod attested_rpc;
+
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
 

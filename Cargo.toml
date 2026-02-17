@@ -44,15 +44,6 @@ pkcs1 = "0.7.5"
 pkcs8 = "0.10.2"
 rcgen = "0.14.5"
 pin-project-lite = "0.2.16"
-futures-util = { version = "0.3.31", optional = true }
-
-# For JSON RPC
-alloy-rpc-client = { version = "1.1.3", optional = true }
-tower-service = { version = "0.3.3", optional = true }
-alloy-transport-http = { version = "1.4.3", features = [
-  "hyper",
-], optional = true }
-url = { version = "2.5.7", optional = true }
 
 [dev-dependencies]
 tempfile = "3.23.0"
@@ -61,19 +52,10 @@ attested-tls = { path = "attested-tls", features = ["test-helpers", "mock"] }
 jsonrpsee = { version = "0.26.0", features = ["server"] }
 
 [features]
-default = ["azure", "rpc"]
+default = ["azure"]
 
 # Adds support for Microsoft Azure attestation generation and verification
 azure = ["attested-tls/azure"]
-
-# Adds JSON RPC support
-rpc = [
-  "alloy-rpc-client",
-  "tower-service",
-  "alloy-transport-http",
-  "url",
-  "futures-util",
-]
 
 [package.metadata.deb]
 maintainer = "Flashbots Team <devops+ci@flashbots.net>"

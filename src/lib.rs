@@ -9,13 +9,13 @@ pub use attested_tls;
 pub use attested_tls::attestation;
 pub use attested_tls::attestation::AttestationGenerator;
 
-#[cfg(feature = "rpc")]
-pub mod attested_rpc;
-
 mod http_version;
 
 #[cfg(test)]
 mod test_helpers;
+
+#[cfg(all(test, feature = "rpc"))]
+mod attested_rpc_tests;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue};

@@ -2,6 +2,8 @@
 
 This is a remote-attested TLS protocol and library which uses a post-handshake attestation exchange.
 
+It is designed to provide a secure channel for communicating with confidential virtual machine based services.
+
 A normal TLS 1.3 handshake takes place, followed by an attestation exchange sent as normal application data. If the attestation was successful the session is used for normal application traffic.
 
 This means normal CA-signed TLS certificates can be used, and there is nothing special about the TLS implementation, or any special handshake message extensions or certificate extensions.

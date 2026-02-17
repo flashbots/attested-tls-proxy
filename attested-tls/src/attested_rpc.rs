@@ -14,10 +14,14 @@ use tower_service::Service;
 
 use crate::{
     attestation::{measurements::MultiMeasurements, AttestationType},
-    attested_tls::{AttestedTlsClient, AttestedTlsError},
-    http_version::HttpVersion,
-    TokioExecutor,
+    AttestedTlsClient, AttestedTlsError,
 };
+
+/// Supported HTTP versions for RPC connection bootstrapping
+pub enum HttpVersion {
+    Http1,
+    Http2,
+}
 
 /// An attested TLS client which can create RpcClients for attested connections
 pub struct AttestedRpcClient {
@@ -45,27 +49,18 @@ impl AttestedRpcClient {
 
     /// Connect to an attested RPC server
     ///
-    /// This could be a regular JSON RPC server behind an attested TLS proxy
-    ///
-    /// `is_local` is passed on to [RpcClient] and represents not whether the connection
-    /// leaves the internal network, but whether it is a public RPC or an RPC behind a load
-    /// balancer. This gives different client behaviour allowing for less reliable connections.
+    /// This could be a regular JSON RPC server behind an attested TLS proxy.
     pub async fn connect(
         &self,
         server: &str,
         is_local: bool,
     ) -> Result<(RpcClient, Option<MultiMeasurements>, AttestationType), AttestedRpcError> {
-        // Make a TCP connection to the attested server, and do TLS handshake and attestation
-        // exchange
         let (stream, measurements, attestation_type) = self.inner.connect_tcp(server).await?;
-
-        // Setup HTTP client
         let io = TokioIo::new(stream);
 
         let rpc_client = match self.http_version {
             HttpVersion::Http1 => {
                 let (sender, conn) = conn::http1::handshake(io).await?;
-                // Drive the connection for the lifetime of `sender`
                 tokio::spawn(async move {
                     if let Err(e) = conn.await {
                         tracing::error!("AttestedRpcClient connection error: {e}");
@@ -76,7 +71,6 @@ impl AttestedRpcClient {
             }
             HttpVersion::Http2 => {
                 let (sender, conn) = conn::http2::handshake(TokioExecutor, io).await?;
-                // Drive the connection for the lifetime of `sender`
                 tokio::spawn(async move {
                     if let Err(e) = conn.await {
                         tracing::error!("AttestedRpcClient connection error: {e}");
@@ -90,42 +84,31 @@ impl AttestedRpcClient {
         Ok((rpc_client, measurements, attestation_type))
     }
 
-    /// Given an HTTP1 connection, setup RPC client
     async fn make_attested_http1_rpc_client(
         rpc_url: url::Url,
         sender: hyper::client::conn::http1::SendRequest<http_body_util::Full<bytes::Bytes>>,
         is_local: bool,
     ) -> Result<RpcClient, AttestedRpcError> {
         let service = Http1ClientConnectionService::new(sender);
-
         let hyper_transport =
             HyperClient::<http_body_util::Full<bytes::Bytes>, _>::with_service(service);
         let http = Http::with_client(hyper_transport, rpc_url);
-
-        let rpc_client = RpcClient::new(http, is_local);
-
-        Ok(rpc_client)
+        Ok(RpcClient::new(http, is_local))
     }
 
-    /// Given an HTTP2 connection, setup RPC client
     async fn make_attested_http2_rpc_client(
         rpc_url: url::Url,
         sender: hyper::client::conn::http2::SendRequest<http_body_util::Full<bytes::Bytes>>,
         is_local: bool,
     ) -> Result<RpcClient, AttestedRpcError> {
         let service = Http2ClientConnectionService { sender };
-
         let hyper_transport =
             HyperClient::<http_body_util::Full<bytes::Bytes>, _>::with_service(service);
         let http = Http::with_client(hyper_transport, rpc_url);
-
-        let rpc_client = RpcClient::new(http, is_local);
-
-        Ok(rpc_client)
+        Ok(RpcClient::new(http, is_local))
     }
 }
 
-/// Wrap hyper's HTTP1 client connection so we can implement a tower service for it
 #[derive(Debug, Clone)]
 struct Http1ClientConnectionService {
     sender: Arc<
@@ -156,7 +139,6 @@ impl Service<Request<http_body_util::Full<hyper::body::Bytes>>> for Http1ClientC
 
     fn call(&mut self, req: Request<http_body_util::Full<hyper::body::Bytes>>) -> Self::Future {
         let sender = self.sender.clone();
-
         Box::pin(async move {
             let mut sender = sender.lock().await;
             futures_util::future::poll_fn(|cx| sender.poll_ready(cx)).await?;
@@ -165,7 +147,6 @@ impl Service<Request<http_body_util::Full<hyper::body::Bytes>>> for Http1ClientC
     }
 }
 
-/// Wrap hyper's HTTP2 client connection so we can implement a tower service for it
 #[derive(Debug, Clone)]
 struct Http2ClientConnectionService {
     sender: hyper::client::conn::http2::SendRequest<http_body_util::Full<hyper::body::Bytes>>,
@@ -181,17 +162,11 @@ impl Service<Request<http_body_util::Full<hyper::body::Bytes>>> for Http2ClientC
     }
 
     fn call(&mut self, req: Request<http_body_util::Full<hyper::body::Bytes>>) -> Self::Future {
-        // Clone so multiple calls can proceed concurrently over the same HTTP2 connection
         let mut sender = self.sender.clone();
-
-        Box::pin(async move {
-            // Note: SendRequest docs mention req must have a host header
-            sender.send_request(req).await
-        })
+        Box::pin(async move { sender.send_request(req).await })
     }
 }
 
-/// An error from attested JSON RPC
 #[derive(Error, Debug)]
 pub enum AttestedRpcError {
     #[error("Attested TLS: {0}")]
@@ -204,64 +179,99 @@ pub enum AttestedRpcError {
     Url(#[from] url::ParseError),
 }
 
+#[derive(Clone)]
+struct TokioExecutor;
+
+impl<F> hyper::rt::Executor<F> for TokioExecutor
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn execute(&self, fut: F) {
+        tokio::task::spawn(fut);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{convert::Infallible, sync::Arc};
 
-    use super::*;
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::service::service_fn;
+    use hyper::{Request, Response, StatusCode};
+    use hyper_util::rt::TokioIo;
+    use serde_json::{json, Value};
+    use tokio::net::TcpListener;
+
+    use super::AttestedRpcClient;
+
     use crate::{
         attestation::{AttestationGenerator, AttestationType, AttestationVerifier},
         test_helpers::{generate_certificate_chain, generate_tls_config},
-        ProxyServer, ALPN_H2,
+        AttestedTlsClient, AttestedTlsServer,
     };
-    use jsonrpsee::server::{ServerBuilder, ServerHandle};
-    use jsonrpsee::RpcModule;
 
-    /// Starts a JSON-RPC HTTP server on a random local port
-    async fn spawn_test_rpc_server() -> (SocketAddr, ServerHandle) {
-        let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
+    async fn simple_json_rpc_service(
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<Full<Bytes>>, Infallible> {
+        let body = req.into_body().collect().await.unwrap().to_bytes();
+        let id = serde_json::from_slice::<Value>(&body)
+            .ok()
+            .and_then(|v| v.get("id").cloned())
+            .unwrap_or(Value::Null);
 
-        let addr: SocketAddr = server.local_addr().unwrap();
+        let response_body = json!({
+            "jsonrpc": "2.0",
+            "result": "0x1",
+            "id": id,
+        })
+        .to_string();
 
-        let mut module = RpcModule::new(());
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(response_body)))
+            .unwrap())
+    }
 
-        // Mock ethereum-like RPC method
-        module
-            .register_async_method("eth_chainId", |_params, _ctx, _ext| async move {
-                Ok::<_, jsonrpsee::types::ErrorObjectOwned>("0x1")
-            })
+    async fn serve_json_rpc_connection(
+        server: Arc<AttestedTlsServer>,
+        tcp_stream: tokio::net::TcpStream,
+    ) {
+        let (tls_stream, _measurements, _attestation_type) =
+            server.handle_connection(tcp_stream).await.unwrap();
+        let io = TokioIo::new(tls_stream);
+        let service = service_fn(simple_json_rpc_service);
+
+        hyper::server::conn::http2::Builder::new(hyper_util::rt::tokio::TokioExecutor::new())
+            .serve_connection(io, service)
+            .await
             .unwrap();
-
-        let handle = server.start(module);
-
-        (addr, handle)
     }
 
     #[tokio::test]
     async fn server_attestation_rpc_client() {
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
-        let (server_config, mut client_config) =
-            generate_tls_config(cert_chain.clone(), private_key);
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let (target_addr, _handle) = spawn_test_rpc_server().await;
-
-        let proxy_server = ProxyServer::new_with_tls_config(
+        let server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
-            "127.0.0.1:0",
-            target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
         .unwrap();
 
-        let proxy_addr = proxy_server.local_addr().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let server = Arc::new(server);
 
         tokio::spawn(async move {
-            proxy_server.accept().await.unwrap();
+            let (tcp_stream, _) = listener.accept().await.unwrap();
+            serve_json_rpc_connection(server, tcp_stream).await;
         });
-        client_config.alpn_protocols.push(ALPN_H2.to_vec());
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config,
@@ -275,7 +285,7 @@ mod tests {
         let attested_rpc_client = AttestedRpcClient::new_http2(client);
 
         let (rpc_client, _measurements, _attestation_type) = attested_rpc_client
-            .connect(&proxy_addr.to_string(), true)
+            .connect(&server_addr.to_string(), true)
             .await
             .unwrap();
 
@@ -286,39 +296,37 @@ mod tests {
     #[tokio::test]
     async fn server_attestation_rpc_client_drops_connection() {
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
-        let (server_config, mut client_config) =
-            generate_tls_config(cert_chain.clone(), private_key);
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let (target_addr, _handle) = spawn_test_rpc_server().await;
-
-        let proxy_server = ProxyServer::new_with_tls_config(
+        let server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
-            "127.0.0.1:0",
-            target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
         .unwrap();
 
-        let proxy_addr = proxy_server.local_addr().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let server = Arc::new(server);
 
-        // This is used to trigger a dropped connection to the proxy server
         let (connection_breaker_tx, connection_breaker_rx) = tokio::sync::oneshot::channel();
+        let (connection_closed_tx, connection_closed_rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
-            let connection_handle = proxy_server.accept().await.unwrap();
+            let (tcp_stream_1, _) = listener.accept().await.unwrap();
+            let first_conn_handle =
+                tokio::spawn(serve_json_rpc_connection(server.clone(), tcp_stream_1));
 
-            // Wait for a signal to simulate a dropped connection, then drop the task handling the
-            // connection
             connection_breaker_rx.await.unwrap();
-            connection_handle.abort();
+            first_conn_handle.abort();
+            let _ = first_conn_handle.await;
+            let _ = connection_closed_tx.send(());
 
-            proxy_server.accept().await.unwrap();
+            let (tcp_stream_2, _) = listener.accept().await.unwrap();
+            serve_json_rpc_connection(server, tcp_stream_2).await;
         });
-
-        client_config.alpn_protocols.push(ALPN_H2.to_vec());
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config,
@@ -332,30 +340,31 @@ mod tests {
         let attested_rpc_client = AttestedRpcClient::new_http2(client);
 
         let (rpc_client, _measurements, _attestation_type) = attested_rpc_client
-            .connect(&proxy_addr.to_string(), true)
+            .connect(&server_addr.to_string(), true)
             .await
             .unwrap();
 
         let response: String = rpc_client.request("eth_chainId", ()).await.unwrap();
         assert_eq!(response, "0x1");
 
-        // Now break the connection
         connection_breaker_tx.send(()).unwrap();
+        connection_closed_rx.await.unwrap();
 
-        // Show that the next call fails
         let err = rpc_client
             .request::<(), String>("eth_chainId", ())
             .await
             .unwrap_err();
-        assert_eq!(err.to_string(), "connection error".to_string());
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("connection error") || err_msg.contains("operation was canceled"),
+            "unexpected error: {err_msg}"
+        );
 
-        // Make another connection
         let (rpc_client, _measurements, _attestation_type) = attested_rpc_client
-            .connect(&proxy_addr.to_string(), true)
+            .connect(&server_addr.to_string(), true)
             .await
             .unwrap();
 
-        // Now the call succeeds
         let response: String = rpc_client.request("eth_chainId", ()).await.unwrap();
         assert_eq!(response, "0x1");
     }

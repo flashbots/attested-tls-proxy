@@ -1,3 +1,4 @@
+//! An attested Websocket server and client
 use std::{net::SocketAddr, sync::Arc};
 use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};

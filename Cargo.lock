@@ -524,14 +524,20 @@ dependencies = [
 name = "attested-tls"
 version = "0.0.1"
 dependencies = [
+ "alloy-rpc-client",
+ "alloy-transport-http",
  "anyhow",
  "az-tdx-vtpm",
  "base64 0.22.1",
+ "bytes",
  "configfs-tsm",
  "dcap-qvl",
  "futures-util",
  "hex",
  "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "num-bigint",
  "once_cell",
  "openssl",
@@ -551,8 +557,10 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "tower-service",
  "tracing",
  "tss-esapi",
+ "url",
  "webpki-roots",
  "x509-parser",
 ]
@@ -561,15 +569,12 @@ dependencies = [
 name = "attested-tls-proxy"
 version = "1.0.0"
 dependencies = [
- "alloy-rpc-client",
- "alloy-transport-http",
  "anyhow",
  "attested-tls",
  "axum",
  "base64 0.22.1",
  "bytes",
  "clap",
- "futures-util",
  "http",
  "http-body-util",
  "hyper",
@@ -593,10 +598,8 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-http",
- "tower-service",
  "tracing",
  "tracing-subscriber",
- "url",
  "x509-parser",
 ]
 
