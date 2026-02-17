@@ -83,8 +83,7 @@ impl ProxyServer {
             attestation_generator,
             attestation_verifier,
             client_auth,
-        )
-        .await?;
+        )?;
 
         let listener = TcpListener::bind(local).await?;
 
@@ -120,8 +119,7 @@ impl ProxyServer {
             server_config,
             attestation_generator,
             attestation_verifier,
-        )
-        .await?;
+        )?;
 
         let listener = TcpListener::bind(local).await?;
 
@@ -331,8 +329,7 @@ impl ProxyClient {
             attestation_generator,
             attestation_verifier,
             remote_certificate,
-        )
-        .await?;
+        )?;
 
         Self::new_with_inner(address, attested_tls_client, &server_name).await
     }
@@ -362,8 +359,7 @@ impl ProxyClient {
             attestation_generator,
             attestation_verifier,
             cert_chain,
-        )
-        .await?;
+        )?;
 
         Self::new_with_inner(address, attested_tls_client, &target_name).await
     }
@@ -1324,7 +1320,6 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -226,7 +226,6 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -246,7 +245,6 @@ mod tests {
             AttestationVerifier::mock(),
             None,
         )
-        .await
         .unwrap();
 
         let (_stream, _measurements, _attestation_type) =
@@ -280,7 +278,6 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -306,7 +303,6 @@ mod tests {
             AttestationVerifier::mock(),
             None,
         )
-        .await
         .unwrap();
 
         let client_tcp_stream = tokio::net::TcpStream::connect(&server_addr).await.unwrap();

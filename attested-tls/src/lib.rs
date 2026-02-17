@@ -73,7 +73,7 @@ impl std::fmt::Debug for AttestedTlsServer {
 }
 
 impl AttestedTlsServer {
-    pub async fn new(
+    pub fn new(
         cert_and_key: TlsCertAndKey,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
@@ -99,13 +99,12 @@ impl AttestedTlsServer {
             attestation_generator,
             attestation_verifier,
         )
-        .await
     }
 
     /// Start with preconfigured TLS
     ///
     /// This allows dangerous configuration
-    pub async fn new_with_tls_config(
+    pub fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
         mut server_config: ServerConfig,
         attestation_generator: AttestationGenerator,
@@ -253,7 +252,7 @@ impl std::fmt::Debug for AttestedTlsClient {
 
 impl AttestedTlsClient {
     /// Start with optional TLS client auth
-    pub async fn new(
+    pub fn new(
         cert_and_key: Option<TlsCertAndKey>,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
@@ -289,13 +288,12 @@ impl AttestedTlsClient {
             attestation_verifier,
             cert_and_key.map(|c| c.cert_chain),
         )
-        .await
     }
 
     /// Create a new proxy client with given TLS configuration
     ///
     /// This allows dangerous configuration but is used in tests
-    pub async fn new_with_tls_config(
+    pub fn new_with_tls_config(
         mut client_config: ClientConfig,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
@@ -457,8 +455,7 @@ pub async fn get_tls_cert(
         AttestationGenerator::with_no_attestation(),
         attestation_verifier,
         remote_certificate,
-    )
-    .await?;
+    )?;
     attested_tls_client
         .get_tls_cert(&host_to_host_with_port(&server_name))
         .await
@@ -476,8 +473,7 @@ pub async fn get_tls_cert_with_config(
         AttestationGenerator::with_no_attestation(),
         attestation_verifier,
         None,
-    )
-    .await?;
+    )?;
     attested_tls_client.get_tls_cert(server_name).await
 }
 
@@ -616,7 +612,6 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -634,7 +629,6 @@ mod tests {
             AttestationVerifier::mock(),
             None,
         )
-        .await
         .unwrap();
 
         let (_stream, _measurements, _attestation_type) =
@@ -654,7 +648,6 @@ mod tests {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -672,7 +665,6 @@ mod tests {
             AttestationVerifier::mock(),
             None,
         )
-        .await
         .unwrap();
 
         let client_result = client.connect_tcp(&server_addr.to_string()).await;
@@ -696,7 +688,6 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -739,7 +730,6 @@ mod tests {
             attestation_verifier,
             None,
         )
-        .await
         .unwrap();
 
         let client_result = client.connect_tcp(&server_addr.to_string()).await;

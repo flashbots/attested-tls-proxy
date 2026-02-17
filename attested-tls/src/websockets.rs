@@ -138,7 +138,6 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let ws_server = AttestedWsServer::new("127.0.0.1:0", server, None)
@@ -163,7 +162,6 @@ mod tests {
             AttestationVerifier::mock(),
             None,
         )
-        .await
         .unwrap();
 
         let ws_client: AttestedWsClient = client.into();
