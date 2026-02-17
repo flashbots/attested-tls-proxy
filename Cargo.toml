@@ -3,7 +3,7 @@ members = [".", "attestation-provider-server", "attested-tls"]
 
 [package]
 name = "attested-tls-proxy"
-version = "1.0.0"
+version = "1.0.2"
 edition = "2024"
 license = "MIT"
 description = "An HTTP attested TLS proxy server and client for secure communication with CVM services"
