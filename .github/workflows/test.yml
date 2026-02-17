@@ -33,7 +33,7 @@ jobs:
           ${{ runner.os }}-cargo-
 
     - name: Run cargo clippy
-      run: cargo clippy --workspace -- -D warnings
+      run: cargo clippy --workspace --features azure -- -D warnings
 
     - name: Run cargo test
-      run: cargo test --workspace --all-targets -- --test-threads=1
+      run: cargo test --workspace --features azure --all-targets -- --test-threads=1
