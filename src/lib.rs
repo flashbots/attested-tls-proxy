@@ -9,9 +9,6 @@ pub use attested_tls;
 pub use attested_tls::attestation;
 pub use attested_tls::attestation::AttestationGenerator;
 
-#[cfg(feature = "ws")]
-pub use attested_tls::websockets;
-
 #[cfg(feature = "rpc")]
 pub mod attested_rpc;
 
@@ -34,13 +31,13 @@ use tokio_rustls::rustls::server::VerifierBuilderError;
 use tokio_rustls::rustls::{pki_types::CertificateDer, ClientConfig, ServerConfig};
 use tracing::{debug, error, warn};
 
+use crate::http_version::{HttpConnection, HttpSender, HttpVersion, ALPN_H2, ALPN_HTTP11};
 use attested_tls::{
     attestation::{
         measurements::MultiMeasurements, AttestationError, AttestationType, AttestationVerifier,
     },
     AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey,
 };
-use crate::http_version::{HttpConnection, HttpSender, HttpVersion, ALPN_H2, ALPN_HTTP11};
 
 /// The header name for giving attestation type
 const ATTESTATION_TYPE_HEADER: &str = "X-Flashbots-Attestation-Type";
@@ -740,8 +737,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        attestation::measurements::MeasurementPolicy,
-        attested_tls::get_tls_cert_with_config,
+        attestation::measurements::MeasurementPolicy, attested_tls::get_tls_cert_with_config,
     };
 
     use super::*;

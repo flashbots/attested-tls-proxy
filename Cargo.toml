@@ -61,13 +61,10 @@ attested-tls = { path = "attested-tls", features = ["test-helpers", "mock"] }
 jsonrpsee = { version = "0.26.0", features = ["server"] }
 
 [features]
-default = ["azure", "ws", "rpc"]
+default = ["azure", "rpc"]
 
 # Adds support for Microsoft Azure attestation generation and verification
 azure = ["attested-tls/azure"]
-
-# Adds websocket support
-ws = ["attested-tls/ws"]
 
 # Adds JSON RPC support
 rpc = [
