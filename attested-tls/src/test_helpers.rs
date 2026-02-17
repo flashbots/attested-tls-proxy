@@ -36,7 +36,7 @@ pub fn generate_certificate_chain(
 pub fn generate_tls_config(
     certificate_chain: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
-) -> (Arc<ServerConfig>, Arc<ClientConfig>) {
+) -> (ServerConfig, ClientConfig) {
     let supported_protocols: Vec<_> = SUPPORTED_ALPN_PROTOCOL_VERSIONS
         .into_iter()
         .map(|p| p.to_vec())
@@ -58,7 +58,7 @@ pub fn generate_tls_config(
 
     client_config.alpn_protocols = supported_protocols;
 
-    (Arc::new(server_config), Arc::new(client_config))
+    (server_config, client_config)
 }
 
 /// Helper to generate a mutual TLS configuration with client authentification for testing
@@ -68,8 +68,8 @@ pub fn generate_tls_config_with_client_auth(
     bob_certificate_chain: Vec<CertificateDer<'static>>,
     bob_key: PrivateKeyDer<'static>,
 ) -> (
-    (Arc<ServerConfig>, Arc<ClientConfig>),
-    (Arc<ServerConfig>, Arc<ClientConfig>),
+    (ServerConfig, ClientConfig),
+    (ServerConfig, ClientConfig),
 ) {
     let supported_protocols: Vec<_> = SUPPORTED_ALPN_PROTOCOL_VERSIONS
         .into_iter()
@@ -110,8 +110,8 @@ pub fn generate_tls_config_with_client_auth(
 
     bob_client_config.alpn_protocols = supported_protocols;
     (
-        (Arc::new(alice_server_config), Arc::new(alice_client_config)),
-        (Arc::new(bob_server_config), Arc::new(bob_client_config)),
+        (alice_server_config, alice_client_config),
+        (bob_server_config, bob_client_config),
     )
 }
 

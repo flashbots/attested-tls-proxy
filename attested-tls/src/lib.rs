@@ -14,7 +14,10 @@ use crate::attestation::{
 use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
+use tokio_rustls::rustls::{
+    self,
+    server::{VerifierBuilderError, WebPkiClientVerifier},
+};
 use x509_parser::parse_x509_certificate;
 
 use std::num::TryFromIntError;
@@ -73,28 +76,23 @@ impl AttestedTlsServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, AttestedTlsError> {
-        let mut server_config = if client_auth {
+        let server_config = if client_auth {
             let root_store =
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
 
-            ServerConfig::builder()
+            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_client_cert_verifier(verifier)
                 .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         } else {
-            ServerConfig::builder()
+            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_no_client_auth()
                 .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
         };
 
-        server_config.alpn_protocols = SUPPORTED_ALPN_PROTOCOL_VERSIONS
-            .into_iter()
-            .map(|p| p.to_vec())
-            .collect();
-
         Self::new_with_tls_config(
             cert_and_key.cert_chain,
-            server_config.into(),
+            server_config,
             attestation_generator,
             attestation_verifier,
         )
@@ -106,14 +104,16 @@ impl AttestedTlsServer {
     /// This allows dangerous configuration
     pub async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
-        server_config: Arc<ServerConfig>,
+        mut server_config: ServerConfig,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, AttestedTlsError> {
         #[cfg(feature = "mock")]
         tracing::warn!("AttestedTlsServer instantiated in MOCK mode - do NOT use in production");
+        // Ensure protocol version compatibility
+        server_config.alpn_protocols = map_alpn_protocols(server_config.alpn_protocols);
 
-        let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
 
         Ok(Self {
             attestation_generator,
@@ -123,7 +123,7 @@ impl AttestedTlsServer {
         })
     }
 
-    /// Handle an incoming connection from a proxy-client
+    /// Handle an incoming connection from an [AttestedTlsClient]
     ///
     /// This is transport agnostic and will work with any asynchronous stream
     pub async fn handle_connection<IO>(
@@ -145,6 +145,11 @@ impl AttestedTlsServer {
         // Do TLS handshake
         let mut tls_stream = self.acceptor.accept(inbound).await?;
         let (_io, connection) = tls_stream.get_ref();
+
+        // Ensure TLS 1.3
+        if connection.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+            return Err(AttestedTlsError::NotTls13);
+        }
 
         // Ensure that we agreed a protocol
         let _negotiated_protocol = connection
@@ -201,6 +206,23 @@ impl AttestedTlsServer {
 
         Ok((tls_stream, measurements, remote_attestation_type))
     }
+
+    /// Handle an incoming connection from an [AttestedTlsClient]
+    ///
+    /// This is transport agnostic and will work with any asynchronous stream
+    ///
+    /// This is the same as handle_connection except it returns only the stream and not the
+    /// attestation details, in order to provide a similar API to [TlsAcceptor::accept]
+    pub async fn accept<IO>(
+        &self,
+        inbound: IO,
+    ) -> Result<tokio_rustls::server::TlsStream<IO>, AttestedTlsError>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin,
+    {
+        let (stream, _measurements, _attestation_type) = self.handle_connection(inbound).await?;
+        Ok(stream)
+    }
 }
 
 /// A proxy client which forwards http traffic to a proxy-server
@@ -245,26 +267,21 @@ impl AttestedTlsClient {
         };
 
         // Setup TLS client configuration, with or without client auth
-        let mut client_config = if let Some(ref cert_and_key) = cert_and_key {
-            ClientConfig::builder()
+        let client_config = if let Some(ref cert_and_key) = cert_and_key {
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(root_store)
                 .with_client_auth_cert(
                     cert_and_key.cert_chain.clone(),
                     cert_and_key.key.clone_key(),
                 )?
         } else {
-            ClientConfig::builder()
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(root_store)
                 .with_no_client_auth()
         };
 
-        client_config.alpn_protocols = SUPPORTED_ALPN_PROTOCOL_VERSIONS
-            .into_iter()
-            .map(|p| p.to_vec())
-            .collect();
-
         Self::new_with_tls_config(
-            client_config.into(),
+            client_config,
             attestation_generator,
             attestation_verifier,
             cert_and_key.map(|c| c.cert_chain),
@@ -276,15 +293,20 @@ impl AttestedTlsClient {
     ///
     /// This allows dangerous configuration but is used in tests
     pub async fn new_with_tls_config(
-        client_config: Arc<ClientConfig>,
+        mut client_config: ClientConfig,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, AttestedTlsError> {
         #[cfg(feature = "mock")]
         tracing::warn!("AttestedTlsClient instantiated in MOCK mode - do NOT use in production");
+        if client_config.client_auth_cert_resolver.has_certs() && cert_chain.is_none() {
+            return Err(AttestedTlsError::ClientAuthWithoutClientCert);
+        }
+        // Ensure protocol version compatibility
+        client_config.alpn_protocols = map_alpn_protocols(client_config.alpn_protocols);
 
-        let connector = TlsConnector::from(client_config.clone());
+        let connector = TlsConnector::from(Arc::new(client_config));
 
         Ok(Self {
             connector,
@@ -320,6 +342,11 @@ impl AttestedTlsClient {
             .await?;
 
         let (_io, server_connection) = tls_stream.get_ref();
+
+        // Ensure TLS 1.3
+        if server_connection.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+            return Err(AttestedTlsError::NotTls13);
+        }
 
         // Ensure that we agreed a protocol
         let _negotiated_protocol = server_connection
@@ -439,7 +466,7 @@ pub async fn get_tls_cert(
 pub async fn get_tls_cert_with_config(
     server_name: &str,
     attestation_verifier: AttestationVerifier,
-    client_config: Arc<ClientConfig>,
+    client_config: ClientConfig,
 ) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
     let attested_tls_client = AttestedTlsClient::new_with_tls_config(
         client_config,
@@ -501,6 +528,12 @@ pub enum AttestedTlsError {
     Serialization(#[from] parity_scale_codec::Error),
     #[error("Protocol negotiation failed - remote peer does not support this protocol")]
     AlpnFailed,
+    #[error("Client authentication is enabled but a client ceritifcate was not given")]
+    ClientAuthWithoutClientCert,
+    #[error("No cryptography provider available - this implies a bad build")]
+    NoCryptoProvider,
+    #[error("Only TLS 1.3 is supported")]
+    NotTls13,
 }
 
 /// Given a byte array, encode its length as a 4 byte big endian u32
@@ -510,7 +543,7 @@ fn length_prefix(input: &[u8]) -> [u8; 4] {
 }
 
 /// Given a hostname with or without port number, create a TLS [ServerName] with just the host part
-fn server_name_from_host(
+pub(crate) fn server_name_from_host(
     host: &str,
 ) -> Result<ServerName<'static>, tokio_rustls::rustls::pki_types::InvalidDnsNameError> {
     // If host contains ':', try to split off the port.
@@ -532,15 +565,39 @@ fn host_to_host_with_port(host: &str) -> String {
     }
 }
 
+/// Ensure protocol compatibility with the other party by adding 'flashbots-ratls/<version>' to the
+/// protocol names of all supported protocols
+fn map_alpn_protocols(existing_protocols: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+    let mut mapped_protocols = Vec::new();
+    for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
+        let alpn = alpn.to_vec();
+        let new_p: Vec<_> = existing_protocols
+            .clone()
+            .into_iter()
+            .map(|p| {
+                let mut updated_protocol_name = alpn.clone();
+                updated_protocol_name.extend(b"+");
+                updated_protocol_name.extend(p);
+                updated_protocol_name
+            })
+            .collect();
+
+        mapped_protocols.extend(new_p);
+    }
+
+    // For the case that no existing protocols are specified by the remote party:
+    for alpn in SUPPORTED_ALPN_PROTOCOL_VERSIONS {
+        mapped_protocols.push(alpn.to_vec());
+    }
+
+    mapped_protocols
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use crate::{
-        attestation::measurements::{
-            DcapMeasurementRegister, MeasurementPolicy, MeasurementRecord,
-        },
+        attestation::measurements::MeasurementPolicy,
         test_helpers::{generate_certificate_chain, generate_tls_config},
     };
     use tokio::net::TcpListener;
@@ -553,7 +610,7 @@ mod tests {
         let server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -633,7 +690,7 @@ mod tests {
         let server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await
@@ -648,19 +705,27 @@ mod tests {
                 server.handle_connection(tcp_stream).await.unwrap();
         });
 
+        let measurement_policy = MeasurementPolicy::from_json_bytes(
+            br#"
+            [{
+                "measurement_id": "test",
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": { "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+                    "1": { "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+                    "2": { "expected": "010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101" },
+                    "3": { "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+                    "4": { "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" }
+                }
+            }]
+            "#
+            .to_vec(),
+        )
+        .await
+        .unwrap();
+
         let attestation_verifier = AttestationVerifier {
-            measurement_policy: MeasurementPolicy {
-                accepted_measurements: vec![MeasurementRecord {
-                    measurement_id: "test".to_string(),
-                    measurements: MultiMeasurements::Dcap(HashMap::from([
-                        (DcapMeasurementRegister::MRTD, [0; 48]),
-                        (DcapMeasurementRegister::RTMR0, [0; 48]),
-                        (DcapMeasurementRegister::RTMR1, [1; 48]), // This differs from the mock measurements
-                        (DcapMeasurementRegister::RTMR2, [0; 48]),
-                        (DcapMeasurementRegister::RTMR3, [0; 48]),
-                    ])),
-                }],
-            },
+            measurement_policy,
             pccs_url: None,
             log_dcap_quote: false,
         };

@@ -1,8 +1,8 @@
+use attestation_provider_server::{attestation_provider_client, attestation_provider_server};
 use attested_tls_proxy::attestation::{
-    measurements::MeasurementPolicy, AttestationGenerator, AttestationType, AttestationVerifier,
+    measurements::MeasurementPolicy, AttestationGenerator, AttestationVerifier,
 };
 use clap::{Parser, Subcommand};
-use dummy_attestation_server::{dummy_attestation_client, dummy_attestation_server};
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::TcpListener;
 use tracing::level_filters::LevelFilter;
@@ -28,12 +28,12 @@ enum CliCommand {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
-        /// Type of attestation to present (defaults to none)
+        /// Type of attestation to present (will attempt to detect if not given)
         #[arg(long)]
         server_attestation_type: Option<String>,
     },
     Client {
-        /// Socket address of a dummy attestation server
+        /// Socket address of a attestation provider server
         server_addr: SocketAddr,
         /// Optional path to file containing JSON measurements to be enforced on the remote party
         #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
@@ -72,17 +72,13 @@ async fn main() -> anyhow::Result<()> {
             listen_addr,
             server_attestation_type,
         } => {
-            let server_attestation_type: AttestationType = serde_json::from_value(
-                serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
-            )?;
-
             let attestation_generator =
-                AttestationGenerator::new_not_dummy(server_attestation_type)?;
+                AttestationGenerator::new_with_detection(server_attestation_type, None).await?;
 
             let listener = TcpListener::bind(listen_addr).await?;
 
             println!("Listening on {}", listener.local_addr()?);
-            dummy_attestation_server(listener, attestation_generator).await?;
+            attestation_provider_server(listener, attestation_generator).await?;
         }
         CliCommand::Client {
             server_addr,
@@ -100,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let attestation_message =
-                dummy_attestation_client(server_addr, attestation_verifier).await?;
+                attestation_provider_client(server_addr, attestation_verifier).await?;
 
             println!("{attestation_message:?}")
         }

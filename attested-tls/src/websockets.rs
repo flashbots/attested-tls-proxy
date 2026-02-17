@@ -134,7 +134,7 @@ mod tests {
         let server = AttestedTlsServer::new_with_tls_config(
             cert_chain,
             server_config,
-            AttestationGenerator::new_not_dummy(AttestationType::DcapTdx).unwrap(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
         .await

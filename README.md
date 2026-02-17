@@ -6,7 +6,7 @@ This is a reverse HTTP proxy allowing a normal HTTP client to communicate with a
 This work-in-progress crate is designed to be an alternative to [`cvm-reverse-proxy`](https://github.com/flashbots/cvm-reverse-proxy).
 Unlike `cvm-reverse-proxy`, this uses post-handshake remote-attested TLS, meaning regular CA-signed TLS certificates can be used.
 
-The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for all requests from that proxy-client instance. 
+The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for all requests from that proxy-client instance.
 
 It has three subcommands:
 - `attested-tls-proxy server` - run a proxy server, which accepts TLS connections from a proxy client, sends an attestation and then forwards traffic to a target CVM service.
@@ -31,10 +31,68 @@ This aims to match the formatting used by `cvm-reverse-proxy`.
 
 These objects have the following fields:
 - `measurement_id` - a name used to describe the entry. For example the name and version of the CVM OS image that these measurements correspond to.
-- `attestation_type` - a string containing one of the attestation types (confidential computing platforms) described below. 
+- `attestation_type` - a string containing one of the attestation types (confidential computing platforms) described below.
 - `measurements` - an object with fields referring to the five measurement registers. Field names are the same as for the measurement headers (see below).
 
-Example:
+Each measurement register entry supports two mutually exclusive fields:
+- `expected_any` - **(recommended)** an array of hex-encoded measurement values. The attestation is accepted if the actual measurement matches **any** value in the list (OR semantics).
+- `expected` - **(deprecated)** a single hex-encoded measurement value. Retained for backwards compatibility but `expected_any` should be preferred.
+
+Example using `expected_any` (recommended):
+
+```JSON
+[
+    {
+        "measurement_id": "dcap-tdx-example",
+        "attestation_type": "dcap-tdx",
+        "measurements": {
+            "0": {
+                "expected_any": [
+                    "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323"
+                ]
+            },
+            "1": {
+                "expected_any": [
+                    "da6e07866635cb34a9ffcdc26ec6622f289e625c42c39b320f29cdf1dc84390b4f89dd0b073be52ac38ca7b0a0f375bb"
+                ]
+            },
+            "2": {
+                "expected_any": [
+                    "a7157e7c5f932e9babac9209d4527ec9ed837b8e335a931517677fa746db51ee56062e3324e266e3f39ec26a516f4f71"
+                ]
+            },
+            "3": {
+                "expected_any": [
+                    "e63560e50830e22fbc9b06cdce8afe784bf111e4251256cf104050f1347cd4ad9f30da408475066575145da0b098a124"
+                ]
+            },
+            "4": {
+                "expected_any": [
+                    "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                ]
+            }
+        }
+    }
+]
+```
+
+The `expected_any` field is useful when multiple measurement values should be accepted for a register (e.g., for different versions of the firmware):
+
+```JSON
+{
+    "0": {
+        "expected_any": [
+            "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323",
+            "abc123def456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
+        ]
+    }
+}
+```
+
+<details>
+<summary>Legacy format using deprecated <code>expected</code> field</summary>
+
+The `expected` field is deprecated but still supported for backwards compatibility:
 
 ```JSON
 [
@@ -44,27 +102,17 @@ Example:
         "measurements": {
             "0": {
                 "expected": "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323"
-            },
-            "1": {
-                "expected": "da6e07866635cb34a9ffcdc26ec6622f289e625c42c39b320f29cdf1dc84390b4f89dd0b073be52ac38ca7b0a0f375bb"
-            },
-            "2": {
-                "expected": "a7157e7c5f932e9babac9209d4527ec9ed837b8e335a931517677fa746db51ee56062e3324e266e3f39ec26a516f4f71"
-            },
-            "3": {
-                "expected": "e63560e50830e22fbc9b06cdce8afe784bf111e4251256cf104050f1347cd4ad9f30da408475066575145da0b098a124"
-            },
-            "4": {
-                "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
             }
         }
     }
 ]
 ```
 
-The only mandatory field is `attestation_type`. If an attestation type is specified, but no measurements, *any* measurements will be accepted for this attestation type. The measurements can still be checked up-stream by the source client or target service using header injection described below. But it is then up to these external programs to reject unacceptable measurements. 
+</details>
 
-If a measurements file is not provided, a single allowed attestation type **must** be specified using the `--allowed-remote-attestation-type` option. This may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified. 
+The only mandatory field is `attestation_type`. If an attestation type is specified, but no measurements, *any* measurements will be accepted for this attestation type. The measurements can still be checked up-stream by the source client or target service using header injection described below. But it is then up to these external programs to reject unacceptable measurements.
+
+If a measurements file is not provided, a single allowed attestation type **must** be specified using the `--allowed-remote-attestation-type` option. This may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
 
 ### Measurement Headers
 
@@ -88,14 +136,13 @@ Header value:
 Header name: `X-Flashbots-Attestation-Type`
 
 Header value: an attestation type given as a string as described below.
-  
+
 ### Attestation Types
 
 These are the attestation type names used in the HTTP headers, and the measurements file, and when specifying a local attestation type with the `--client-attestation-type` or `--server-attestation-type` command line options.
 
 - `auto` - detect attestation type (used only when specifying the local attestation type as a command-line argument)
 - `none` - No attestation provided
-- `dummy` - Forwards the attestation to a remote service (for testing purposes, not yet supported)
 - `gcp-tdx` - DCAP TDX on Google Cloud Platform
 - `azure-tdx` - TDX on Azure, with MAA (not yet supported)
 - `qemu-tdx` - TDX on Qemu (no cloud platform)
@@ -129,7 +176,7 @@ The first 32 bytes are the SHA256 hash of the encoded public key from the TLS le
 
 The remaining 32 bytes are exported key material ([RFC5705](https://www.rfc-editor.org/rfc/rfc5705)) from the TLS session. This must have the exporter label `EXPORTER-Channel-Binding` and no context data.
 
-In the case of attestation types `dcap-tdx`, `gcp-tdx`, and `qemu-tdx`, a standard DCAP attestation is generated using the `configfs-tsm` linux filesystem interface. This means that this binary must be run with access to `/sys/kernel/config/tsm/report` which on many systems requires sudo. 
+In the case of attestation types `dcap-tdx`, `gcp-tdx`, and `qemu-tdx`, a standard DCAP attestation is generated using the `configfs-tsm` linux filesystem interface. This means that this binary must be run with access to `/sys/kernel/config/tsm/report` which on many systems requires sudo.
 
 When verifying DCAP attestations, the Intel PCS is used to retrieve collateral unless a PCCS url is provided via a command line argument. If expired TCB collateral is provided, the quote will fail to verify.
 
@@ -154,12 +201,12 @@ This might help give an understanding of how it works.
 2. Run the helper script to generate a mock certifcate authority and a TLS certificate for localhost signed by it.
 
 This requires `openssl` to be installed.
- 
+
 ```
 ./scripts/generate-cert.sh localhost 127.0.0.1
 ```
 
-3. Start a http server to try this out with, on 127.0.01:8000 
+3. Start a http server to try this out with, on 127.0.01:8000
 
 This requires `python3` to be installed.
 
@@ -208,7 +255,7 @@ Since we just wanted to make a single GET request here, we can make this process
 
 ```
 cargo run -- attested-get \
-  --url-path README.md 
+  --url-path README.md
   --tls-ca-certificate ca.crt \
   --allowed-remote-attestation-type none \
   localhost:7000
