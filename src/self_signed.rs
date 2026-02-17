@@ -201,11 +201,12 @@ mod tests {
     use super::*;
     use crate::{
         attestation::{AttestationType, AttestationVerifier},
-        attested_tls::{server_name_from_host, AttestedTlsClient, AttestedTlsServer},
+        attested_tls::{AttestedTlsClient, AttestedTlsServer},
         test_helpers::{generate_certificate_chain, generate_tls_config},
         AttestationGenerator,
     };
     use tokio::net::TcpListener;
+    use tokio_rustls::rustls::pki_types::ServerName;
 
     #[tokio::test]
     async fn self_signed_server_attestation() {
@@ -311,11 +312,9 @@ mod tests {
         let client_tcp_stream = tokio::net::TcpStream::connect(&server_addr).await.unwrap();
 
         // Outer TLS handshake
+        let server_name = ServerName::try_from(server_addr.ip().to_string()).unwrap();
         let tls_stream = outer_connector
-            .connect(
-                server_name_from_host(&server_addr.to_string()).unwrap(),
-                client_tcp_stream,
-            )
+            .connect(server_name, client_tcp_stream)
             .await
             .unwrap();
 

@@ -1,23 +1,14 @@
 //! Helper functions used in tests
-use axum::response::IntoResponse;
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    sync::{Arc, Once},
-};
-use tokio::net::TcpListener;
+use std::{collections::HashMap, net::IpAddr, sync::Arc};
 use tokio_rustls::rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     server::{danger::ClientCertVerifier, WebPkiClientVerifier},
     ClientConfig, RootCertStore, ServerConfig,
 };
-use tracing_subscriber::{fmt, EnvFilter};
-
-static INIT: Once = Once::new();
 
 use crate::{
     attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
-    MEASUREMENT_HEADER,
+    SUPPORTED_ALPN_PROTOCOL_VERSIONS,
 };
 
 /// Helper to generate a self-signed certificate for testing
@@ -46,17 +37,26 @@ pub fn generate_tls_config(
     certificate_chain: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
 ) -> (ServerConfig, ClientConfig) {
-    let server_config = ServerConfig::builder()
+    let supported_protocols: Vec<_> = SUPPORTED_ALPN_PROTOCOL_VERSIONS
+        .into_iter()
+        .map(|p| p.to_vec())
+        .collect();
+
+    let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certificate_chain.clone(), key)
         .expect("Failed to create rustls server config");
 
+    server_config.alpn_protocols = supported_protocols.clone();
+
     let mut root_store = RootCertStore::empty();
     root_store.add(certificate_chain[0].clone()).unwrap();
 
-    let client_config = ClientConfig::builder()
+    let mut client_config = ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
+
+    client_config.alpn_protocols = supported_protocols;
 
     (server_config, client_config)
 }
@@ -67,33 +67,48 @@ pub fn generate_tls_config_with_client_auth(
     alice_key: PrivateKeyDer<'static>,
     bob_certificate_chain: Vec<CertificateDer<'static>>,
     bob_key: PrivateKeyDer<'static>,
-) -> ((ServerConfig, ClientConfig), (ServerConfig, ClientConfig)) {
+) -> (
+    (ServerConfig, ClientConfig),
+    (ServerConfig, ClientConfig),
+) {
+    let supported_protocols: Vec<_> = SUPPORTED_ALPN_PROTOCOL_VERSIONS
+        .into_iter()
+        .map(|p| p.to_vec())
+        .collect();
+
     let (alice_client_verifier, alice_root_store) =
         client_verifier_from_remote_cert(bob_certificate_chain[0].clone());
 
-    let alice_server_config = ServerConfig::builder()
+    let mut alice_server_config = ServerConfig::builder()
         .with_client_cert_verifier(alice_client_verifier)
         .with_single_cert(alice_certificate_chain.clone(), alice_key.clone_key())
         .expect("Failed to create rustls server config");
 
-    let alice_client_config = ClientConfig::builder()
+    alice_server_config.alpn_protocols = supported_protocols.clone();
+
+    let mut alice_client_config = ClientConfig::builder()
         .with_root_certificates(alice_root_store)
         .with_client_auth_cert(alice_certificate_chain.clone(), alice_key)
         .unwrap();
 
+    alice_client_config.alpn_protocols = supported_protocols.clone();
+
     let (bob_client_verifier, bob_root_store) =
         client_verifier_from_remote_cert(alice_certificate_chain[0].clone());
 
-    let bob_server_config = ServerConfig::builder()
+    let mut bob_server_config = ServerConfig::builder()
         .with_client_cert_verifier(bob_client_verifier)
         .with_single_cert(bob_certificate_chain.clone(), bob_key.clone_key())
         .expect("Failed to create rustls server config");
 
-    let bob_client_config = ClientConfig::builder()
+    bob_server_config.alpn_protocols = supported_protocols.clone();
+
+    let mut bob_client_config = ClientConfig::builder()
         .with_root_certificates(bob_root_store)
         .with_client_auth_cert(bob_certificate_chain, bob_key)
         .unwrap();
 
+    bob_client_config.alpn_protocols = supported_protocols;
     (
         (alice_server_config, alice_client_config),
         (bob_server_config, bob_client_config),
@@ -116,29 +131,6 @@ fn client_verifier_from_remote_cert(
     )
 }
 
-/// Simple http server used in tests which returns in the response the measurement header from the
-/// request
-pub async fn example_http_service() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let app = axum::Router::new().route("/", axum::routing::get(get_handler));
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    addr
-}
-
-async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
-    headers
-        .get(MEASUREMENT_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("No measurements")
-        .to_string()
-}
-
 /// All-zero measurment values used in some tests
 pub fn mock_dcap_measurements() -> MultiMeasurements {
     MultiMeasurements::Dcap(HashMap::from([
@@ -148,16 +140,4 @@ pub fn mock_dcap_measurements() -> MultiMeasurements {
         (DcapMeasurementRegister::RTMR2, [0u8; 48]),
         (DcapMeasurementRegister::RTMR3, [0u8; 48]),
     ]))
-}
-
-pub fn init_tracing() {
-    INIT.call_once(|| {
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-        fmt()
-            .with_env_filter(filter)
-            .with_test_writer() // <-- IMPORTANT for tests
-            .try_init()
-            .ok();
-    });
 }

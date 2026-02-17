@@ -20,7 +20,7 @@ pub async fn create_dcap_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, At
 }
 
 /// Verify a DCAP TDX quote, and return the measurement values
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "mock")))]
 pub async fn verify_dcap_attestation(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
@@ -36,7 +36,7 @@ pub async fn verify_dcap_attestation(
 /// Allows the timestamp to be given, making it possible to test with existing attestations
 ///
 /// If collateral is given, it is used instead of contacting PCCS (used in tests)
-async fn verify_dcap_attestation_with_given_timestamp(
+pub async fn verify_dcap_attestation_with_given_timestamp(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
@@ -62,8 +62,7 @@ async fn verify_dcap_attestation_with_given_timestamp(
         }
     };
 
-    let quote_verifier = dcap_qvl::verify::QuoteVerifier::new_prod();
-    let _verified_report = quote_verifier.verify(&input, &collateral, now)?;
+    let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
 
     let measurements = MultiMeasurements::from_dcap_qvl_quote(&quote)?;
 
@@ -74,7 +73,7 @@ async fn verify_dcap_attestation_with_given_timestamp(
     Ok(measurements)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 pub async fn verify_dcap_attestation(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
@@ -89,7 +88,7 @@ pub async fn verify_dcap_attestation(
 }
 
 /// Create a mock quote for testing on non-confidential hardware
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 fn generate_quote(input: [u8; 64]) -> Result<Vec<u8>, QuoteGenerationError> {
     let attestation_key = tdx_quote::SigningKey::random(&mut rand_core::OsRng);
     let provisioning_certification_key = tdx_quote::SigningKey::random(&mut rand_core::OsRng);
@@ -103,7 +102,7 @@ fn generate_quote(input: [u8; 64]) -> Result<Vec<u8>, QuoteGenerationError> {
 }
 
 /// Create a quote
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "mock")))]
 fn generate_quote(input: [u8; 64]) -> Result<Vec<u8>, QuoteGenerationError> {
     configfs_tsm::create_tdx_quote(input)
 }
@@ -128,7 +127,7 @@ pub enum DcapVerificationError {
     SystemTime(#[from] std::time::SystemTimeError),
     #[error("DCAP quote verification: {0}")]
     DcapQvl(#[from] anyhow::Error),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "mock"))]
     #[error("Quote parse: {0}")]
     QuoteParse(#[from] tdx_quote::QuoteParseError),
 }

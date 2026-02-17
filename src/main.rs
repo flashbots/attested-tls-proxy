@@ -10,9 +10,11 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
-    attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
     attested_get::attested_get,
-    attested_tls::{get_tls_cert, TlsCertAndKey},
+    attested_tls::{
+        attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
+        get_tls_cert, TlsCertAndKey,
+    },
     file_server::attested_file_server,
     health_check,
     normalize_pem::normalize_private_key_pem_to_pkcs8,

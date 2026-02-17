@@ -1,19 +1,14 @@
 //! An attested TLS protocol and HTTPS proxy
-pub mod attestation;
 pub mod attested_get;
-pub mod attested_tls;
 pub mod file_server;
 pub mod health_check;
 pub mod normalize_pem;
 pub mod self_signed;
 
-#[cfg(feature = "ws")]
-pub mod websockets;
+pub use attested_tls;
+pub use attested_tls::attestation;
+pub use attested_tls::attestation::AttestationGenerator;
 
-#[cfg(feature = "rpc")]
-pub mod attested_rpc;
-
-pub use attestation::AttestationGenerator;
 mod http_version;
 
 #[cfg(test)]
@@ -33,12 +28,12 @@ use tokio_rustls::rustls::server::VerifierBuilderError;
 use tokio_rustls::rustls::{pki_types::CertificateDer, ClientConfig, ServerConfig};
 use tracing::{debug, error, warn};
 
-use crate::{
+use crate::http_version::{HttpConnection, HttpSender, HttpVersion, ALPN_H2, ALPN_HTTP11};
+use attested_tls::{
     attestation::{
         measurements::MultiMeasurements, AttestationError, AttestationType, AttestationVerifier,
     },
-    attested_tls::{AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey},
-    http_version::{HttpConnection, HttpSender, HttpVersion, ALPN_H2, ALPN_HTTP11},
+    AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey,
 };
 
 /// The header name for giving attestation type
@@ -373,10 +368,8 @@ impl ProxyClient {
         Self::new_with_inner(address, attested_tls_client, &target_name).await
     }
 
-    /// Create a new proxy client with given TLS configuration
-    ///
-    /// This is private as it allows dangerous configuration but is used in tests
-    async fn new_with_inner(
+    /// Create a new proxy client with given [AttestedTlsClient]
+    pub async fn new_with_inner(
         address: impl ToSocketAddrs,
         attested_tls_client: AttestedTlsClient,
         target_name: &str,
@@ -740,13 +733,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use crate::{
-        attestation::measurements::{
-            DcapMeasurementRegister, ExpectedMeasurements, MeasurementPolicy, MeasurementRecord,
-        },
-        attested_tls::get_tls_cert_with_config,
+        attestation::measurements::MeasurementPolicy, attested_tls::get_tls_cert_with_config,
     };
 
     use super::*;
@@ -758,6 +746,7 @@ mod tests {
     // Server has mock DCAP, client has no attestation and no client auth
     #[tokio::test]
     async fn http_proxy_with_server_attestation() {
+        let _ = tracing_subscriber::fmt::try_init();
         let target_addr = example_http_service().await;
 
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
@@ -1189,19 +1178,27 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let measurement_policy = MeasurementPolicy::from_json_bytes(
+            br#"
+            [{
+                "measurement_id": "test",
+                "attestation_type": "dcap-tdx",
+                "measurements": {
+                    "0": { "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+                    "1": { "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+                    "2": { "expected": "010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101" },
+                    "3": { "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+                    "4": { "expected": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" }
+                }
+            }]
+            "#
+            .to_vec(),
+        )
+        .await
+        .unwrap();
+
         let attestation_verifier = AttestationVerifier {
-            measurement_policy: MeasurementPolicy {
-                accepted_measurements: vec![MeasurementRecord {
-                    measurement_id: "test".to_string(),
-                    measurements: ExpectedMeasurements::Dcap(HashMap::from([
-                        (DcapMeasurementRegister::MRTD, vec![[0; 48]]),
-                        (DcapMeasurementRegister::RTMR0, vec![[0; 48]]),
-                        (DcapMeasurementRegister::RTMR1, vec![[1; 48]]), // This differs from the mock measurements
-                        (DcapMeasurementRegister::RTMR2, vec![[0; 48]]),
-                        (DcapMeasurementRegister::RTMR3, vec![[0; 48]]),
-                    ])),
-                }],
-            },
+            measurement_policy,
             pccs_url: None,
             log_dcap_quote: false,
         };

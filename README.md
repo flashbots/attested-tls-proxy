@@ -1,10 +1,11 @@
 
 # `attested-tls-proxy`
 
-This is a reverse HTTP proxy allowing a normal HTTP client to communicate with a normal HTTP server over a remote-attested TLS channel, by tunneling requests through a proxy-client and proxy-server.
+This is a reverse HTTP proxy allowing a normal HTTP client to communicate with a normal HTTP server over a remote-attested TLS channel, by tunneling requests through a proxy-client and proxy-server which handle attestation generation and verification.
 
-This work-in-progress crate is designed to be an alternative to [`cvm-reverse-proxy`](https://github.com/flashbots/cvm-reverse-proxy).
-Unlike `cvm-reverse-proxy`, this uses post-handshake remote-attested TLS, meaning regular CA-signed TLS certificates can be used.
+This is designed to be an alternative to [`cvm-reverse-proxy`](https://github.com/flashbots/cvm-reverse-proxy). Unlike `cvm-reverse-proxy` this uses post-handshake remote-attested TLS, meaning regular CA-signed TLS certificates can be used.
+
+Details of the remote-attested TLS protocol are in [attested-tls/README.md](attested-tls/README.md).  This is provided as a separate crate for other uses than HTTP proxying.
 
 The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for all requests from that proxy-client instance.
 
@@ -29,88 +30,7 @@ Accepted measurements for the remote party can be specified in a JSON file conta
 
 This aims to match the formatting used by `cvm-reverse-proxy`.
 
-These objects have the following fields:
-- `measurement_id` - a name used to describe the entry. For example the name and version of the CVM OS image that these measurements correspond to.
-- `attestation_type` - a string containing one of the attestation types (confidential computing platforms) described below.
-- `measurements` - an object with fields referring to the five measurement registers. Field names are the same as for the measurement headers (see below).
-
-Each measurement register entry supports two mutually exclusive fields:
-- `expected_any` - **(recommended)** an array of hex-encoded measurement values. The attestation is accepted if the actual measurement matches **any** value in the list (OR semantics).
-- `expected` - **(deprecated)** a single hex-encoded measurement value. Retained for backwards compatibility but `expected_any` should be preferred.
-
-Example using `expected_any` (recommended):
-
-```JSON
-[
-    {
-        "measurement_id": "dcap-tdx-example",
-        "attestation_type": "dcap-tdx",
-        "measurements": {
-            "0": {
-                "expected_any": [
-                    "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323"
-                ]
-            },
-            "1": {
-                "expected_any": [
-                    "da6e07866635cb34a9ffcdc26ec6622f289e625c42c39b320f29cdf1dc84390b4f89dd0b073be52ac38ca7b0a0f375bb"
-                ]
-            },
-            "2": {
-                "expected_any": [
-                    "a7157e7c5f932e9babac9209d4527ec9ed837b8e335a931517677fa746db51ee56062e3324e266e3f39ec26a516f4f71"
-                ]
-            },
-            "3": {
-                "expected_any": [
-                    "e63560e50830e22fbc9b06cdce8afe784bf111e4251256cf104050f1347cd4ad9f30da408475066575145da0b098a124"
-                ]
-            },
-            "4": {
-                "expected_any": [
-                    "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-                ]
-            }
-        }
-    }
-]
-```
-
-The `expected_any` field is useful when multiple measurement values should be accepted for a register (e.g., for different versions of the firmware):
-
-```JSON
-{
-    "0": {
-        "expected_any": [
-            "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323",
-            "abc123def456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
-        ]
-    }
-}
-```
-
-<details>
-<summary>Legacy format using deprecated <code>expected</code> field</summary>
-
-The `expected` field is deprecated but still supported for backwards compatibility:
-
-```JSON
-[
-    {
-        "measurement_id": "dcap-tdx-example",
-        "attestation_type": "dcap-tdx",
-        "measurements": {
-            "0": {
-                "expected": "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323"
-            }
-        }
-    }
-]
-```
-
-</details>
-
-The only mandatory field is `attestation_type`. If an attestation type is specified, but no measurements, *any* measurements will be accepted for this attestation type. The measurements can still be checked up-stream by the source client or target service using header injection described below. But it is then up to these external programs to reject unacceptable measurements.
+Details and examples of the measurements file format are [in the attested-tls documentation](attested-tls/README.md#measurements-file).
 
 If a measurements file is not provided, a single allowed attestation type **must** be specified using the `--allowed-remote-attestation-type` option. This may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
 
@@ -144,7 +64,7 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `auto` - detect attestation type (used only when specifying the local attestation type as a command-line argument)
 - `none` - No attestation provided
 - `gcp-tdx` - DCAP TDX on Google Cloud Platform
-- `azure-tdx` - TDX on Azure, with MAA (not yet supported)
+- `azure-tdx` - TDX on Azure, with vTPM attestation 
 - `qemu-tdx` - TDX on Qemu (no cloud platform)
 - `dcap-tdx` - DCAP TDX (platform not specified)
 
@@ -156,42 +76,19 @@ Proxy-client to proxy-server connections use TLS 1.3.
 
 The protocol name `flashbots-ratls/1` must be given in the TLS configuration for ALPN protocol negotiation during the TLS handshake. Future versions of this protocol will use incrementing version numbers, eg: `flashbots-ratls/2`.
 
-### Attestation Exchange
+Immediately after the TLS handshake, an attestation exchange is made. Details of how this works are in the [attested-tls protocol spepcification](attested-tls/README.md#protocol-specification).
 
-Immediately after the TLS handshake, an attestation exchange is made. The server first provides an attestation message (even if it has the `none` attestation type). The client verifies, if verification is successful it also provides an attestation message and otherwise closes the connection. If the server cannot verify the client's attestation, it closes the connection.
-
-Attestation exchange messages are formatted as follows:
-- A 4 byte length prefix - a big endian encoded unsigned 32 bit integer
-- A SCALE (Simple Concatenated Aggregate Little-Endian) encoded [struct](./src/attestation/mod.rs) with the following fields:
-  - `attestation_type` - a string with one of the attestation types (described above) including `none`.
-  - `attestation` - the actual attestation data. In the case of DCAP this is a binary quote report. In the case of `none` this is an empty byte array.
-
-SCALE is used by parity/substrate and was chosen because it is simple and actually matches the formatting used in TDX quotes. So it was already used as a dependency (via the [`dcap-qvl`](https://docs.rs/dcap-qvl) crate).
-
-### Attestation Generation and Verification
-
-Attestation input takes the form of a 64 byte array.
-
-The first 32 bytes are the SHA256 hash of the encoded public key from the TLS leaf certificate of the party providing the attestation, DER encoded exactly as given in the certificate.
-
-The remaining 32 bytes are exported key material ([RFC5705](https://www.rfc-editor.org/rfc/rfc5705)) from the TLS session. This must have the exporter label `EXPORTER-Channel-Binding` and no context data.
-
-In the case of attestation types `dcap-tdx`, `gcp-tdx`, and `qemu-tdx`, a standard DCAP attestation is generated using the `configfs-tsm` linux filesystem interface. This means that this binary must be run with access to `/sys/kernel/config/tsm/report` which on many systems requires sudo.
-
-When verifying DCAP attestations, the Intel PCS is used to retrieve collateral unless a PCCS url is provided via a command line argument. If expired TCB collateral is provided, the quote will fail to verify.
-
-### HTTP reverse proxy
-
-Following a successful attestation exchange, the client can make HTTP requests using HTTP2, and the server will forward them to the target service.
+Following a successful attestation exchange, the client can make HTTP requests, and the server will forward them to the target service.
 
 As described above, the server will inject measurement data into the request headers before forwarding them to the target service, and the client will inject measurement data into the response headers before forwarding them to the source client.
+
+<!-- TODO describe HTTP version negotiation details -->
 
 ## Dependencies and feature flags
 
 The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix `tpm2-tss`.
 
 This feature is enabled by default. For non-azure deployments you can compile without this requirement by specifying `--no-default-features`. But note that this is will disable both generation and verification of azure attestations.
-
 
 ## Trying it out locally (without CVM attestation)
 
@@ -336,4 +233,3 @@ A `docker-compose.yml` is provided to test the full proxy chain:
    openssl s_client -connect localhost:8443 -CAfile certs/ca.crt -servername proxy-server
    # Should show "Verify return code: 0 (ok)"
    ```
-

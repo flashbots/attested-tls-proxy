@@ -128,7 +128,7 @@ impl MultiMeasurements {
         ])))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "mock"))]
     pub fn from_tdx_quote(quote: &tdx_quote::Quote) -> Self {
         Self::Dcap(HashMap::from([
             (DcapMeasurementRegister::MRTD, quote.mrtd()),
@@ -249,7 +249,7 @@ impl MeasurementPolicy {
     }
 
     /// Expect mock measurements used in tests
-    #[cfg(test)]
+    #[cfg(any(test, feature = "mock"))]
     pub fn mock() -> Self {
         Self {
             accepted_measurements: vec![MeasurementRecord {
