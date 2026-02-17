@@ -14,9 +14,6 @@ mod http_version;
 #[cfg(test)]
 mod test_helpers;
 
-#[cfg(all(test, feature = "rpc"))]
-mod attested_rpc_tests;
-
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt};
