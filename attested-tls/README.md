@@ -54,7 +54,7 @@ These are the attestation type names used in the measurements file.
 
 Local attestation types can be automatically detected.
 
-### Measurements File
+## Measurements File
 
 Accepted measurements for the remote party can be specified in a JSON file containing an array of objects, each of which specifies an accepted attestation type and set of measurements.
 

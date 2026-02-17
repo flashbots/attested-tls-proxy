@@ -261,7 +261,6 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -279,7 +278,6 @@ mod tests {
             AttestationVerifier::mock(),
             None,
         )
-        .await
         .unwrap();
 
         let attested_rpc_client = AttestedRpcClient::new_http2(client);
@@ -304,7 +302,6 @@ mod tests {
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
         )
-        .await
         .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -334,7 +331,6 @@ mod tests {
             AttestationVerifier::mock(),
             None,
         )
-        .await
         .unwrap();
 
         let attested_rpc_client = AttestedRpcClient::new_http2(client);
