@@ -11,7 +11,7 @@ repository = "https://github.com/flashbots/attested-tls-proxy"
 keywords = ["attested-TLS", "CVM", "TDX"]
 
 [dependencies]
-attested-tls = { path = "attested-tls" }
+attested-tls = { path = "attested-tls", default-features = false }
 tokio = { version = "1.48.0", features = ["full"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = [
   "ring",
