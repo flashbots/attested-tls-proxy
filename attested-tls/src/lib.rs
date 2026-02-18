@@ -722,6 +722,7 @@ mod tests {
             measurement_policy,
             pccs_url: None,
             log_dcap_quote: false,
+            override_azure_outdated_tcb: false,
         };
 
         let client = AttestedTlsClient::new_with_tls_config(

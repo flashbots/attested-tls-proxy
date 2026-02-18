@@ -9,6 +9,7 @@ use dcap_qvl::{
 };
 use thiserror::Error;
 
+/// FMSPC with which to override TCB level checks on Azure (not used for GCP or other platforms)
 const AZURE_BAD_FMSPC: &str = "90C06F000000";
 
 /// For fetching collateral directly from Intel, if no PCCS is specified
@@ -31,13 +32,14 @@ pub async fn verify_dcap_attestation(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
+    let override_azure_outdated_tcb = false;
     verify_dcap_attestation_with_given_timestamp(
         input,
         expected_input_data,
         pccs_url,
         None,
         now,
-        false,
+        override_azure_outdated_tcb,
     )
     .await
 }
@@ -59,6 +61,7 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
     let ca = quote.ca()?;
     let fmspc = hex::encode_upper(quote.fmspc()?);
 
+    // Override outdated TCB only if we are on Azure and the FMSPC is known to be outdated
     let override_outdated_tcb = override_azure_outdated_tcb && fmspc == AZURE_BAD_FMSPC;
 
     let collateral = match collateral {
@@ -201,6 +204,7 @@ mod tests {
         measurement_policy.check_measurement(&measurements).unwrap();
     }
 
+    // This specifically tests a quote which has outdated TCB level from Azure
     #[tokio::test]
     async fn test_dcap_verify_azure_override() {
         let attestation_bytes: &'static [u8] =

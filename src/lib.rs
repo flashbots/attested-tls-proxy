@@ -1197,6 +1197,7 @@ mod tests {
             measurement_policy,
             pccs_url: None,
             log_dcap_quote: false,
+            override_azure_outdated_tcb: false,
         };
 
         let proxy_client_result = ProxyClient::new_with_tls_config(

@@ -44,6 +44,9 @@ struct Cli {
     /// Log DCAP quotes to folder `quotes/`
     #[arg(long, global = true)]
     log_dcap_quote: bool,
+    /// Overrides Azure outdated TCB info
+    #[arg(long, global = true, env = "OVERRIDE_AZURE_OUTDATED_TCB")]
+    override_azure_outdated_tcb: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -200,6 +203,7 @@ async fn main() -> anyhow::Result<()> {
         measurement_policy,
         pccs_url: cli.pccs_url,
         log_dcap_quote: cli.log_dcap_quote,
+        override_azure_outdated_tcb: cli.override_azure_outdated_tcb,
     };
 
     match cli.command {

@@ -81,6 +81,7 @@ pub async fn verify_azure_attestation(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
+    override_azure_outdated_tcb: bool,
 ) -> Result<super::measurements::MultiMeasurements, MaaError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
