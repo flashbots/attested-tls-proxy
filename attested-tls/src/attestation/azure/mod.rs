@@ -5,6 +5,7 @@ use ak_certificate::{read_ak_certificate_from_tpm, verify_ak_cert_with_azure_roo
 
 use az_tdx_vtpm::{hcl, imds, vtpm};
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
+use dcap_qvl::QuoteCollateralV3;
 use num_bigint::BigUint;
 use openssl::{error::ErrorStack, pkey::PKey};
 use serde::{Deserialize, Serialize};
@@ -92,6 +93,7 @@ pub async fn verify_azure_attestation(
         input,
         expected_input_data,
         pccs_url,
+        None,
         now,
         override_azure_outdated_tcb,
     )
@@ -104,6 +106,7 @@ async fn verify_azure_attestation_with_given_timestamp(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
+    collateral: Option<QuoteCollateralV3>,
     now: u64,
     override_azure_outdated_tcb: bool,
 ) -> Result<super::measurements::MultiMeasurements, MaaError> {
@@ -125,7 +128,7 @@ async fn verify_azure_attestation_with_given_timestamp(
         tdx_quote_bytes,
         expected_tdx_input_data,
         pccs_url,
-        None,
+        collateral,
         now,
         override_azure_outdated_tcb,
     )
@@ -374,10 +377,16 @@ mod tests {
             .await
             .unwrap();
 
+        let collateral_bytes: &'static [u8] =
+            include_bytes!("../../../test-assets/azure-collateral02.json");
+
+        let collateral = serde_json::from_slice(collateral_bytes).unwrap();
+
         let measurements = verify_azure_attestation_with_given_timestamp(
             attestation_bytes.to_vec(),
             [0; 64], // Input data
             None,
+            collateral,
             now,
             false,
         )
