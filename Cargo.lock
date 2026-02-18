@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "attested-tls-proxy"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "attested-tls",
@@ -1165,8 +1165,7 @@ checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 [[package]]
 name = "dcap-qvl"
 version = "0.3.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67e7842b81018f3b991dc65ec0a95ff347332de58478c4ac43459095af00cc89"
+source = "git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override#3657be8326d2fce736cbda4ead37b1615115ab4b"
 dependencies = [
  "anyhow",
  "asn1_der",

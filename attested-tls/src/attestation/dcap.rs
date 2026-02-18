@@ -5,9 +5,13 @@ use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
     collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
+    tcb_info::TcbInfo,
     QuoteCollateralV3,
 };
 use thiserror::Error;
+
+/// FMSPC with which to override TCB level checks on Azure (not used for GCP or other platforms)
+const AZURE_BAD_FMSPC: &str = "90C06F000000";
 
 /// For fetching collateral directly from Intel, if no PCCS is specified
 pub const PCS_URL: &str = "https://api.trustedservices.intel.com";
@@ -29,8 +33,16 @@ pub async fn verify_dcap_attestation(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
-    verify_dcap_attestation_with_given_timestamp(input, expected_input_data, pccs_url, None, now)
-        .await
+    let override_azure_outdated_tcb = false;
+    verify_dcap_attestation_with_given_timestamp(
+        input,
+        expected_input_data,
+        pccs_url,
+        None,
+        now,
+        override_azure_outdated_tcb,
+    )
+    .await
 }
 
 /// Allows the timestamp to be given, making it possible to test with existing attestations
@@ -42,12 +54,29 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
     pccs_url: Option<String>,
     collateral: Option<QuoteCollateralV3>,
     now: u64,
+    override_azure_outdated_tcb: bool,
 ) -> Result<MultiMeasurements, DcapVerificationError> {
     let quote = Quote::parse(&input)?;
     tracing::info!("Verifying DCAP attestation: {quote:?}");
 
     let ca = quote.ca()?;
     let fmspc = hex::encode_upper(quote.fmspc()?);
+
+    // Override outdated TCB only if we are on Azure and the FMSPC is known to be outdated
+    let override_outdated_tcb = if override_azure_outdated_tcb {
+        Some(|mut tcb_info: TcbInfo| {
+            if tcb_info.fmspc == AZURE_BAD_FMSPC {
+                for tcb_level in &mut tcb_info.tcb_levels {
+                    if tcb_level.tcb.sgx_components[7].svn > 3 {
+                        tcb_level.tcb.sgx_components[7].svn = 3
+                    }
+                }
+            }
+            tcb_info
+        })
+    } else {
+        None
+    };
 
     let collateral = match collateral {
         Some(c) => c,
@@ -62,7 +91,8 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
         }
     };
 
-    let _verified_report = dcap_qvl::verify::verify(&input, &collateral, now)?;
+    let _verified_report =
+        dcap_qvl::verify::verify(&input, &collateral, now, override_outdated_tcb)?;
 
     let measurements = MultiMeasurements::from_dcap_qvl_quote(&quote)?;
 
@@ -180,10 +210,42 @@ mod tests {
             None,
             Some(collateral),
             now,
+            false,
         )
         .await
         .unwrap();
 
         measurement_policy.check_measurement(&measurements).unwrap();
+    }
+
+    // This specifically tests a quote which has outdated TCB level from Azure
+    #[tokio::test]
+    async fn test_dcap_verify_azure_override() {
+        let attestation_bytes: &'static [u8] =
+            include_bytes!("../../test-assets/azure_failed_dcap_quote_10.bin");
+
+        // To avoid this test stopping working when the certificate is no longer valid we pass in a
+        // timestamp
+        let now = 1771414156;
+
+        let collateral_bytes: &'static [u8] =
+            include_bytes!("../../test-assets/azure-collateral.json");
+
+        let collateral = serde_json::from_slice(collateral_bytes).unwrap();
+
+        let _measurements = verify_dcap_attestation_with_given_timestamp(
+            attestation_bytes.to_vec(),
+            [
+                210, 20, 43, 100, 53, 152, 235, 95, 174, 43, 200, 82, 157, 215, 154, 85, 139, 41,
+                248, 104, 204, 187, 101, 49, 203, 40, 218, 185, 220, 228, 119, 40, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
+            None,
+            Some(collateral),
+            now,
+            true,
+        )
+        .await
+        .unwrap();
     }
 }

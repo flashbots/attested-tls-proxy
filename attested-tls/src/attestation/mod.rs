@@ -254,6 +254,8 @@ pub struct AttestationVerifier {
     pub pccs_url: Option<String>,
     /// Whether to log quotes to a file
     pub log_dcap_quote: bool,
+    /// Whether to override outdated TCB when on Azure
+    pub override_azure_outdated_tcb: bool,
 }
 
 impl AttestationVerifier {
@@ -263,6 +265,7 @@ impl AttestationVerifier {
             measurement_policy: MeasurementPolicy::expect_none(),
             pccs_url: None,
             log_dcap_quote: false,
+            override_azure_outdated_tcb: false,
         }
     }
 
@@ -273,6 +276,7 @@ impl AttestationVerifier {
             measurement_policy: MeasurementPolicy::mock(),
             pccs_url: None,
             log_dcap_quote: false,
+            override_azure_outdated_tcb: false,
         }
     }
 
@@ -307,6 +311,7 @@ impl AttestationVerifier {
                         attestation_exchange_message.attestation,
                         expected_input_data,
                         self.pccs_url.clone(),
+                        self.override_azure_outdated_tcb,
                     )
                     .await?
                 }

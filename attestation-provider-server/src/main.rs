@@ -93,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
                 measurement_policy,
                 pccs_url: None,
                 log_dcap_quote: cli.log_dcap_quote,
+                override_azure_outdated_tcb: false,
             };
 
             let attestation_message =

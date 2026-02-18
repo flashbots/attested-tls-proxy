@@ -5,13 +5,16 @@ use ak_certificate::{read_ak_certificate_from_tpm, verify_ak_cert_with_azure_roo
 
 use az_tdx_vtpm::{hcl, imds, vtpm};
 use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
+use dcap_qvl::QuoteCollateralV3;
 use num_bigint::BigUint;
 use openssl::{error::ErrorStack, pkey::PKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use x509_parser::prelude::*;
 
-use crate::attestation::{dcap::verify_dcap_attestation, measurements::MultiMeasurements};
+use crate::attestation::{
+    dcap::verify_dcap_attestation_with_given_timestamp, measurements::MultiMeasurements,
+};
 
 /// The attestation evidence payload that gets sent over the channel
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,13 +82,22 @@ pub async fn verify_azure_attestation(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
+    override_azure_outdated_tcb: bool,
 ) -> Result<super::measurements::MultiMeasurements, MaaError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("Time went backwards")
         .as_secs();
 
-    verify_azure_attestation_with_given_timestamp(input, expected_input_data, pccs_url, now).await
+    verify_azure_attestation_with_given_timestamp(
+        input,
+        expected_input_data,
+        pccs_url,
+        None,
+        now,
+        override_azure_outdated_tcb,
+    )
+    .await
 }
 
 /// Do the verification, passing in the current time
@@ -94,7 +106,9 @@ async fn verify_azure_attestation_with_given_timestamp(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
+    collateral: Option<QuoteCollateralV3>,
     now: u64,
+    override_azure_outdated_tcb: bool,
 ) -> Result<super::measurements::MultiMeasurements, MaaError> {
     let attestation_document: AttestationDocument = serde_json::from_slice(&input)?;
     tracing::info!("Attempting to verifiy azure attestation: {attestation_document:?}");
@@ -110,8 +124,15 @@ async fn verify_azure_attestation_with_given_timestamp(
 
     // Do DCAP verification
     let tdx_quote_bytes = BASE64_URL_SAFE.decode(attestation_document.tdx_quote_base64)?;
-    let _dcap_measurements =
-        verify_dcap_attestation(tdx_quote_bytes, expected_tdx_input_data, pccs_url).await?;
+    let _dcap_measurements = verify_dcap_attestation_with_given_timestamp(
+        tdx_quote_bytes,
+        expected_tdx_input_data,
+        pccs_url,
+        collateral,
+        now,
+        override_azure_outdated_tcb,
+    )
+    .await?;
 
     let hcl_ak_pub = hcl_report.ak_pub()?;
 
@@ -332,7 +353,7 @@ mod tests {
 
         // To avoid this test stopping working when the certificate is no longer valid we pass in a
         // timestamp
-        let now = 1764621240;
+        let now = 1771423480;
 
         let measurements_json = br#"
         [{
@@ -356,11 +377,18 @@ mod tests {
             .await
             .unwrap();
 
+        let collateral_bytes: &'static [u8] =
+            include_bytes!("../../../test-assets/azure-collateral02.json");
+
+        let collateral = serde_json::from_slice(collateral_bytes).unwrap();
+
         let measurements = verify_azure_attestation_with_given_timestamp(
             attestation_bytes.to_vec(),
             [0; 64], // Input data
             None,
+            collateral,
             now,
+            false,
         )
         .await
         .unwrap();
