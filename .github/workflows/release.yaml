@@ -121,10 +121,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - name: Download attested-tls-proxy artifact
+        uses: actions/download-artifact@v5
         with:
-          merge-multiple: true
+          name: attested-tls-proxy-${{ env.VERSION }}-x86_64-unknown-linux-gnu-azure
+          path: artifacts
+
+      - name: Download deb package artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: deb-${{ env.VERSION }}-x86_64-unknown-linux-gnu-azure
           path: artifacts
 
       - name: Record artifacts checksums
@@ -182,19 +188,21 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          context: git
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},value=${{ env.VERSION }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
-            type=semver,pattern={{major}},value=${{ env.VERSION }}
+            type=raw,value=${{ env.VERSION }}
+            type=semver,pattern={{version}},value=${{ env.VERSION }},enable=${{ startsWith(env.VERSION, 'v') && contains(env.VERSION, '.') }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }},enable=${{ startsWith(env.VERSION, 'v') && contains(env.VERSION, '.') }}
+            type=semver,pattern={{major}},value=${{ env.VERSION }},enable=${{ startsWith(env.VERSION, 'v') && contains(env.VERSION, '.') }}
             type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ !contains(env.VERSION, '-') }}
+            type=raw,value=latest,enable=${{ startsWith(env.VERSION, 'v') && contains(env.VERSION, '.') && !contains(env.VERSION, '-') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
