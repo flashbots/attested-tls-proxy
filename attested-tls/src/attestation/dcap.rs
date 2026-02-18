@@ -5,6 +5,7 @@ use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
     collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
+    tcb_info::TcbInfo,
     QuoteCollateralV3,
 };
 use thiserror::Error;
@@ -62,7 +63,18 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
     let fmspc = hex::encode_upper(quote.fmspc()?);
 
     // Override outdated TCB only if we are on Azure and the FMSPC is known to be outdated
-    let override_outdated_tcb = override_azure_outdated_tcb && fmspc == AZURE_BAD_FMSPC;
+    let override_outdated_tcb = if override_azure_outdated_tcb && fmspc == AZURE_BAD_FMSPC {
+        Some(|mut tcb_info: TcbInfo| {
+            for tcb_level in &mut tcb_info.tcb_levels {
+                if tcb_level.tcb.sgx_components[7].svn > 3 {
+                    tcb_level.tcb.sgx_components[7].svn = 3
+                }
+            }
+            tcb_info
+        })
+    } else {
+        None
+    };
 
     let collateral = match collateral {
         Some(c) => c,

@@ -88,7 +88,14 @@ pub async fn verify_azure_attestation(
         .expect("Time went backwards")
         .as_secs();
 
-    verify_azure_attestation_with_given_timestamp(input, expected_input_data, pccs_url, now).await
+    verify_azure_attestation_with_given_timestamp(
+        input,
+        expected_input_data,
+        pccs_url,
+        now,
+        override_azure_outdated_tcb,
+    )
+    .await
 }
 
 /// Do the verification, passing in the current time
@@ -98,6 +105,7 @@ async fn verify_azure_attestation_with_given_timestamp(
     expected_input_data: [u8; 64],
     pccs_url: Option<String>,
     now: u64,
+    override_azure_outdated_tcb: bool,
 ) -> Result<super::measurements::MultiMeasurements, MaaError> {
     let attestation_document: AttestationDocument = serde_json::from_slice(&input)?;
     tracing::info!("Attempting to verifiy azure attestation: {attestation_document:?}");
@@ -119,7 +127,7 @@ async fn verify_azure_attestation_with_given_timestamp(
         pccs_url,
         None,
         now,
-        true,
+        override_azure_outdated_tcb,
     )
     .await?;
 
@@ -342,7 +350,7 @@ mod tests {
 
         // To avoid this test stopping working when the certificate is no longer valid we pass in a
         // timestamp
-        let now = 1771416451;
+        let now = 1771423480;
 
         let measurements_json = br#"
         [{
@@ -371,6 +379,7 @@ mod tests {
             [0; 64], // Input data
             None,
             now,
+            false,
         )
         .await
         .unwrap();
