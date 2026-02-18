@@ -63,11 +63,13 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
     let fmspc = hex::encode_upper(quote.fmspc()?);
 
     // Override outdated TCB only if we are on Azure and the FMSPC is known to be outdated
-    let override_outdated_tcb = if override_azure_outdated_tcb && fmspc == AZURE_BAD_FMSPC {
+    let override_outdated_tcb = if override_azure_outdated_tcb {
         Some(|mut tcb_info: TcbInfo| {
-            for tcb_level in &mut tcb_info.tcb_levels {
-                if tcb_level.tcb.sgx_components[7].svn > 3 {
-                    tcb_level.tcb.sgx_components[7].svn = 3
+            if tcb_info.fmspc == AZURE_BAD_FMSPC {
+                for tcb_level in &mut tcb_info.tcb_levels {
+                    if tcb_level.tcb.sgx_components[7].svn > 3 {
+                        tcb_level.tcb.sgx_components[7].svn = 3
+                    }
                 }
             }
             tcb_info
