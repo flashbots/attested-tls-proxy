@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "attested-tls-proxy"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "attested-tls",
