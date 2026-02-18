@@ -4,7 +4,7 @@
 GIT_VER ?= $(shell git describe --tags --always --dirty="-dev")
 GIT_TAG ?= $(shell git describe --tags --abbrev=0)
 
-FEATURES ?=
+FEATURES ?= "azure"
 
 ##@ Help
 
