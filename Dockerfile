@@ -18,10 +18,10 @@ COPY . .
 # On x86_64: build with requested features
 # On ARM: build without azure/TPM features (cross-compilation not supported for TPM libs)
 RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-        cargo build --release --features "$FEATURES"; \
+        cargo build --release --features azure "$FEATURES"; \
     else \
         echo "WARNING: Building on ARM without Azure/TPM features (cross-compilation not supported)" && \
-        cargo build --release --no-default-features; \
+        cargo build --release; \
     fi
 
 # Runtime stage

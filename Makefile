@@ -5,6 +5,7 @@ GIT_VER ?= $(shell git describe --tags --always --dirty="-dev")
 GIT_TAG ?= $(shell git describe --tags --abbrev=0)
 
 FEATURES ?=
+FEATURE_ARGS = $(if $(strip $(FEATURES)),--features "$(FEATURES)")
 
 ##@ Help
 
@@ -71,11 +72,11 @@ endif
 
 .PHONY: build
 build: ## Build (release version)
-	$(BUILD_ENV) cargo build --features "$(FEATURES)" --locked $(if $(BUILD_TARGET),--target $(BUILD_TARGET)) --profile $(BUILD_PROFILE)
+	$(BUILD_ENV) cargo build $(FEATURE_ARGS) --locked $(if $(BUILD_TARGET),--target $(BUILD_TARGET)) --profile $(BUILD_PROFILE)
 
 .PHONY: build-dev
 build-dev: ## Build (debug version)
-	cargo build --features "$(FEATURES)"
+	cargo build $(FEATURE_ARGS)
 
 ##@ Debian Packages
 
@@ -95,11 +96,11 @@ build-deb: install-cargo-deb ## Build Debian package
 .PHONY: lint
 lint: ## Run the linters
 	cargo fmt -- --check
-	cargo clippy --workspace --features "$(FEATURES)" -- -D warnings
+	cargo clippy --workspace $(FEATURE_ARGS) -- -D warnings
 
 .PHONY: test
 test:
-	cargo test --verbose --features "$(FEATURES)"
+	cargo test --verbose $(FEATURE_ARGS)
 
 .PHONY: lt
 lt: lint test ## Run "lint" and "test"
@@ -108,4 +109,4 @@ lt: lint test ## Run "lint" and "test"
 fmt: ## Format the code
 	cargo fmt
 	cargo fix --allow-staged
-	cargo clippy --features "$(FEATURES)" --fix --allow-staged
+	cargo clippy $(FEATURE_ARGS) --fix --allow-staged

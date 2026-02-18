@@ -86,16 +86,15 @@ As described above, the server will inject measurement data into the request hea
 
 ## Dependencies and feature flags
 
-The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix `tpm2-tss`.
+The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix `tpm2-tss`. This dependency is currently not packaged for MacOS, meaning currently it is not possible to compile or run with the `azure` feature on MacOS. 
 
-This feature is enabled by default. For non-azure deployments you can compile without this requirement by specifying `--no-default-features`. But note that this is will disable both generation and verification of azure attestations.
+This feature is disabled by default. Note that without this feature, verification of azure attestations is not possible and azure attestations will be rejected with an error.
 
 ## Trying it out locally (without CVM attestation)
 
 This might help give an understanding of how it works.
 
-1. Make sure you have the tpm2 dependency (see above) - or compile with `--no-default-features`.
-2. Run the helper script to generate a mock certifcate authority and a TLS certificate for localhost signed by it.
+1. Run the helper script to generate a mock certifcate authority and a TLS certificate for localhost signed by it.
 
 This requires `openssl` to be installed.
 
@@ -103,7 +102,7 @@ This requires `openssl` to be installed.
 ./scripts/generate-cert.sh localhost 127.0.0.1
 ```
 
-3. Start a http server to try this out with, on 127.0.01:8000
+2. Start a http server to try this out with, on 127.0.01:8000
 
 This requires `python3` to be installed.
 
@@ -111,7 +110,7 @@ This requires `python3` to be installed.
 python3 -m http.server 8000
 ```
 
-4. Start a proxy-server:
+3. Start a proxy-server:
 
 ```
 cargo run -- server \
@@ -126,7 +125,7 @@ cargo run -- server \
 The final positional argument is the target address - in this case the python server we started in step 3.
 Note that you must specify that you accept 'none' as the remote attestation type.
 
-5. Start a proxy-client:
+4. Start a proxy-client:
 
 ```
 cargo run -- client \
@@ -140,7 +139,7 @@ cargo run -- client \
 The final positional argument is the hostname and port of the proxy-server.
 Note that we specified a CA root of trust. If you use a standard certificate authority you do not need this argument.
 
-6. Make a HTTP request to the proxy-client:
+5. Make a HTTP request to the proxy-client:
 
 ```
 curl 127.0.0.1:6000/README.md

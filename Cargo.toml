@@ -3,7 +3,7 @@ members = [".", "attestation-provider-server", "attested-tls"]
 
 [package]
 name = "attested-tls-proxy"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 license = "MIT"
 description = "An HTTP attested TLS proxy server and client for secure communication with CVM services"
@@ -52,7 +52,7 @@ attested-tls = { path = "attested-tls", features = ["test-helpers", "mock"] }
 jsonrpsee = { version = "0.26.0", features = ["server"] }
 
 [features]
-default = ["azure"]
+default = []
 
 # Adds support for Microsoft Azure attestation generation and verification
 azure = ["attested-tls/azure"]

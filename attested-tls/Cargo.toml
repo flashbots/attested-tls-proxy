@@ -65,7 +65,7 @@ tempfile = "3.23.0"
 tdx-quote = { version = "0.0.5", features = ["mock"] }
 
 [features]
-default = ["azure", "ws", "rpc"]
+default = ["ws", "rpc"]
 
 # Adds support for Microsoft Azure attestation generation and verification
 azure = ["tss-esapi", "az-tdx-vtpm"]
