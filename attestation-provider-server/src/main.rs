@@ -7,8 +7,13 @@ use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::TcpListener;
 use tracing::level_filters::LevelFilter;
 
+const GIT_REV: &str = match option_env!("GIT_REV") {
+    Some(rev) => rev,
+    None => "unknown",
+};
+
 #[derive(Parser, Debug, Clone)]
-#[clap(version, about, long_about = None)]
+#[command(version = GIT_REV, about, long_about = None)]
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,

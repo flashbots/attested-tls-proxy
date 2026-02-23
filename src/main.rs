@@ -21,8 +21,13 @@ use attested_tls_proxy::{
     AttestationGenerator, ProxyClient, ProxyServer,
 };
 
+const GIT_REV: &str = match option_env!("GIT_REV") {
+    Some(rev) => rev,
+    None => "unknown",
+};
+
 #[derive(Parser, Debug, Clone)]
-#[clap(version, about, long_about = None)]
+#[command(version = GIT_REV, about, long_about = None)]
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
