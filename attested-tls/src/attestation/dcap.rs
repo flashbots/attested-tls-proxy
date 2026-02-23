@@ -64,7 +64,7 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
 
     // Override outdated TCB only if we are on Azure and the FMSPC is known to be outdated
     let override_outdated_tcb = if override_azure_outdated_tcb {
-        Some(|mut tcb_info: TcbInfo| {
+        |mut tcb_info: TcbInfo| {
             if tcb_info.fmspc == AZURE_BAD_FMSPC {
                 for tcb_level in &mut tcb_info.tcb_levels {
                     if tcb_level.tcb.sgx_components[7].svn > 3 {
@@ -73,9 +73,9 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
                 }
             }
             tcb_info
-        })
+        }
     } else {
-        None
+        |tcb_info: TcbInfo| tcb_info
     };
 
     let collateral = match collateral {
@@ -91,8 +91,12 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
         }
     };
 
-    let _verified_report =
-        dcap_qvl::verify::verify(&input, &collateral, now, override_outdated_tcb)?;
+    let _verified_report = dcap_qvl::verify::verify_with_tcb_override(
+        &input,
+        &collateral,
+        now,
+        override_outdated_tcb,
+    )?;
 
     let measurements = MultiMeasurements::from_dcap_qvl_quote(&quote)?;
 
