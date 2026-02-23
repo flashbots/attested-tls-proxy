@@ -27,7 +27,7 @@ fn compute_git_rev() -> String {
     };
 
     match git_output(&["rev-parse", "--abbrev-ref", "HEAD"]) {
-        Some(branch) if branch != "HEAD" => format!("{branch}-{sha}"),
+        Some(branch) if branch != "HEAD" => format!("{branch}@{sha}"),
         _ => sha,
     }
 }
