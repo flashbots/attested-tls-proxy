@@ -13,9 +13,10 @@ use attested_tls_proxy::{
     attested_get::attested_get,
     attested_tls::{
         attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
-        get_tls_cert, TlsCertAndKey,
+        TlsCertAndKey,
     },
     file_server::attested_file_server,
+    get_tls_cert,
     health_check,
     normalize_pem::normalize_private_key_pem_to_pkcs8,
     AttestationGenerator, ProxyClient, ProxyServer,
@@ -118,6 +119,9 @@ enum CliCommand {
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
+        /// Enables verification of self-signed TLS certificates
+        #[arg(long)]
+        allow_self_signed: bool,
     },
     /// Serve a filesystem path over an attested channel
     AttestedFileServer {
@@ -152,6 +156,9 @@ enum CliCommand {
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
+        /// Enables verification of self-signed TLS certificates
+        #[arg(long)]
+        allow_self_signed: bool,
     },
 }
 
@@ -328,6 +335,7 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::GetTlsCert {
             server,
             tls_ca_certificate,
+            allow_self_signed,
         } => {
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
@@ -338,7 +346,9 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 None => None,
             };
-            let cert_chain = get_tls_cert(server, attestation_verifier, remote_tls_cert).await?;
+            let cert_chain =
+                get_tls_cert(server, attestation_verifier, remote_tls_cert, allow_self_signed)
+                    .await?;
             println!("{}", certs_to_pem_string(&cert_chain)?);
         }
         CliCommand::AttestedFileServer {
@@ -373,6 +383,7 @@ async fn main() -> anyhow::Result<()> {
             target_addr,
             url_path,
             tls_ca_certificate,
+            allow_self_signed,
         } => {
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
@@ -389,6 +400,7 @@ async fn main() -> anyhow::Result<()> {
                 &url_path.unwrap_or_default(),
                 attestation_verifier,
                 remote_tls_cert,
+                allow_self_signed,
             )
             .await?;
 
