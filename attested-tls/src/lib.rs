@@ -461,8 +461,7 @@ pub async fn get_tls_cert(
         .await
 }
 
-/// Helper for testing getting remote certificate
-#[cfg(any(test, feature = "test-helpers"))]
+/// Retrieve a remote TLS certificate using a preconfigured TLS client config
 pub async fn get_tls_cert_with_config(
     server_name: &str,
     attestation_verifier: AttestationVerifier,
@@ -474,7 +473,9 @@ pub async fn get_tls_cert_with_config(
         attestation_verifier,
         None,
     )?;
-    attested_tls_client.get_tls_cert(server_name).await
+    attested_tls_client
+        .get_tls_cert(&host_to_host_with_port(server_name))
+        .await
 }
 
 /// Given a certificate chain and an exporter (session key material), build the quote input value

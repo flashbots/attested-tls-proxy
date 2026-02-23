@@ -59,6 +59,26 @@ type RequestWithResponseSender = (
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
 );
 
+/// Retrieve the attested remote TLS certificate.
+pub async fn get_tls_cert(
+    server_name: String,
+    attestation_verifier: AttestationVerifier,
+    remote_certificate: Option<CertificateDer<'static>>,
+    allow_self_signed: bool,
+) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
+    if allow_self_signed {
+        let client_tls_config = self_signed::client_tls_config_allow_self_signed()?;
+        attested_tls::get_tls_cert_with_config(
+            &server_name,
+            attestation_verifier,
+            client_tls_config,
+        )
+        .await
+    } else {
+        attested_tls::get_tls_cert(server_name, attestation_verifier, remote_certificate).await
+    }
+}
+
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer {
     /// The underlying attested TLS server
