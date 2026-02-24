@@ -40,6 +40,8 @@ pub const SUPPORTED_ALPN_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"flashbots-ratls/1"];
 
 /// The label used when exporting key material from a TLS session
 pub(crate) const EXPORTER_LABEL: &[u8; 24] = b"EXPORTER-Channel-Binding";
+/// Maximum allowed attestation frame length in bytes (64 KiB)
+const MAX_ATTESTATION_LEN_BYTES: usize = 64 * 1024;
 
 /// TLS Credentials
 pub struct TlsCertAndKey {
@@ -179,18 +181,13 @@ impl AttestedTlsServer {
             .encode();
 
         // Write our attestation to the channel, with length prefix
-        let attestation_length_prefix = length_prefix(&attestation);
+        let attestation_length_prefix = checked_length_prefix(&attestation)?;
         tls_stream.write_all(&attestation_length_prefix).await?;
         tls_stream.write_all(&attestation).await?;
 
         // Now read a length-prefixed attestation from the remote peer
         // In the case of no client attestation this will be zero bytes
-        let mut length_bytes = [0; 4];
-        tls_stream.read_exact(&mut length_bytes).await?;
-        let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
-
-        let mut buf = vec![0; length];
-        tls_stream.read_exact(&mut buf).await?;
+        let buf = read_length_prefixed_attestation(&mut tls_stream).await?;
 
         let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
         let remote_attestation_type = remote_attestation_message.attestation_type;
@@ -371,12 +368,7 @@ impl AttestedTlsClient {
         let remote_input_data = compute_report_input(Some(&remote_cert_chain), exporter)?;
 
         // Read a length prefixed attestation from the proxy-server
-        let mut length_bytes = [0; 4];
-        tls_stream.read_exact(&mut length_bytes).await?;
-        let length: usize = u32::from_be_bytes(length_bytes).try_into()?;
-
-        let mut buf = vec![0; length];
-        tls_stream.read_exact(&mut buf).await?;
+        let buf = read_length_prefixed_attestation(&mut tls_stream).await?;
 
         let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
         let remote_attestation_type = remote_attestation_message.attestation_type;
@@ -399,7 +391,7 @@ impl AttestedTlsClient {
         };
 
         // Send our attestation (or zero bytes) prefixed with length
-        let attestation_length_prefix = length_prefix(&attestation);
+        let attestation_length_prefix = checked_length_prefix(&attestation)?;
         tls_stream.write_all(&attestation_length_prefix).await?;
         tls_stream.write_all(&attestation).await?;
 
@@ -534,12 +526,44 @@ pub enum AttestedTlsError {
     NoCryptoProvider,
     #[error("Only TLS 1.3 is supported")]
     NotTls13,
+    #[error("Attestation length {length} exceeds maximum {max}")]
+    AttestationTooLarge { length: usize, max: usize },
 }
 
 /// Given a byte array, encode its length as a 4 byte big endian u32
 fn length_prefix(input: &[u8]) -> [u8; 4] {
     let len = input.len() as u32;
     len.to_be_bytes()
+}
+
+/// Encode a byte array length as a 4-byte big endian u32 after enforcing the max frame size.
+fn checked_length_prefix(input: &[u8]) -> Result<[u8; 4], AttestedTlsError> {
+    validate_attestation_length(input.len())?;
+    Ok(length_prefix(input))
+}
+
+fn validate_attestation_length(length: usize) -> Result<(), AttestedTlsError> {
+    if length > MAX_ATTESTATION_LEN_BYTES {
+        return Err(AttestedTlsError::AttestationTooLarge {
+            length,
+            max: MAX_ATTESTATION_LEN_BYTES,
+        });
+    }
+    Ok(())
+}
+
+async fn read_length_prefixed_attestation<IO>(io: &mut IO) -> Result<Vec<u8>, AttestedTlsError>
+where
+    IO: AsyncRead + Unpin,
+{
+    let mut length_bytes = [0; 4];
+    io.read_exact(&mut length_bytes).await?;
+    let length = u32::from_be_bytes(length_bytes) as usize;
+    validate_attestation_length(length)?;
+
+    let mut buf = vec![0; length];
+    io.read_exact(&mut buf).await?;
+    Ok(buf)
 }
 
 /// Given a hostname with or without port number, create a TLS [ServerName] with just the host part
@@ -739,6 +763,72 @@ mod tests {
         assert!(matches!(
             client_result.unwrap_err(),
             AttestedTlsError::Attestation(AttestationError::MeasurementsNotAccepted)
+        ));
+    }
+
+    #[test]
+    fn accepts_attestation_length_at_cap() {
+        assert!(validate_attestation_length(MAX_ATTESTATION_LEN_BYTES).is_ok());
+    }
+
+    #[test]
+    fn rejects_attestation_length_over_cap() {
+        let err = validate_attestation_length(MAX_ATTESTATION_LEN_BYTES + 1).unwrap_err();
+        assert!(matches!(
+            err,
+            AttestedTlsError::AttestationTooLarge {
+                length,
+                max: MAX_ATTESTATION_LEN_BYTES
+            } if length == MAX_ATTESTATION_LEN_BYTES + 1
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_outgoing_attestation_frame() {
+        let oversized = vec![0u8; MAX_ATTESTATION_LEN_BYTES + 1];
+        let err = checked_length_prefix(&oversized).unwrap_err();
+        assert!(matches!(
+            err,
+            AttestedTlsError::AttestationTooLarge {
+                length,
+                max: MAX_ATTESTATION_LEN_BYTES
+            } if length == MAX_ATTESTATION_LEN_BYTES + 1
+        ));
+    }
+
+    #[tokio::test]
+    async fn read_length_prefixed_attestation_accepts_length_at_cap() {
+        let (mut tx, mut rx) = tokio::io::duplex(MAX_ATTESTATION_LEN_BYTES + 16);
+        let payload = vec![7u8; MAX_ATTESTATION_LEN_BYTES];
+
+        tokio::spawn(async move {
+            tx.write_all(&(MAX_ATTESTATION_LEN_BYTES as u32).to_be_bytes())
+                .await
+                .unwrap();
+            tx.write_all(&payload).await.unwrap();
+        });
+
+        let buf = read_length_prefixed_attestation(&mut rx).await.unwrap();
+        assert_eq!(buf.len(), MAX_ATTESTATION_LEN_BYTES);
+    }
+
+    #[tokio::test]
+    async fn read_length_prefixed_attestation_rejects_length_over_cap() {
+        let (mut tx, mut rx) = tokio::io::duplex(16);
+
+        tokio::spawn(async move {
+            tx.write_all(&((MAX_ATTESTATION_LEN_BYTES as u32) + 1).to_be_bytes())
+                .await
+                .unwrap();
+        });
+
+        let err = read_length_prefixed_attestation(&mut rx).await.unwrap_err();
+        assert!(matches!(
+            err,
+            AttestedTlsError::AttestationTooLarge {
+                length,
+                max: MAX_ATTESTATION_LEN_BYTES
+            } if length == MAX_ATTESTATION_LEN_BYTES + 1
         ));
     }
 }
