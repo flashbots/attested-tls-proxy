@@ -1,6 +1,7 @@
 //! Measurements and policy for enforcing them when validating a remote attestation
 use crate::attestation::{dcap::DcapVerificationError, AttestationError, AttestationType};
 use std::{collections::HashMap, path::PathBuf};
+use std::{fmt, fmt::Formatter};
 
 use dcap_qvl::quote::Report;
 use http::{header::InvalidHeaderValue, HeaderValue};
@@ -34,11 +35,61 @@ impl TryFrom<u8> for DcapMeasurementRegister {
 }
 
 /// Represents a set of measurements values for one of the supported CVM platforms
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum MultiMeasurements {
     Dcap(HashMap<DcapMeasurementRegister, [u8; 48]>),
     Azure(HashMap<u32, [u8; 32]>),
     NoAttestation,
+}
+
+impl fmt::Debug for MultiMeasurements {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dcap(measurements) => f
+                .debug_tuple("Dcap")
+                .field(&DcapHexDebug(measurements))
+                .finish(),
+            Self::Azure(measurements) => f
+                .debug_tuple("Azure")
+                .field(&AzureHexDebug(measurements))
+                .finish(),
+            Self::NoAttestation => f.write_str("NoAttestation"),
+        }
+    }
+}
+
+/// Used to display measurements as hex
+struct DcapHexDebug<'a>(&'a HashMap<DcapMeasurementRegister, [u8; 48]>);
+
+impl fmt::Debug for DcapHexDebug<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut entries: Vec<_> = self.0.iter().collect();
+        entries.sort_by_key(|(register, _)| (*register).clone() as u8);
+
+        let mut map = f.debug_map();
+        for (register, value) in entries {
+            let hex_value = hex::encode(value);
+            map.entry(register, &hex_value);
+        }
+        map.finish()
+    }
+}
+
+/// Used to display measurements as hex
+struct AzureHexDebug<'a>(&'a HashMap<u32, [u8; 32]>);
+
+impl fmt::Debug for AzureHexDebug<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut entries: Vec<_> = self.0.iter().collect();
+        entries.sort_by_key(|(index, _)| **index);
+
+        let mut map = f.debug_map();
+        for (index, value) in entries {
+            let hex_value = hex::encode(value);
+            map.entry(index, &hex_value);
+        }
+        map.finish()
+    }
 }
 
 /// Expected measurement values for policy enforcement
@@ -748,5 +799,23 @@ mod tests {
             (DcapMeasurementRegister::RTMR0, [0x33u8; 48]),
         ]));
         assert!(policy.check_measurement(&measurements3).is_err());
+    }
+
+    #[test]
+    fn test_multi_measurements_debug_prints_hex() {
+        let dcap = MultiMeasurements::Dcap(HashMap::from([(
+            DcapMeasurementRegister::MRTD,
+            [0xabu8; 48],
+        )]));
+        let dcap_debug = format!("{dcap:?}");
+        assert!(dcap_debug.contains("Dcap"));
+        assert!(dcap_debug.contains("abababab"));
+        assert!(!dcap_debug.contains("[171"));
+
+        let azure = MultiMeasurements::Azure(HashMap::from([(9u32, [0x11u8; 32])]));
+        let azure_debug = format!("{azure:?}");
+        assert!(azure_debug.contains("Azure"));
+        assert!(azure_debug.contains("11111111"));
+        assert!(!azure_debug.contains("[17"));
     }
 }
