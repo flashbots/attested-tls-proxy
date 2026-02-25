@@ -195,7 +195,7 @@ impl ProxyServer {
         target: String,
         client_addr: SocketAddr,
     ) -> Result<(), ProxyError> {
-        debug!("[proxy-server] accepted connection");
+        debug!("[proxy-server] accepted connection with measurements: {measurements:?}");
 
         let http_version = HttpVersion::from_negotiated_protocol_server(&tls_stream);
 
@@ -629,6 +629,7 @@ impl ProxyClient {
         ProxyError,
     > {
         let (tls_stream, measurements, remote_attestation_type) = inner.connect_tcp(target).await?;
+        debug!("[proxy-client] Connected to proxy server with measurements: {measurements:?}");
 
         // The attestation exchange is now complete - setup an HTTP client
         let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
