@@ -137,7 +137,7 @@ async fn verify_azure_attestation_with_given_timestamp(
     let hcl_ak_pub = hcl_report.ak_pub()?;
 
     // Get attestation key from runtime claims
-    let ak_from_claims = {
+    let (ak_from_claims, user_data_input) = {
         let runtime_data_raw = hcl_report.var_data();
         let claims: HclRuntimeClaims = serde_json::from_slice(runtime_data_raw)?;
 
@@ -147,13 +147,25 @@ async fn verify_azure_attestation_with_given_timestamp(
             .find(|k| k.kid == "HCLAkPub")
             .ok_or(MaaError::ClaimsMissingHCLAkPub)?;
 
-        RsaPubKey::from_jwk(ak_jwk)?
+        let user_data = claims
+            .user_data
+            .as_deref()
+            .ok_or(MaaError::ClaimsMissingUserData)?;
+        let user_data_bytes = hex::decode(user_data)?;
+        let user_data_input: [u8; 64] = user_data_bytes
+            .try_into()
+            .map_err(|_| MaaError::ClaimsUserDataBadLength)?;
+
+        (RsaPubKey::from_jwk(ak_jwk)?, user_data_input)
     };
 
     // Check that the TD report input data matches the HCL var data hash
     let td_report: az_tdx_vtpm::tdx::TdReport = hcl_report.try_into()?;
     if var_data_hash != td_report.report_mac.reportdata[..32] {
         return Err(MaaError::TdReportInputMismatch);
+    }
+    if user_data_input != expected_input_data {
+        return Err(MaaError::ClaimsUserDataInputMismatch);
     }
 
     // Verify the vTPM quote
@@ -217,9 +229,8 @@ struct HclRuntimeClaims {
     #[allow(unused)]
     #[serde(rename = "vm-configuration")]
     vm_config: Option<serde_json::Value>,
-    #[allow(unused)]
     #[serde(rename = "user-data")]
-    user_data: Option<serde_json::Value>,
+    user_data: Option<String>,
 }
 
 /// This is only used as a common type to compare public keys with different formats
@@ -295,6 +306,8 @@ pub enum MaaError {
     TdReportInputMismatch,
     #[error("Base64 decode: {0}")]
     Base64(#[from] base64::DecodeError),
+    #[error("Hex decode: {0}")]
+    Hex(#[from] hex::FromHexError),
     #[error("Attestation Key from HCL runtime claims does not match that from HCL report")]
     AkFromClaimsNotEqualAkFromHcl,
     #[error("Attestation Key from HCL runtime claims does not match that from attestation key certificate")]
@@ -317,6 +330,12 @@ pub enum MaaError {
     JwkParse,
     #[error("HCL runtime claims is missing HCLAkPub field")]
     ClaimsMissingHCLAkPub,
+    #[error("HCL runtime claims is missing user-data field")]
+    ClaimsMissingUserData,
+    #[error("HCL runtime claims user-data must decode to exactly 64 bytes")]
+    ClaimsUserDataBadLength,
+    #[error("HCL runtime claims user-data does not match expected report input data")]
+    ClaimsUserDataInputMismatch,
     #[error("DCAP verification: {0}")]
     DcapVerification(#[from] crate::attestation::dcap::DcapVerificationError),
 }
@@ -326,6 +345,18 @@ mod tests {
     use crate::attestation::measurements::MeasurementPolicy;
 
     use super::*;
+
+    fn input_data_from_attestation(attestation_bytes: &[u8]) -> [u8; 64] {
+        let attestation_document: AttestationDocument =
+            serde_json::from_slice(attestation_bytes).unwrap();
+        let hcl_report_bytes = BASE64_URL_SAFE
+            .decode(attestation_document.hcl_report_base64)
+            .unwrap();
+        let hcl_report = hcl::HclReport::new(hcl_report_bytes).unwrap();
+        let claims: HclRuntimeClaims = serde_json::from_slice(hcl_report.var_data()).unwrap();
+        let user_data_hex = claims.user_data.unwrap();
+        hex::decode(user_data_hex).unwrap().try_into().unwrap()
+    }
 
     #[tokio::test]
     async fn test_decode_hcl() {
@@ -394,5 +425,32 @@ mod tests {
         .unwrap();
 
         measurement_policy.check_measurement(&measurements).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_verify_fails_on_input_mismatch() {
+        let attestation_bytes: &'static [u8] =
+            include_bytes!("../../../test-assets/azure-tdx-1764662251380464271");
+        let now = 1771423480;
+
+        let mut expected_input_data = input_data_from_attestation(attestation_bytes);
+        expected_input_data[63] ^= 0x01;
+
+        let collateral_bytes: &'static [u8] =
+            include_bytes!("../../../test-assets/azure-collateral02.json");
+        let collateral = serde_json::from_slice(collateral_bytes).unwrap();
+
+        let err = verify_azure_attestation_with_given_timestamp(
+            attestation_bytes.to_vec(),
+            expected_input_data,
+            None,
+            Some(collateral),
+            now,
+            false,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, MaaError::ClaimsUserDataInputMismatch));
     }
 }
