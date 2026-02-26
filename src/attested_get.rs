@@ -69,10 +69,10 @@ async fn attested_get_with_client(
 mod tests {
     use super::*;
     use crate::{
+        ProxyServer,
         attestation::AttestationType,
         file_server::static_file_server,
         test_helpers::{generate_certificate_chain, generate_tls_config},
-        ProxyServer,
     };
     use tempfile::tempdir;
 

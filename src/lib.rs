@@ -16,8 +16,8 @@ mod test_helpers;
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue};
-use http_body_util::{combinators::BoxBody, BodyExt};
-use hyper::{service::service_fn, Response};
+use http_body_util::{BodyExt, combinators::BoxBody};
+use hyper::{Response, service::service_fn};
 use hyper_util::rt::TokioIo;
 use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
 use thiserror::Error;
@@ -25,15 +25,15 @@ use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::VerifierBuilderError;
-use tokio_rustls::rustls::{pki_types::CertificateDer, ClientConfig, ServerConfig};
+use tokio_rustls::rustls::{ClientConfig, ServerConfig, pki_types::CertificateDer};
 use tracing::{debug, error, warn};
 
-use crate::http_version::{HttpConnection, HttpSender, HttpVersion, ALPN_H2, ALPN_HTTP11};
+use crate::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
 use attested_tls::{
-    attestation::{
-        measurements::MultiMeasurements, AttestationError, AttestationType, AttestationVerifier,
-    },
     AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey,
+    attestation::{
+        AttestationError, AttestationType, AttestationVerifier, measurements::MultiMeasurements,
+    },
 };
 
 /// The header name for giving attestation type

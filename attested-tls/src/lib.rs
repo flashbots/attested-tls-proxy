@@ -11,8 +11,8 @@ pub mod attested_rpc;
 pub mod test_helpers;
 
 use crate::attestation::{
-    measurements::MultiMeasurements, AttestationError, AttestationExchangeMessage,
-    AttestationGenerator, AttestationType, AttestationVerifier,
+    AttestationError, AttestationExchangeMessage, AttestationGenerator, AttestationType,
+    AttestationVerifier, measurements::MultiMeasurements,
 };
 use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
@@ -26,11 +26,11 @@ use x509_parser::parse_x509_certificate;
 use std::num::TryFromIntError;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio_rustls::rustls::RootCertStore;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio_rustls::{
-    rustls::{ClientConfig, ServerConfig},
     TlsAcceptor, TlsConnector,
+    rustls::{ClientConfig, ServerConfig},
 };
 
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility.

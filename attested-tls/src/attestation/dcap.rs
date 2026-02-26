@@ -1,12 +1,12 @@
 //! Data Center Attestation Primitives (DCAP) evidence generation and verification
-use crate::attestation::{measurements::MultiMeasurements, AttestationError};
+use crate::attestation::{AttestationError, measurements::MultiMeasurements};
 
 use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
+    QuoteCollateralV3,
     collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
     tcb_info::TcbInfo,
-    QuoteCollateralV3,
 };
 use thiserror::Error;
 

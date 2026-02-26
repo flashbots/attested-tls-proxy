@@ -1,7 +1,7 @@
 //! Provides an attested JSON RPC client based on [alloy_rpc_client::RpcClient]
 use alloy_rpc_client::RpcClient;
 use alloy_transport_http::{Http, HyperClient};
-use hyper::{client::conn, Request, Response};
+use hyper::{Request, Response, client::conn};
 use hyper_util::rt::TokioIo;
 use std::{
     future::Future,
@@ -13,8 +13,8 @@ use thiserror::Error;
 use tower_service::Service;
 
 use crate::{
-    attestation::{measurements::MultiMeasurements, AttestationType},
     AttestedTlsClient, AttestedTlsError,
+    attestation::{AttestationType, measurements::MultiMeasurements},
 };
 
 /// Supported HTTP versions for RPC connection bootstrapping
@@ -201,15 +201,15 @@ mod tests {
     use hyper::service::service_fn;
     use hyper::{Request, Response, StatusCode};
     use hyper_util::rt::TokioIo;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use tokio::net::TcpListener;
 
     use super::AttestedRpcClient;
 
     use crate::{
+        AttestedTlsClient, AttestedTlsServer,
         attestation::{AttestationGenerator, AttestationType, AttestationVerifier},
         test_helpers::{generate_certificate_chain, generate_tls_config},
-        AttestedTlsClient, AttestedTlsServer,
     };
 
     async fn simple_json_rpc_service(

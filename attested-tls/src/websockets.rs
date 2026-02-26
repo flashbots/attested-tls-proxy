@@ -2,11 +2,11 @@
 use std::{net::SocketAddr, sync::Arc};
 use thiserror::Error;
 use tokio::net::{TcpListener, ToSocketAddrs};
-use tokio_tungstenite::{tungstenite::protocol::WebSocketConfig, WebSocketStream};
+use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::WebSocketConfig};
 
 use crate::{
-    attestation::{measurements::MultiMeasurements, AttestationType},
     AttestedTlsClient, AttestedTlsError, AttestedTlsServer,
+    attestation::{AttestationType, measurements::MultiMeasurements},
 };
 
 /// Websocket message type re-exported for convenience
@@ -118,7 +118,7 @@ pub enum AttestedWsError {
 
 #[cfg(test)]
 mod tests {
-    use futures_util::{sink::SinkExt, StreamExt};
+    use futures_util::{StreamExt, sink::SinkExt};
     use tokio_tungstenite::tungstenite::protocol::Message;
 
     use super::*;

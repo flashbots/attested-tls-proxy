@@ -7,17 +7,17 @@ use std::{
 };
 use tokio::net::TcpListener;
 use tokio_rustls::rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
-    server::{danger::ClientCertVerifier, WebPkiClientVerifier},
     ClientConfig, RootCertStore, ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+    server::{WebPkiClientVerifier, danger::ClientCertVerifier},
 };
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 static INIT: Once = Once::new();
 
 use crate::{
-    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
     MEASUREMENT_HEADER,
+    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
 };
 
 /// Helper to generate a self-signed certificate for testing
