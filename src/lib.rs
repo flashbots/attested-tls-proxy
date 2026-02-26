@@ -66,17 +66,20 @@ pub async fn get_tls_cert(
     remote_certificate: Option<CertificateDer<'static>>,
     allow_self_signed: bool,
 ) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
-    if allow_self_signed {
+    let (cert, measurements) = if allow_self_signed {
         let client_tls_config = self_signed::client_tls_config_allow_self_signed()?;
         attested_tls::get_tls_cert_with_config(
             &server_name,
             attestation_verifier,
             client_tls_config,
         )
-        .await
+        .await?
     } else {
-        attested_tls::get_tls_cert(server_name, attestation_verifier, remote_certificate).await
-    }
+        attested_tls::get_tls_cert(server_name, attestation_verifier, remote_certificate).await?
+    };
+
+    debug!("[get-tls-cert] Connected to proxy server with measurements: {measurements:?}");
+    Ok((cert, measurements))
 }
 
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
