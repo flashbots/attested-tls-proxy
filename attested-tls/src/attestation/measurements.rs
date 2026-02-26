@@ -1,10 +1,10 @@
 //! Measurements and policy for enforcing them when validating a remote attestation
-use crate::attestation::{dcap::DcapVerificationError, AttestationError, AttestationType};
+use crate::attestation::{AttestationError, AttestationType, dcap::DcapVerificationError};
 use std::{collections::HashMap, path::PathBuf};
 use std::{fmt, fmt::Formatter};
 
 use dcap_qvl::quote::Report;
-use http::{header::InvalidHeaderValue, HeaderValue};
+use http::{HeaderValue, header::InvalidHeaderValue};
 use serde::Deserialize;
 use thiserror::Error;
 

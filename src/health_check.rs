@@ -1,5 +1,5 @@
 //! Provides health / version details for an attested proxy server or client
-use axum::{routing::get, Json, Router};
+use axum::{Json, Router, routing::get};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;

@@ -4,7 +4,7 @@ mod nv_index;
 use ak_certificate::{read_ak_certificate_from_tpm, verify_ak_cert_with_azure_roots};
 
 use az_tdx_vtpm::{hcl, imds, vtpm};
-use base64::{engine::general_purpose::URL_SAFE as BASE64_URL_SAFE, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE as BASE64_URL_SAFE};
 use dcap_qvl::QuoteCollateralV3;
 use num_bigint::BigUint;
 use openssl::{error::ErrorStack, pkey::PKey};
@@ -310,7 +310,9 @@ pub enum MaaError {
     Hex(#[from] hex::FromHexError),
     #[error("Attestation Key from HCL runtime claims does not match that from HCL report")]
     AkFromClaimsNotEqualAkFromHcl,
-    #[error("Attestation Key from HCL runtime claims does not match that from attestation key certificate")]
+    #[error(
+        "Attestation Key from HCL runtime claims does not match that from attestation key certificate"
+    )]
     AkFromClaimsNotEqualAkFromCertificate,
     #[error("WebPKI: {0}")]
     WebPki(#[from] webpki::Error),

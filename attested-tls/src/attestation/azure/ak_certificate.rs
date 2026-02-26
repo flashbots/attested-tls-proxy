@@ -1,5 +1,5 @@
 //! Generation and verification of AK certificates from the vTPM
-use crate::attestation::azure::{nv_index, MaaError};
+use crate::attestation::azure::{MaaError, nv_index};
 use once_cell::sync::Lazy;
 use std::time::Duration;
 use tokio_rustls::rustls::pki_types::{CertificateDer, TrustAnchor, UnixTime};

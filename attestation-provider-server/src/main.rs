@@ -1,6 +1,6 @@
 use attestation_provider_server::{attestation_provider_client, attestation_provider_server};
 use attested_tls_proxy::attestation::{
-    measurements::MeasurementPolicy, AttestationGenerator, AttestationVerifier,
+    AttestationGenerator, AttestationVerifier, measurements::MeasurementPolicy,
 };
 use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf};

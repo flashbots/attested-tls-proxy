@@ -10,16 +10,15 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
+    AttestationGenerator, ProxyClient, ProxyServer,
     attested_get::attested_get,
     attested_tls::{
-        attestation::{measurements::MeasurementPolicy, AttestationType, AttestationVerifier},
         TlsCertAndKey,
+        attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy},
     },
     file_server::attested_file_server,
-    get_tls_cert,
-    health_check,
+    get_tls_cert, health_check,
     normalize_pem::normalize_private_key_pem_to_pkcs8,
-    AttestationGenerator, ProxyClient, ProxyServer,
 };
 
 const GIT_REV: &str = match option_env!("GIT_REV") {
@@ -351,9 +350,13 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 None => None,
             };
-            let cert_chain =
-                get_tls_cert(server, attestation_verifier, remote_tls_cert, allow_self_signed)
-                    .await?;
+            let cert_chain = get_tls_cert(
+                server,
+                attestation_verifier,
+                remote_tls_cert,
+                allow_self_signed,
+            )
+            .await?;
             println!("{}", certs_to_pem_string(&cert_chain)?);
         }
         CliCommand::AttestedFileServer {

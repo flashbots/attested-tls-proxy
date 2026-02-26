@@ -1,8 +1,8 @@
 use tss_esapi::{
+    Context,
     handles::NvIndexTpmHandle,
     interface_types::{resource_handles::NvAuth, session_handles::AuthSession},
     tcti_ldr::{DeviceConfig, TctiNameConf},
-    Context,
 };
 
 pub fn get_session_context() -> Result<Context, tss_esapi::Error> {

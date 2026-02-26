@@ -1,14 +1,14 @@
 //! Helper functions used in tests
 use std::{collections::HashMap, net::IpAddr, sync::Arc};
 use tokio_rustls::rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
-    server::{danger::ClientCertVerifier, WebPkiClientVerifier},
     ClientConfig, RootCertStore, ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+    server::{WebPkiClientVerifier, danger::ClientCertVerifier},
 };
 
 use crate::{
-    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
     SUPPORTED_ALPN_PROTOCOL_VERSIONS,
+    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
 };
 
 /// Helper to generate a self-signed certificate for testing
@@ -67,10 +67,7 @@ pub fn generate_tls_config_with_client_auth(
     alice_key: PrivateKeyDer<'static>,
     bob_certificate_chain: Vec<CertificateDer<'static>>,
     bob_key: PrivateKeyDer<'static>,
-) -> (
-    (ServerConfig, ClientConfig),
-    (ServerConfig, ClientConfig),
-) {
+) -> ((ServerConfig, ClientConfig), (ServerConfig, ClientConfig)) {
     let supported_protocols: Vec<_> = SUPPORTED_ALPN_PROTOCOL_VERSIONS
         .into_iter()
         .map(|p| p.to_vec())
