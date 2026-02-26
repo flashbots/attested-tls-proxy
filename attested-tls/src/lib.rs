@@ -419,8 +419,9 @@ impl AttestedTlsClient {
     pub async fn get_tls_cert(
         &self,
         server_name: &str,
-    ) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
-        let (mut tls_stream, _, _) = self.connect_tcp(server_name).await?;
+    ) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
+        let (mut tls_stream, measurements, _attestation_type) =
+            self.connect_tcp(server_name).await?;
 
         let (_io, server_connection) = tls_stream.get_ref();
 
@@ -431,7 +432,7 @@ impl AttestedTlsClient {
 
         tls_stream.shutdown().await?;
 
-        Ok(remote_cert_chain)
+        Ok((remote_cert_chain, measurements))
     }
 }
 
@@ -440,7 +441,7 @@ pub async fn get_tls_cert(
     server_name: String,
     attestation_verifier: AttestationVerifier,
     remote_certificate: Option<CertificateDer<'static>>,
-) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
+) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
     tracing::debug!("Getting remote TLS cert");
     let attested_tls_client = AttestedTlsClient::new(
         None,
@@ -458,7 +459,7 @@ pub async fn get_tls_cert_with_config(
     server_name: &str,
     attestation_verifier: AttestationVerifier,
     client_config: ClientConfig,
-) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
+) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
     let attested_tls_client = AttestedTlsClient::new_with_tls_config(
         client_config,
         AttestationGenerator::with_no_attestation(),

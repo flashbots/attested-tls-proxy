@@ -299,6 +299,18 @@ impl MeasurementPolicy {
         }
     }
 
+    /// Accept any TDX attestation regardless of platform
+    pub fn tdx() -> Self {
+        Self {
+            accepted_measurements: vec![
+                MeasurementRecord::allow_any_measurement(AttestationType::DcapTdx),
+                MeasurementRecord::allow_any_measurement(AttestationType::QemuTdx),
+                MeasurementRecord::allow_any_measurement(AttestationType::GcpTdx),
+                MeasurementRecord::allow_any_measurement(AttestationType::AzureTdx),
+            ],
+        }
+    }
+
     /// Expect mock measurements used in tests
     #[cfg(any(test, feature = "mock"))]
     pub fn mock() -> Self {
