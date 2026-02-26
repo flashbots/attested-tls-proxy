@@ -1,4 +1,5 @@
 use anyhow::{anyhow, ensure};
+use attested_tls::attestation::measurements::MultiMeasurements;
 use clap::{Parser, Subcommand};
 use std::{
     fs::File,
@@ -126,6 +127,9 @@ enum CliCommand {
         /// Enables verification of self-signed TLS certificates
         #[arg(long)]
         allow_self_signed: bool,
+        /// Filename to write measurements as JSON to
+        #[arg(long)]
+        out_measurements: Option<PathBuf>,
     },
     /// Serve a filesystem path over an attested channel
     AttestedFileServer {
@@ -201,12 +205,22 @@ async fn main() -> anyhow::Result<()> {
             MeasurementPolicy::from_file_or_url(server_measurements).await?
         }
         None => {
-            let allowed_server_attestation_type: AttestationType = serde_json::from_value(
-                serde_json::Value::String(cli.allowed_remote_attestation_type.ok_or(anyhow!(
+            match cli
+                .allowed_remote_attestation_type
+                .ok_or(anyhow!(
                     "Either a measurements file or an allowed attestation type must be provided"
-                ))?),
-            )?;
-            MeasurementPolicy::single_attestation_type(allowed_server_attestation_type)
+                ))?
+                .to_lowercase()
+                .as_str()
+            {
+                "tdx" => MeasurementPolicy::tdx(),
+                attestation_type => {
+                    let allowed_server_attestation_type: AttestationType = serde_json::from_value(
+                        serde_json::Value::String(attestation_type.to_string()),
+                    )?;
+                    MeasurementPolicy::single_attestation_type(allowed_server_attestation_type)
+                }
+            }
         }
     };
 
@@ -340,6 +354,7 @@ async fn main() -> anyhow::Result<()> {
             server,
             tls_ca_certificate,
             allow_self_signed,
+            out_measurements,
         } => {
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
@@ -350,13 +365,24 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 None => None,
             };
-            let cert_chain = get_tls_cert(
+            let (cert_chain, measurements) = get_tls_cert(
                 server,
                 attestation_verifier,
                 remote_tls_cert,
                 allow_self_signed,
             )
             .await?;
+
+            // If the user chose to write measurements to a file as JSON
+            if let Some(path_to_write_measurements) = out_measurements {
+                std::fs::write(
+                    path_to_write_measurements,
+                    measurements
+                        .unwrap_or(MultiMeasurements::NoAttestation)
+                        .to_header_format()?
+                        .as_bytes(),
+                )?;
+            }
             println!("{}", certs_to_pem_string(&cert_chain)?);
         }
         CliCommand::AttestedFileServer {

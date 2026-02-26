@@ -65,7 +65,7 @@ pub async fn get_tls_cert(
     attestation_verifier: AttestationVerifier,
     remote_certificate: Option<CertificateDer<'static>>,
     allow_self_signed: bool,
-) -> Result<Vec<CertificateDer<'static>>, AttestedTlsError> {
+) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
     if allow_self_signed {
         let client_tls_config = self_signed::client_tls_config_allow_self_signed()?;
         attested_tls::get_tls_cert_with_config(
@@ -1114,7 +1114,7 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
-        let retrieved_chain = get_tls_cert_with_config(
+        let (retrieved_chain, _measurements) = get_tls_cert_with_config(
             &proxy_server_addr.to_string(),
             AttestationVerifier::mock(),
             client_config,
