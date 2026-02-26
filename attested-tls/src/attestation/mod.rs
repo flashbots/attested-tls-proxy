@@ -4,6 +4,7 @@
 pub mod azure;
 pub mod dcap;
 pub mod measurements;
+pub(crate) mod pccs;
 
 use measurements::MultiMeasurements;
 use parity_scale_codec::{Decode, Encode};
@@ -16,7 +17,9 @@ use std::{
 
 use thiserror::Error;
 
-use crate::attestation::{dcap::DcapVerificationError, measurements::MeasurementPolicy};
+use crate::attestation::{
+    dcap::DcapVerificationError, measurements::MeasurementPolicy, pccs::Pccs,
+};
 
 const GCP_METADATA_API: &str =
     "http://metadata.google.internal/computeMetadata/v1/project/project-id";
@@ -250,24 +253,36 @@ impl AttestationGenerator {
 pub struct AttestationVerifier {
     /// The measurement policy with accepted values and attestation types
     pub measurement_policy: MeasurementPolicy,
-    /// If this is empty, anything will be accepted - but measurements are always injected into HTTP
-    /// headers, so that they can be verified upstream
-    /// A PCCS service to use - defaults to Intel PCS
-    pub pccs_url: Option<String>,
     /// Whether to log quotes to a file
     pub log_dcap_quote: bool,
     /// Whether to override outdated TCB when on Azure
     pub override_azure_outdated_tcb: bool,
+    /// Internal cache for collateral
+    internal_pccs: Pccs,
 }
 
 impl AttestationVerifier {
+    pub fn new(
+        measurement_policy: MeasurementPolicy,
+        pccs_url: Option<String>,
+        log_dcap_quote: bool,
+        override_azure_outdated_tcb: bool,
+    ) -> Self {
+        Self {
+            measurement_policy,
+            log_dcap_quote,
+            override_azure_outdated_tcb,
+            internal_pccs: Pccs::new(pccs_url),
+        }
+    }
+
     /// Create an [AttestationVerifier] which will allow no remote attestation
     pub fn expect_none() -> Self {
         Self {
             measurement_policy: MeasurementPolicy::expect_none(),
-            pccs_url: None,
             log_dcap_quote: false,
             override_azure_outdated_tcb: false,
+            internal_pccs: Pccs::new(None),
         }
     }
 
@@ -276,9 +291,9 @@ impl AttestationVerifier {
     pub fn mock() -> Self {
         Self {
             measurement_policy: MeasurementPolicy::mock(),
-            pccs_url: None,
             log_dcap_quote: false,
             override_azure_outdated_tcb: false,
+            internal_pccs: Pccs::new(None),
         }
     }
 
@@ -312,7 +327,7 @@ impl AttestationVerifier {
                     azure::verify_azure_attestation(
                         attestation_exchange_message.attestation,
                         expected_input_data,
-                        self.pccs_url.clone(),
+                        self.internal_pccs.clone(),
                         self.override_azure_outdated_tcb,
                     )
                     .await?
@@ -326,7 +341,7 @@ impl AttestationVerifier {
                 dcap::verify_dcap_attestation(
                     attestation_exchange_message.attestation,
                     expected_input_data,
-                    self.pccs_url.clone(),
+                    self.internal_pccs.clone(),
                 )
                 .await?
             }
