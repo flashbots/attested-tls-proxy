@@ -1217,12 +1217,7 @@ mod tests {
         .await
         .unwrap();
 
-        let attestation_verifier = AttestationVerifier {
-            measurement_policy,
-            pccs_url: None,
-            log_dcap_quote: false,
-            override_azure_outdated_tcb: false,
-        };
+        let attestation_verifier = AttestationVerifier::new(measurement_policy, None, false, false);
 
         let proxy_client_result = ProxyClient::new_with_tls_config(
             client_config,
