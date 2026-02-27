@@ -76,7 +76,12 @@ impl Pccs {
             }
         }
 
-        upsert_cache_entry(&mut cache, cache_key.clone(), collateral.clone(), next_update);
+        upsert_cache_entry(
+            &mut cache,
+            cache_key.clone(),
+            collateral.clone(),
+            next_update,
+        );
         drop(cache);
         self.ensure_refresh_task(&cache_key).await;
         Ok((collateral, true))
@@ -95,7 +100,12 @@ impl Pccs {
 
         {
             let mut cache = self.cache.write().await;
-            upsert_cache_entry(&mut cache, cache_key.clone(), collateral.clone(), next_update);
+            upsert_cache_entry(
+                &mut cache,
+                cache_key.clone(),
+                collateral.clone(),
+                next_update,
+            );
         }
         self.ensure_refresh_task(&cache_key).await;
         Ok(collateral)
@@ -144,17 +154,17 @@ async fn fetch_collateral(
     ca: &'static str,
 ) -> Result<QuoteCollateralV3, DcapVerificationError> {
     get_collateral_for_fmspc(
-        pccs_url,
-        fmspc,
-        ca,
-        false, // Indicates not SGX
+        pccs_url, fmspc, ca, false, // Indicates not SGX
     )
     .await
     .map_err(Into::into)
 }
 
 /// Extracts the earliest next update timestamp from collateral metadata
-fn extract_next_update(collateral: &QuoteCollateralV3, now: i64) -> Result<i64, DcapVerificationError> {
+fn extract_next_update(
+    collateral: &QuoteCollateralV3,
+    now: i64,
+) -> Result<i64, DcapVerificationError> {
     let tcb_info: TcbInfo = serde_json::from_str(&collateral.tcb_info).map_err(|e| {
         DcapVerificationError::PccsCollateralParse(format!("Failed to parse TCB info JSON: {e}"))
     })?;
@@ -246,7 +256,10 @@ async fn refresh_loop(
     key: PccsInput,
 ) {
     let Some(ca_static) = ca_as_static(&key.ca) else {
-        tracing::warn!(ca = key.ca, "Unsupported collateral CA value, refresh loop stopping");
+        tracing::warn!(
+            ca = key.ca,
+            "Unsupported collateral CA value, refresh loop stopping"
+        );
         return;
     };
 
@@ -327,4 +340,170 @@ struct CacheEntry {
 #[serde(rename_all = "camelCase")]
 struct QeIdentityNextUpdate {
     next_update: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::{
+        Json, Router,
+        extract::{Query, State},
+        response::IntoResponse,
+        routing::get,
+    };
+    use dcap_qvl::QuoteCollateralV3;
+    use serde_json::{Value, json};
+    use std::{collections::HashMap as StdHashMap, net::SocketAddr, sync::Arc};
+    use tokio::{net::TcpListener, task::JoinHandle};
+
+    #[derive(Clone)]
+    struct MockPcsConfig {
+        fmspc: String,
+        ca: &'static str,
+        tcb_next_update: String,
+        qe_next_update: String,
+    }
+
+    struct MockPcsServer {
+        base_url: String,
+        _task: JoinHandle<()>,
+    }
+
+    impl Drop for MockPcsServer {
+        fn drop(&mut self) {
+            self._task.abort();
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockPcsState {
+        fmspc: String,
+        ca: String,
+        tcb_response: Value,
+        qe_response: Value,
+        pck_crl: Vec<u8>,
+        pck_crl_issuer_chain: String,
+        tcb_issuer_chain: String,
+        qe_issuer_chain: String,
+        root_ca_crl_hex: String,
+    }
+
+    async fn spawn_mock_pcs_server(config: MockPcsConfig) -> MockPcsServer {
+        let base_collateral: QuoteCollateralV3 = serde_json::from_slice(include_bytes!(
+            "../../test-assets/dcap-quote-collateral-00.json"
+        ))
+        .unwrap();
+
+        let mut tcb_info: Value = serde_json::from_str(&base_collateral.tcb_info).unwrap();
+        tcb_info["nextUpdate"] = Value::String(config.tcb_next_update.clone());
+
+        let mut qe_identity: Value = serde_json::from_str(&base_collateral.qe_identity).unwrap();
+        qe_identity["nextUpdate"] = Value::String(config.qe_next_update.clone());
+
+        let state = Arc::new(MockPcsState {
+            fmspc: config.fmspc,
+            ca: config.ca.to_string(),
+            tcb_response: json!({
+                "tcbInfo": tcb_info,
+                "signature": hex::encode(&base_collateral.tcb_info_signature),
+            }),
+            qe_response: json!({
+                "enclaveIdentity": qe_identity,
+                "signature": hex::encode(&base_collateral.qe_identity_signature),
+            }),
+            pck_crl: base_collateral.pck_crl,
+            pck_crl_issuer_chain: "mock-pck-crl-issuer-chain".to_string(),
+            tcb_issuer_chain: "mock-tcb-info-issuer-chain".to_string(),
+            qe_issuer_chain: "mock-qe-issuer-chain".to_string(),
+            root_ca_crl_hex: hex::encode(base_collateral.root_ca_crl),
+        });
+
+        let app = Router::new()
+            .route("/sgx/certification/v4/pckcrl", get(mock_pck_crl_handler))
+            .route("/tdx/certification/v4/tcb", get(mock_tcb_handler))
+            .route(
+                "/tdx/certification/v4/qe/identity",
+                get(mock_qe_identity_handler),
+            )
+            .route(
+                "/sgx/certification/v4/rootcacrl",
+                get(mock_root_ca_crl_handler),
+            )
+            .with_state(state);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        MockPcsServer {
+            base_url: format!("http://{addr}"),
+            _task: task,
+        }
+    }
+
+    async fn mock_pck_crl_handler(
+        State(state): State<Arc<MockPcsState>>,
+        Query(params): Query<StdHashMap<String, String>>,
+    ) -> impl IntoResponse {
+        assert_eq!(params.get("ca"), Some(&state.ca));
+        assert_eq!(params.get("encoding"), Some(&"der".to_string()));
+        (
+            [(
+                "SGX-PCK-CRL-Issuer-Chain",
+                state.pck_crl_issuer_chain.clone(),
+            )],
+            state.pck_crl.clone(),
+        )
+    }
+
+    async fn mock_tcb_handler(
+        State(state): State<Arc<MockPcsState>>,
+        Query(params): Query<StdHashMap<String, String>>,
+    ) -> impl IntoResponse {
+        assert_eq!(params.get("fmspc"), Some(&state.fmspc));
+        (
+            [("SGX-TCB-Info-Issuer-Chain", state.tcb_issuer_chain.clone())],
+            Json(state.tcb_response.clone()),
+        )
+    }
+
+    async fn mock_qe_identity_handler(
+        State(state): State<Arc<MockPcsState>>,
+        Query(params): Query<StdHashMap<String, String>>,
+    ) -> impl IntoResponse {
+        assert_eq!(params.get("update"), Some(&"standard".to_string()));
+        (
+            [(
+                "SGX-Enclave-Identity-Issuer-Chain",
+                state.qe_issuer_chain.clone(),
+            )],
+            Json(state.qe_response.clone()),
+        )
+    }
+
+    async fn mock_root_ca_crl_handler(State(state): State<Arc<MockPcsState>>) -> impl IntoResponse {
+        state.root_ca_crl_hex.clone()
+    }
+
+    #[tokio::test]
+    async fn test_mock_pcs_server_helper_with_get_collateral() {
+        let mock = spawn_mock_pcs_server(MockPcsConfig {
+            fmspc: "00806F050000".to_string(),
+            ca: "processor",
+            tcb_next_update: "2999-01-01T00:00:00Z".to_string(),
+            qe_next_update: "2999-01-01T00:00:00Z".to_string(),
+        })
+        .await;
+
+        let pccs = Pccs::new(Some(mock.base_url.clone()));
+        let now = 1_700_000_000_i64;
+        let (_, is_fresh) = pccs
+            .get_collateral("00806F050000".to_string(), "processor", now)
+            .await
+            .unwrap();
+        assert!(is_fresh);
+    }
 }

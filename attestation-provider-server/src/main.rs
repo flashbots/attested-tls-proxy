@@ -94,12 +94,8 @@ async fn main() -> anyhow::Result<()> {
                 None => MeasurementPolicy::accept_anything(),
             };
 
-            let attestation_verifier = AttestationVerifier {
-                measurement_policy,
-                pccs_url: None,
-                log_dcap_quote: cli.log_dcap_quote,
-                override_azure_outdated_tcb: false,
-            };
+            let attestation_verifier =
+                AttestationVerifier::new(measurement_policy, None, cli.log_dcap_quote, false);
 
             let attestation_message =
                 attestation_provider_client(server_addr, attestation_verifier).await?;

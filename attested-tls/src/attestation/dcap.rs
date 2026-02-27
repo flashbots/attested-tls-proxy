@@ -60,9 +60,7 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
     let quote = Quote::parse(&input)?;
     tracing::info!("Verifying DCAP attestation: {quote:?}");
     let now_i64 = i64::try_from(now).map_err(|_| {
-        DcapVerificationError::PccsCollateralParse(format!(
-            "Timestamp {now} exceeds i64 range"
-        ))
+        DcapVerificationError::PccsCollateralParse(format!("Timestamp {now} exceeds i64 range"))
     })?;
 
     let ca = quote.ca()?;
@@ -117,9 +115,7 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
                         return Err(e.into());
                     }
                     tracing::warn!("Verification failed - trying with fresh collateral: {e}");
-                    let collateral = pccs
-                        .refresh_collateral(fmspc.clone(), ca, now_i64)
-                        .await?;
+                    let collateral = pccs.refresh_collateral(fmspc.clone(), ca, now_i64).await?;
                     let verified_report = dcap_qvl::verify::verify_with_tcb_override(
                         &input,
                         &collateral,

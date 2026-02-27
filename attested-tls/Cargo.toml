@@ -60,6 +60,7 @@ rcgen = { version = "0.14.5", optional = true }
 tdx-quote = { version = "0.0.5", features = ["mock"], optional = true }
 
 [dev-dependencies]
+axum = "0.8.6"
 rcgen = "0.14.5"
 tempfile = "3.23.0"
 tdx-quote = { version = "0.0.5", features = ["mock"] }
