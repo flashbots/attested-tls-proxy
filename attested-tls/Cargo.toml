@@ -34,7 +34,7 @@ parity-scale-codec = "3.7.5"
 openssl = "0.10.75"
 num-bigint = "0.4.6"
 webpki = { package = "rustls-webpki", version = "0.103.8" }
-time = { version = "0.3.44", features = ["parsing"] }
+time = { version = "0.3.44", features = ["parsing", "formatting"] }
 once_cell = "1.21.3"
 
 # Used for azure vTPM attestation support

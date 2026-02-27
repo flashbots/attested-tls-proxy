@@ -70,10 +70,10 @@ impl Pccs {
         let next_update = extract_next_update(&collateral, now)?;
 
         let mut cache = self.cache.write().await;
-        if let Some(existing) = cache.get(&cache_key) {
-            if now < existing.next_update {
-                return Ok((existing.collateral.clone(), false));
-            }
+        if let Some(existing) = cache.get(&cache_key)
+            && now < existing.next_update
+        {
+            return Ok((existing.collateral.clone(), false));
         }
 
         upsert_cache_entry(
@@ -354,8 +354,15 @@ mod tests {
     };
     use dcap_qvl::QuoteCollateralV3;
     use serde_json::{Value, json};
-    use std::{collections::HashMap as StdHashMap, net::SocketAddr, sync::Arc};
-    use tokio::{net::TcpListener, task::JoinHandle};
+    use std::{
+        collections::HashMap as StdHashMap,
+        net::SocketAddr,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    use tokio::{net::TcpListener, task::JoinHandle, time::Duration};
 
     #[derive(Clone)]
     struct MockPcsConfig {
@@ -363,11 +370,15 @@ mod tests {
         ca: &'static str,
         tcb_next_update: String,
         qe_next_update: String,
+        refreshed_tcb_next_update: Option<String>,
+        refreshed_qe_next_update: Option<String>,
     }
 
     struct MockPcsServer {
         base_url: String,
         _task: JoinHandle<()>,
+        tcb_calls: Arc<AtomicUsize>,
+        qe_calls: Arc<AtomicUsize>,
     }
 
     impl Drop for MockPcsServer {
@@ -376,17 +387,35 @@ mod tests {
         }
     }
 
+    impl MockPcsServer {
+        fn tcb_call_count(&self) -> usize {
+            self.tcb_calls.load(Ordering::SeqCst)
+        }
+
+        fn qe_call_count(&self) -> usize {
+            self.qe_calls.load(Ordering::SeqCst)
+        }
+    }
+
     #[derive(Clone)]
     struct MockPcsState {
         fmspc: String,
         ca: String,
-        tcb_response: Value,
-        qe_response: Value,
+        base_tcb_info: Value,
+        base_qe_identity: Value,
+        tcb_signature_hex: String,
+        qe_signature_hex: String,
+        tcb_next_update: String,
+        qe_next_update: String,
+        refreshed_tcb_next_update: Option<String>,
+        refreshed_qe_next_update: Option<String>,
         pck_crl: Vec<u8>,
         pck_crl_issuer_chain: String,
         tcb_issuer_chain: String,
         qe_issuer_chain: String,
         root_ca_crl_hex: String,
+        tcb_calls: Arc<AtomicUsize>,
+        qe_calls: Arc<AtomicUsize>,
     }
 
     async fn spawn_mock_pcs_server(config: MockPcsConfig) -> MockPcsServer {
@@ -401,22 +430,26 @@ mod tests {
         let mut qe_identity: Value = serde_json::from_str(&base_collateral.qe_identity).unwrap();
         qe_identity["nextUpdate"] = Value::String(config.qe_next_update.clone());
 
+        let tcb_calls = Arc::new(AtomicUsize::new(0));
+        let qe_calls = Arc::new(AtomicUsize::new(0));
         let state = Arc::new(MockPcsState {
             fmspc: config.fmspc,
             ca: config.ca.to_string(),
-            tcb_response: json!({
-                "tcbInfo": tcb_info,
-                "signature": hex::encode(&base_collateral.tcb_info_signature),
-            }),
-            qe_response: json!({
-                "enclaveIdentity": qe_identity,
-                "signature": hex::encode(&base_collateral.qe_identity_signature),
-            }),
+            base_tcb_info: tcb_info,
+            base_qe_identity: qe_identity,
+            tcb_signature_hex: hex::encode(&base_collateral.tcb_info_signature),
+            qe_signature_hex: hex::encode(&base_collateral.qe_identity_signature),
+            tcb_next_update: config.tcb_next_update,
+            qe_next_update: config.qe_next_update,
+            refreshed_tcb_next_update: config.refreshed_tcb_next_update,
+            refreshed_qe_next_update: config.refreshed_qe_next_update,
             pck_crl: base_collateral.pck_crl,
             pck_crl_issuer_chain: "mock-pck-crl-issuer-chain".to_string(),
             tcb_issuer_chain: "mock-tcb-info-issuer-chain".to_string(),
             qe_issuer_chain: "mock-qe-issuer-chain".to_string(),
             root_ca_crl_hex: hex::encode(base_collateral.root_ca_crl),
+            tcb_calls: tcb_calls.clone(),
+            qe_calls: qe_calls.clone(),
         });
 
         let app = Router::new()
@@ -441,6 +474,8 @@ mod tests {
         MockPcsServer {
             base_url: format!("http://{addr}"),
             _task: task,
+            tcb_calls,
+            qe_calls,
         }
     }
 
@@ -464,9 +499,23 @@ mod tests {
         Query(params): Query<StdHashMap<String, String>>,
     ) -> impl IntoResponse {
         assert_eq!(params.get("fmspc"), Some(&state.fmspc));
+        let call_number = state.tcb_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut tcb_info = state.base_tcb_info.clone();
+        let next_update = if call_number == 1 {
+            state.tcb_next_update.clone()
+        } else {
+            state
+                .refreshed_tcb_next_update
+                .clone()
+                .unwrap_or_else(|| state.tcb_next_update.clone())
+        };
+        tcb_info["nextUpdate"] = Value::String(next_update);
         (
             [("SGX-TCB-Info-Issuer-Chain", state.tcb_issuer_chain.clone())],
-            Json(state.tcb_response.clone()),
+            Json(json!({
+                "tcbInfo": tcb_info,
+                "signature": state.tcb_signature_hex,
+            })),
         )
     }
 
@@ -475,12 +524,26 @@ mod tests {
         Query(params): Query<StdHashMap<String, String>>,
     ) -> impl IntoResponse {
         assert_eq!(params.get("update"), Some(&"standard".to_string()));
+        let call_number = state.qe_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut qe_identity = state.base_qe_identity.clone();
+        let next_update = if call_number == 1 {
+            state.qe_next_update.clone()
+        } else {
+            state
+                .refreshed_qe_next_update
+                .clone()
+                .unwrap_or_else(|| state.qe_next_update.clone())
+        };
+        qe_identity["nextUpdate"] = Value::String(next_update);
         (
             [(
                 "SGX-Enclave-Identity-Issuer-Chain",
                 state.qe_issuer_chain.clone(),
             )],
-            Json(state.qe_response.clone()),
+            Json(json!({
+                "enclaveIdentity": qe_identity,
+                "signature": state.qe_signature_hex,
+            })),
         )
     }
 
@@ -495,6 +558,8 @@ mod tests {
             ca: "processor",
             tcb_next_update: "2999-01-01T00:00:00Z".to_string(),
             qe_next_update: "2999-01-01T00:00:00Z".to_string(),
+            refreshed_tcb_next_update: None,
+            refreshed_qe_next_update: None,
         })
         .await;
 
@@ -505,5 +570,66 @@ mod tests {
             .await
             .unwrap();
         assert!(is_fresh);
+    }
+
+    #[tokio::test]
+    async fn test_proactive_refresh_updates_cached_entry() {
+        let initial_now = unix_now().unwrap();
+        let initial_next_update = OffsetDateTime::from_unix_timestamp(initial_now + 2)
+            .unwrap()
+            .format(&Rfc3339)
+            .unwrap();
+        let refreshed_next_update = OffsetDateTime::from_unix_timestamp(initial_now + 3600)
+            .unwrap()
+            .format(&Rfc3339)
+            .unwrap();
+
+        let mock = spawn_mock_pcs_server(MockPcsConfig {
+            fmspc: "00806F050000".to_string(),
+            ca: "processor",
+            tcb_next_update: initial_next_update.clone(),
+            qe_next_update: initial_next_update,
+            refreshed_tcb_next_update: Some(refreshed_next_update.clone()),
+            refreshed_qe_next_update: Some(refreshed_next_update),
+        })
+        .await;
+
+        let pccs = Pccs::new(Some(mock.base_url.clone()));
+        let (_, is_fresh) = pccs
+            .get_collateral("00806F050000".to_string(), "processor", initial_now)
+            .await
+            .unwrap();
+        assert!(is_fresh);
+        assert_eq!(mock.tcb_call_count(), 1);
+        assert_eq!(mock.qe_call_count(), 1);
+
+        for _ in 0..60 {
+            if mock.tcb_call_count() >= 2 && mock.qe_call_count() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        assert!(
+            mock.tcb_call_count() >= 2,
+            "expected proactive TCB refresh to run"
+        );
+        assert!(
+            mock.qe_call_count() >= 2,
+            "expected proactive QE identity refresh to run"
+        );
+
+        let before_check_calls = mock.tcb_call_count();
+        let now_after_background = unix_now().unwrap();
+        let (_, is_fresh_again) = pccs
+            .get_collateral(
+                "00806F050000".to_string(),
+                "processor",
+                now_after_background,
+            )
+            .await
+            .unwrap();
+        assert!(!is_fresh_again);
+        assert_eq!(mock.tcb_call_count(), before_check_calls);
     }
 }
