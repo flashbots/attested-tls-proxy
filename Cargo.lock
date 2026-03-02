@@ -526,6 +526,7 @@ dependencies = [
  "alloy-rpc-client",
  "alloy-transport-http",
  "anyhow",
+ "axum",
  "az-tdx-vtpm",
  "base64 0.22.1",
  "bytes",

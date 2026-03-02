@@ -1,12 +1,13 @@
 //! Data Center Attestation Primitives (DCAP) evidence generation and verification
+use crate::attestation::pccs::Pccs;
 use crate::attestation::{AttestationError, measurements::MultiMeasurements};
 
 use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
     QuoteCollateralV3,
-    collateral::get_collateral_for_fmspc,
     quote::{Quote, Report},
     tcb_info::TcbInfo,
+    verify::VerifiedReport,
 };
 use thiserror::Error;
 
@@ -28,7 +29,7 @@ pub async fn create_dcap_attestation(input_data: [u8; 64]) -> Result<Vec<u8>, At
 pub async fn verify_dcap_attestation(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
-    pccs_url: Option<String>,
+    pccs: Pccs,
 ) -> Result<MultiMeasurements, DcapVerificationError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -37,7 +38,7 @@ pub async fn verify_dcap_attestation(
     verify_dcap_attestation_with_given_timestamp(
         input,
         expected_input_data,
-        pccs_url,
+        pccs,
         None,
         now,
         override_azure_outdated_tcb,
@@ -51,13 +52,16 @@ pub async fn verify_dcap_attestation(
 pub async fn verify_dcap_attestation_with_given_timestamp(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
-    pccs_url: Option<String>,
+    pccs: Pccs,
     collateral: Option<QuoteCollateralV3>,
     now: u64,
     override_azure_outdated_tcb: bool,
 ) -> Result<MultiMeasurements, DcapVerificationError> {
     let quote = Quote::parse(&input)?;
     tracing::info!("Verifying DCAP attestation: {quote:?}");
+    let now_i64 = i64::try_from(now).map_err(|_| {
+        DcapVerificationError::PccsCollateralParse(format!("Timestamp {now} exceeds i64 range"))
+    })?;
 
     let ca = quote.ca()?;
     let fmspc = hex::encode_upper(quote.fmspc()?);
@@ -78,25 +82,55 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
         |tcb_info: TcbInfo| tcb_info
     };
 
-    let collateral = match collateral {
-        Some(c) => c,
+    match collateral {
+        Some(given_collateral) => {
+            let verified_report = dcap_qvl::verify::verify_with_tcb_override(
+                &input,
+                &given_collateral,
+                now,
+                override_outdated_tcb,
+            )?;
+            warn_if_non_uptodate(&verified_report, &fmspc, CollateralSource::Provided);
+        }
         None => {
-            get_collateral_for_fmspc(
-                &pccs_url.clone().unwrap_or(PCS_URL.to_string()),
-                fmspc,
-                ca,
-                false, // Indicates not SGX
-            )
-            .await?
+            let (collateral, is_fresh) = pccs.get_collateral(fmspc.clone(), ca, now_i64).await?;
+            let initial_source = if is_fresh {
+                CollateralSource::Fresh
+            } else {
+                CollateralSource::Cached
+            };
+            let initial_verification = dcap_qvl::verify::verify_with_tcb_override(
+                &input,
+                &collateral,
+                now,
+                override_outdated_tcb,
+            );
+
+            match initial_verification {
+                Ok(verified_report) => {
+                    warn_if_non_uptodate(&verified_report, &fmspc, initial_source);
+                }
+                Err(e) => {
+                    if is_fresh {
+                        return Err(e.into());
+                    }
+                    tracing::warn!("Verification failed - trying with fresh collateral: {e}");
+                    let collateral = pccs.refresh_collateral(fmspc.clone(), ca, now_i64).await?;
+                    let verified_report = dcap_qvl::verify::verify_with_tcb_override(
+                        &input,
+                        &collateral,
+                        now,
+                        override_outdated_tcb,
+                    )?;
+                    warn_if_non_uptodate(
+                        &verified_report,
+                        &fmspc,
+                        CollateralSource::RefreshedAfterFailure,
+                    );
+                }
+            }
         }
     };
-
-    let _verified_report = dcap_qvl::verify::verify_with_tcb_override(
-        &input,
-        &collateral,
-        now,
-        override_outdated_tcb,
-    )?;
 
     let measurements = MultiMeasurements::from_dcap_qvl_quote(&quote)?;
 
@@ -111,7 +145,7 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
 pub async fn verify_dcap_attestation(
     input: Vec<u8>,
     expected_input_data: [u8; 64],
-    _pccs_url: Option<String>,
+    _pccs: Pccs,
 ) -> Result<MultiMeasurements, DcapVerificationError> {
     // In tests we use mock quotes which will fail to verify
     let quote = tdx_quote::Quote::from_bytes(&input)?;
@@ -161,9 +195,47 @@ pub enum DcapVerificationError {
     SystemTime(#[from] std::time::SystemTimeError),
     #[error("DCAP quote verification: {0}")]
     DcapQvl(#[from] anyhow::Error),
+    #[error("PCCS collateral parse error: {0}")]
+    PccsCollateralParse(String),
+    #[error("PCCS collateral expired: {0}")]
+    PccsCollateralExpired(String),
     #[cfg(any(test, feature = "mock"))]
     #[error("Quote parse: {0}")]
     QuoteParse(#[from] tdx_quote::QuoteParseError),
+}
+
+/// Origin of collateral used for a verification attempt
+#[derive(Clone, Copy, Debug)]
+enum CollateralSource {
+    Provided,
+    Cached,
+    Fresh,
+    RefreshedAfterFailure,
+}
+
+impl CollateralSource {
+    /// Returns a stable source label for structured logs
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Provided => "provided",
+            Self::Cached => "cached",
+            Self::Fresh => "fresh",
+            Self::RefreshedAfterFailure => "refreshed_after_failure",
+        }
+    }
+}
+
+/// Logs a warning when verification succeeds with a non-UpToDate TCB status
+fn warn_if_non_uptodate(report: &VerifiedReport, fmspc: &str, source: CollateralSource) {
+    if report.status != "UpToDate" {
+        tracing::warn!(
+            status = %report.status,
+            advisory_ids = ?report.advisory_ids,
+            fmspc,
+            collateral_source = source.as_str(),
+            "DCAP verification succeeded with non-UpToDate TCB status"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -211,7 +283,7 @@ mod tests {
                 37, 136, 57, 29, 25, 86, 182, 246, 70, 106, 216, 184, 220, 205, 85, 245, 114, 33,
                 173, 129, 180, 32, 247, 70, 250, 141, 176, 248, 99, 125,
             ],
-            None,
+            Pccs::new(None),
             Some(collateral),
             now,
             false,
@@ -244,7 +316,7 @@ mod tests {
                 248, 104, 204, 187, 101, 49, 203, 40, 218, 185, 220, 228, 119, 40, 0, 0, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             ],
-            None,
+            Pccs::new(None),
             Some(collateral),
             now,
             true,
