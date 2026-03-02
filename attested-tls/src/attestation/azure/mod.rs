@@ -418,8 +418,8 @@ mod tests {
         let measurements = verify_azure_attestation_with_given_timestamp(
             attestation_bytes.to_vec(),
             [0; 64], // Input data
-            None,
-            collateral,
+            Pccs::new(None),
+            Some(collateral),
             now,
             false,
         )
@@ -445,7 +445,7 @@ mod tests {
         let err = verify_azure_attestation_with_given_timestamp(
             attestation_bytes.to_vec(),
             expected_input_data,
-            None,
+            Pccs::new(None),
             Some(collateral),
             now,
             false,
