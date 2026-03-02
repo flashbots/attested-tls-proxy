@@ -603,6 +603,14 @@ mod tests {
         assert_eq!(mock.tcb_call_count(), 1);
         assert_eq!(mock.qe_call_count(), 1);
 
+        let (_, is_fresh_second) = pccs
+            .get_collateral("00806F050000".to_string(), "processor", initial_now)
+            .await
+            .unwrap();
+        assert!(!is_fresh_second);
+        assert_eq!(mock.tcb_call_count(), 1);
+        assert_eq!(mock.qe_call_count(), 1);
+
         for _ in 0..60 {
             if mock.tcb_call_count() >= 2 && mock.qe_call_count() >= 2 {
                 break;
