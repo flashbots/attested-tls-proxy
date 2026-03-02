@@ -36,6 +36,7 @@ num-bigint = "0.4.6"
 webpki = { package = "rustls-webpki", version = "0.103.8" }
 time = "0.3.44"
 once_cell = "1.21.3"
+p256 = { version = "0.13", features = ["ecdsa"] }
 
 # Used for azure vTPM attestation support
 az-tdx-vtpm = { version = "0.7.4", optional = true }

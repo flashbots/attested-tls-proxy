@@ -4,6 +4,7 @@
 pub mod azure;
 pub mod dcap;
 pub mod measurements;
+pub mod preemptive;
 
 use measurements::MultiMeasurements;
 use parity_scale_codec::{Decode, Encode};
@@ -119,6 +120,7 @@ impl Display for AttestationType {
 pub struct AttestationGenerator {
     pub attestation_type: AttestationType,
     attestation_provider_url: Option<String>,
+    // pre_made_attestations: Option<preemptive::PreEmptiveAttestations>,
 }
 
 impl AttestationGenerator {
@@ -135,6 +137,7 @@ impl AttestationGenerator {
         Ok(Self {
             attestation_type,
             attestation_provider_url,
+            // pre_made_attestations: None,
         })
     }
 
