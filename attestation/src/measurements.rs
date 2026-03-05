@@ -1,5 +1,5 @@
 //! Measurements and policy for enforcing them when validating a remote attestation
-use crate::attestation::{AttestationError, AttestationType, dcap::DcapVerificationError};
+use crate::{AttestationError, AttestationType, dcap::DcapVerificationError};
 use std::{collections::HashMap, path::PathBuf};
 use std::{fmt, fmt::Formatter};
 

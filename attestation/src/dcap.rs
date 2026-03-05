@@ -1,5 +1,5 @@
 //! Data Center Attestation Primitives (DCAP) evidence generation and verification
-use crate::attestation::{AttestationError, measurements::MultiMeasurements};
+use crate::{AttestationError, measurements::MultiMeasurements};
 
 use configfs_tsm::QuoteGenerationError;
 use dcap_qvl::{
@@ -168,13 +168,13 @@ pub enum DcapVerificationError {
 
 #[cfg(test)]
 mod tests {
-    use crate::attestation::measurements::MeasurementPolicy;
+    use crate::measurements::MeasurementPolicy;
 
     use super::*;
     #[tokio::test]
     async fn test_dcap_verify() {
         let attestation_bytes: &'static [u8] =
-            include_bytes!("../../test-assets/dcap-tdx-1766059550570652607");
+            include_bytes!("../test-assets/dcap-tdx-1766059550570652607");
 
         // To avoid this test stopping working when the certificate is no longer valid we pass in a
         // timestamp
@@ -199,7 +199,7 @@ mod tests {
             .unwrap();
 
         let collateral_bytes: &'static [u8] =
-            include_bytes!("../../test-assets/dcap-quote-collateral-00.json");
+            include_bytes!("../test-assets/dcap-quote-collateral-00.json");
 
         let collateral = serde_json::from_slice(collateral_bytes).unwrap();
 
@@ -226,14 +226,14 @@ mod tests {
     #[tokio::test]
     async fn test_dcap_verify_azure_override() {
         let attestation_bytes: &'static [u8] =
-            include_bytes!("../../test-assets/azure_failed_dcap_quote_10.bin");
+            include_bytes!("../test-assets/azure_failed_dcap_quote_10.bin");
 
         // To avoid this test stopping working when the certificate is no longer valid we pass in a
         // timestamp
         let now = 1771414156;
 
         let collateral_bytes: &'static [u8] =
-            include_bytes!("../../test-assets/azure-collateral.json");
+            include_bytes!("../test-assets/azure-collateral.json");
 
         let collateral = serde_json::from_slice(collateral_bytes).unwrap();
 

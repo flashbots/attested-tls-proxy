@@ -5,6 +5,9 @@ pub mod azure;
 pub mod dcap;
 pub mod measurements;
 
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod test_helpers;
+
 use measurements::MultiMeasurements;
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -16,7 +19,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::attestation::{dcap::DcapVerificationError, measurements::MeasurementPolicy};
+use crate::{dcap::DcapVerificationError, measurements::MeasurementPolicy};
 
 const GCP_METADATA_API: &str =
     "http://metadata.google.internal/computeMetadata/v1/project/project-id";

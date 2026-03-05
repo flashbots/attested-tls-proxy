@@ -1,6 +1,4 @@
 //! Attested TLS protocol server and client
-pub mod attestation;
-
 #[cfg(feature = "ws")]
 pub mod websockets;
 
@@ -10,7 +8,9 @@ pub mod attested_rpc;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
 
-use crate::attestation::{
+pub use attestation;
+
+use attestation::{
     AttestationError, AttestationExchangeMessage, AttestationGenerator, AttestationType,
     AttestationVerifier, measurements::MultiMeasurements,
 };
@@ -621,10 +621,9 @@ fn map_alpn_protocols(existing_protocols: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        attestation::measurements::MeasurementPolicy,
-        test_helpers::{generate_certificate_chain, generate_tls_config},
-    };
+
+    use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
+    use attestation::measurements::MeasurementPolicy;
     use tokio::net::TcpListener;
 
     #[tokio::test]

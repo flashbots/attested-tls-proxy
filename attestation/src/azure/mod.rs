@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use x509_parser::prelude::*;
 
-use crate::attestation::{
-    dcap::verify_dcap_attestation_with_given_timestamp, measurements::MultiMeasurements,
-};
+use crate::{dcap::verify_dcap_attestation_with_given_timestamp, measurements::MultiMeasurements};
 
 /// The attestation evidence payload that gets sent over the channel
 #[derive(Debug, Serialize, Deserialize)]
@@ -339,12 +337,12 @@ pub enum MaaError {
     #[error("HCL runtime claims user-data does not match expected report input data")]
     ClaimsUserDataInputMismatch,
     #[error("DCAP verification: {0}")]
-    DcapVerification(#[from] crate::attestation::dcap::DcapVerificationError),
+    DcapVerification(#[from] crate::dcap::DcapVerificationError),
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::attestation::measurements::MeasurementPolicy;
+    use crate::measurements::MeasurementPolicy;
 
     use super::*;
 
@@ -363,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn test_decode_hcl() {
         // From cvm-reverse-proxy/internal/attestation/azure/tdx/testdata/hclreport.bin
-        let hcl_bytes: &'static [u8] = include_bytes!("../../../test-assets/hclreport.bin");
+        let hcl_bytes: &'static [u8] = include_bytes!("../../test-assets/hclreport.bin");
 
         let hcl_report = hcl::HclReport::new(hcl_bytes.to_vec()).unwrap();
         let hcl_var_data = hcl_report.var_data();
@@ -382,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn test_verify() {
         let attestation_bytes: &'static [u8] =
-            include_bytes!("../../../test-assets/azure-tdx-1764662251380464271");
+            include_bytes!("../../test-assets/azure-tdx-1764662251380464271");
 
         // To avoid this test stopping working when the certificate is no longer valid we pass in a
         // timestamp
@@ -411,7 +409,7 @@ mod tests {
             .unwrap();
 
         let collateral_bytes: &'static [u8] =
-            include_bytes!("../../../test-assets/azure-collateral02.json");
+            include_bytes!("../../test-assets/azure-collateral02.json");
 
         let collateral = serde_json::from_slice(collateral_bytes).unwrap();
 
@@ -432,14 +430,14 @@ mod tests {
     #[tokio::test]
     async fn test_verify_fails_on_input_mismatch() {
         let attestation_bytes: &'static [u8] =
-            include_bytes!("../../../test-assets/azure-tdx-1764662251380464271");
+            include_bytes!("../../test-assets/azure-tdx-1764662251380464271");
         let now = 1771423480;
 
         let mut expected_input_data = input_data_from_attestation(attestation_bytes);
         expected_input_data[63] ^= 0x01;
 
         let collateral_bytes: &'static [u8] =
-            include_bytes!("../../../test-assets/azure-collateral02.json");
+            include_bytes!("../../test-assets/azure-collateral02.json");
         let collateral = serde_json::from_slice(collateral_bytes).unwrap();
 
         let err = verify_azure_attestation_with_given_timestamp(
