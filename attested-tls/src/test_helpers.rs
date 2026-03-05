@@ -1,15 +1,14 @@
 //! Helper functions used in tests
-use std::{collections::HashMap, net::IpAddr, sync::Arc};
+use std::{net::IpAddr, sync::Arc};
 use tokio_rustls::rustls::{
     ClientConfig, RootCertStore, ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     server::{WebPkiClientVerifier, danger::ClientCertVerifier},
 };
 
-use crate::{
-    SUPPORTED_ALPN_PROTOCOL_VERSIONS,
-    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
-};
+use crate::SUPPORTED_ALPN_PROTOCOL_VERSIONS;
+
+pub use attestation::test_helpers::mock_dcap_measurements;
 
 /// Helper to generate a self-signed certificate for testing
 pub fn generate_certificate_chain(
@@ -126,15 +125,4 @@ fn client_verifier_from_remote_cert(
             .unwrap(),
         root_store,
     )
-}
-
-/// All-zero measurment values used in some tests
-pub fn mock_dcap_measurements() -> MultiMeasurements {
-    MultiMeasurements::Dcap(HashMap::from([
-        (DcapMeasurementRegister::MRTD, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR0, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR1, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR2, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR3, [0u8; 48]),
-    ]))
 }

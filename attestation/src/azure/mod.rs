@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use x509_parser::prelude::*;
 
-use crate::attestation::{
-    dcap::verify_dcap_attestation_with_given_timestamp, measurements::MultiMeasurements,
-};
+use crate::{dcap::verify_dcap_attestation_with_given_timestamp, measurements::MultiMeasurements};
 
 /// The attestation evidence payload that gets sent over the channel
 #[derive(Debug, Serialize, Deserialize)]
