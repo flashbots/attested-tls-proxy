@@ -506,7 +506,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fadd-attestation-crate#f330b2ff9913a6dd6c25f17c2a289058c5a32c8d"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fadd-attestation-crate#4ebc03703510e65fd1317736b8887fc388860481"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
