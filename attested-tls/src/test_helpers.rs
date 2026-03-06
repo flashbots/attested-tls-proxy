@@ -8,7 +8,7 @@ use tokio_rustls::rustls::{
 
 use crate::SUPPORTED_ALPN_PROTOCOL_VERSIONS;
 
-pub use attestation::test_helpers::mock_dcap_measurements;
+pub use attestation::measurements::mock_dcap_measurements;
 
 /// Helper to generate a self-signed certificate for testing
 pub fn generate_certificate_chain(

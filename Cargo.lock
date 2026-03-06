@@ -506,6 +506,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fadd-attestation-crate#4ebc03703510e65fd1317736b8887fc388860481"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
@@ -525,7 +526,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdx-quote",
- "tempfile",
  "thiserror 2.0.17",
  "time",
  "tokio",
@@ -1178,7 +1178,7 @@ checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 [[package]]
 name = "dcap-qvl"
 version = "0.3.12"
-source = "git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override#3d1d4ba96add015ad23109c4df5fb6730182efaa"
+source = "git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override#b61d8f3ffb59f225d7b98220e2185a66f1c7f8c7"
 dependencies = [
  "anyhow",
  "asn1_der",
