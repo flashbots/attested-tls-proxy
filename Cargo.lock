@@ -1178,7 +1178,7 @@ checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
 [[package]]
 name = "dcap-qvl"
 version = "0.3.12"
-source = "git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override#3d1d4ba96add015ad23109c4df5fb6730182efaa"
+source = "git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override#465c1c231a335db4c6acfb828e815ca1c9ffe2bf"
 dependencies = [
  "anyhow",
  "asn1_der",

@@ -91,7 +91,7 @@ pub async fn verify_dcap_attestation_with_given_timestamp(
         }
     };
 
-    let _verified_report = dcap_qvl::verify::verify_with_tcb_override(
+    let _verified_report = dcap_qvl::verify::dangerous_verify_with_tcb_override(
         &input,
         &collateral,
         now,
