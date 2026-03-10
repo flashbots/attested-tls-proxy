@@ -32,6 +32,7 @@ serde = "1.0.228"
 reqwest = { version = "0.12.24", default-features = false, features = [
   "rustls-tls-webpki-roots-no-provider",
 ] }
+webpki-roots = "1.0.4"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 axum = "0.8.6"
