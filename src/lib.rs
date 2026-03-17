@@ -1336,7 +1336,6 @@ mod tests {
             "#
             .to_vec(),
         )
-        .await
         .unwrap();
 
         let attestation_verifier = AttestationVerifier {
