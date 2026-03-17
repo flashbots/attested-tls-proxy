@@ -9,30 +9,16 @@ pub async fn attested_get(
     url_path: &str,
     attestation_verifier: AttestationVerifier,
     remote_certificate: Option<CertificateDer<'static>>,
-    allow_self_signed: bool,
 ) -> Result<reqwest::Response, ProxyError> {
-    let proxy_client = if allow_self_signed {
-        let client_config = crate::self_signed::client_tls_config_allow_self_signed()?;
-        ProxyClient::new_with_tls_config(
-            client_config,
-            "127.0.0.1:0".to_string(),
-            target_addr,
-            AttestationGenerator::with_no_attestation(),
-            attestation_verifier,
-            None,
-        )
-        .await?
-    } else {
-        ProxyClient::new(
-            None,
-            "127.0.0.1:0".to_string(),
-            target_addr,
-            AttestationGenerator::with_no_attestation(),
-            attestation_verifier,
-            remote_certificate,
-        )
-        .await?
-    };
+    let proxy_client = ProxyClient::new(
+        None,
+        "127.0.0.1:0".to_string(),
+        target_addr,
+        AttestationGenerator::with_no_attestation(),
+        attestation_verifier,
+        remote_certificate,
+    )
+    .await?;
 
     attested_get_with_client(proxy_client, url_path).await
 }
@@ -72,11 +58,11 @@ mod tests {
         ProxyServer,
         attestation::AttestationType,
         file_server::static_file_server,
-        test_helpers::{generate_certificate_chain, generate_tls_config},
+        test_helpers::{generate_certificate_chain_for_host, generate_tls_config},
     };
     use tempfile::tempdir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_attested_get() {
         // Create a temporary directory with a file to serve
         let dir = tempdir().unwrap();
@@ -87,7 +73,7 @@ mod tests {
         let target_addr = static_file_server(dir.path().to_path_buf()).await.unwrap();
 
         // Create TLS configuration
-        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
         // Setup a proxy server targetting the static file server
@@ -113,7 +99,7 @@ mod tests {
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
-            proxy_addr.to_string(),
+            format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,

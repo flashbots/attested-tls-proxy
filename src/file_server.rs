@@ -55,7 +55,7 @@ mod tests {
     use crate::{ProxyClient, attestation::AttestationType};
 
     use super::*;
-    use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
+    use crate::test_helpers::{generate_certificate_chain_for_host, generate_tls_config};
     use tempfile::tempdir;
 
     /// Given a URL, fetch response body and content type header
@@ -74,7 +74,7 @@ mod tests {
         (body.to_vec(), content_type)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_static_file_server() {
         // Create a temporary directory with some files to serve
         let dir = tempdir().unwrap();
@@ -94,7 +94,7 @@ mod tests {
         let target_addr = static_file_server(dir.path().to_path_buf()).await.unwrap();
 
         // Create TLS configuration
-        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
         // Setup a proxy server targetting the static file server
@@ -118,7 +118,7 @@ mod tests {
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
-            proxy_addr.to_string(),
+            format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
@@ -128,8 +128,10 @@ mod tests {
 
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
-        // Proxy cient accepts a single connection
+        // Accept one client connection per request.
         tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+            proxy_client.accept().await.unwrap();
             proxy_client.accept().await.unwrap();
         });
 

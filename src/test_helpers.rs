@@ -160,17 +160,6 @@ async fn get_handler(_headers: http::HeaderMap) -> impl IntoResponse {
     "No measurements".to_string()
 }
 
-/// All-zero measurment values used in some tests
-pub fn mock_dcap_measurements() -> MultiMeasurements {
-    MultiMeasurements::Dcap(HashMap::from([
-        (DcapMeasurementRegister::MRTD, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR0, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR1, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR2, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR3, [0u8; 48]),
-    ]))
-}
-
 pub fn init_tracing() {
     INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));

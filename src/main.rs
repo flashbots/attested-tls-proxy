@@ -1,5 +1,5 @@
 use anyhow::{anyhow, ensure};
-use attested_tls::attestation::measurements::MultiMeasurements;
+use attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy};
 use clap::{Parser, Subcommand};
 use std::{
     fs::File,
@@ -11,14 +11,8 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
-    AttestationGenerator, ProxyClient, ProxyServer,
-    attested_get::attested_get,
-    attested_tls::{
-        TlsCertAndKey,
-        attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy},
-    },
-    file_server::attested_file_server,
-    get_tls_cert, health_check,
+    AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey, attested_get::attested_get,
+    file_server::attested_file_server, get_inner_tls_cert, health_check,
     normalize_pem::normalize_private_key_pem_to_pkcs8,
 };
 
@@ -280,29 +274,15 @@ async fn main() -> anyhow::Result<()> {
                 AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
                     .await?;
 
-            let client = if allow_self_signed {
-                let client_tls_config =
-                    attested_tls_proxy::self_signed::client_tls_config_allow_self_signed()?;
-                ProxyClient::new_with_tls_config(
-                    client_tls_config,
-                    listen_addr,
-                    target_addr,
-                    client_attestation_generator,
-                    attestation_verifier,
-                    None,
-                )
-                .await?
-            } else {
-                ProxyClient::new(
-                    tls_cert_and_chain,
-                    listen_addr,
-                    target_addr,
-                    client_attestation_generator,
-                    attestation_verifier,
-                    remote_tls_cert,
-                )
-                .await?
-            };
+            let client = ProxyClient::new(
+                tls_cert_and_chain,
+                listen_addr,
+                target_addr,
+                client_attestation_generator,
+                attestation_verifier,
+                remote_tls_cert,
+            )
+            .await?;
 
             loop {
                 if let Err(err) = client.accept().await {
@@ -365,24 +345,19 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 None => None,
             };
-            let (cert_chain, measurements) = get_tls_cert(
-                server,
-                attestation_verifier,
-                remote_tls_cert,
-                allow_self_signed,
-            )
-            .await?;
+            let cert_chain =
+                get_inner_tls_cert(server, attestation_verifier, remote_tls_cert).await?;
 
-            // If the user chose to write measurements to a file as JSON
-            if let Some(path_to_write_measurements) = out_measurements {
-                std::fs::write(
-                    path_to_write_measurements,
-                    measurements
-                        .unwrap_or(MultiMeasurements::NoAttestation)
-                        .to_header_format()?
-                        .as_bytes(),
-                )?;
-            }
+            // // If the user chose to write measurements to a file as JSON
+            // if let Some(path_to_write_measurements) = out_measurements {
+            //     std::fs::write(
+            //         path_to_write_measurements,
+            //         measurements
+            //             .unwrap_or(MultiMeasurements::NoAttestation)
+            //             .to_header_format()?
+            //             .as_bytes(),
+            //     )?;
+            // }
             println!("{}", certs_to_pem_string(&cert_chain)?);
         }
         CliCommand::AttestedFileServer {
@@ -434,7 +409,6 @@ async fn main() -> anyhow::Result<()> {
                 &url_path.unwrap_or_default(),
                 attestation_verifier,
                 remote_tls_cert,
-                allow_self_signed,
             )
             .await?;
 
@@ -467,9 +441,10 @@ fn load_tls_cert_and_key_server(
             return Err(anyhow!("Certificate chain provided but no private key"));
         }
         tracing::warn!("No TLS ceritifcate provided - generating self-signed");
-        Ok(attested_tls_proxy::self_signed::generate_self_signed_cert(
-            ip,
-        )?)
+        todo!()
+        // Ok(attested_tls_proxy::self_signed::generate_self_signed_cert(
+        //     ip,
+        // )?)
     }
 }
 
