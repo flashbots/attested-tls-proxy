@@ -21,8 +21,12 @@ impl HttpVersion {
     pub fn from_negotiated_protocol_server<IO>(tls: &tokio_rustls::server::TlsStream<IO>) -> Self {
         let (_io, conn) = tls.get_ref();
 
-        let chosen_protocol = Self::from_alpn_bytes(conn.alpn_protocol());
-        tracing::debug!("[server] Chosen protocol {chosen_protocol:?}",);
+        let negotiated_alpn = conn.alpn_protocol();
+        let chosen_protocol = Self::from_alpn_bytes(negotiated_alpn);
+        tracing::debug!(
+            "[server] Negotiated ALPN {:?}, chosen protocol {chosen_protocol:?}",
+            negotiated_alpn.map(String::from_utf8_lossy)
+        );
         chosen_protocol
     }
 
@@ -30,8 +34,12 @@ impl HttpVersion {
     pub fn from_negotiated_protocol_client<IO>(tls: &tokio_rustls::client::TlsStream<IO>) -> Self {
         let (_io, conn) = tls.get_ref();
 
-        let chosen_protocol = Self::from_alpn_bytes(conn.alpn_protocol());
-        tracing::debug!("[client] Chosen protocol {chosen_protocol:?}",);
+        let negotiated_alpn = conn.alpn_protocol();
+        let chosen_protocol = Self::from_alpn_bytes(negotiated_alpn);
+        tracing::debug!(
+            "[client] Negotiated ALPN {:?}, chosen protocol {chosen_protocol:?}",
+            negotiated_alpn.map(String::from_utf8_lossy)
+        );
         chosen_protocol
     }
 

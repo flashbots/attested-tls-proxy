@@ -613,6 +613,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "webpki-roots",
  "x509-parser",
 ]
 
