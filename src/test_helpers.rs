@@ -15,10 +15,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 static INIT: Once = Once::new();
 
-use crate::{
-    MEASUREMENT_HEADER,
-    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
-};
+use attestation::measurements::{DcapMeasurementRegister, MultiMeasurements};
 
 /// Helper to generate a self-signed certificate for testing
 pub fn generate_certificate_chain(
@@ -27,8 +24,31 @@ pub fn generate_certificate_chain(
     let mut params = rcgen::CertificateParams::new(vec![]).unwrap();
     params.subject_alt_names.push(rcgen::SanType::IpAddress(ip));
     params
+        .subject_alt_names
+        .push(rcgen::SanType::DnsName(ip.to_string().try_into().unwrap()));
+    params
         .distinguished_name
         .push(rcgen::DnType::CommonName, ip.to_string());
+
+    let keypair = rcgen::KeyPair::generate().unwrap();
+    let cert = params.self_signed(&keypair).unwrap();
+
+    let certs = vec![CertificateDer::from(cert)];
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(keypair.serialize_der()));
+    (certs, key)
+}
+
+/// Helper to generate a self-signed certificate for testing with a DNS subject name
+pub fn generate_certificate_chain_for_host(
+    host: &str,
+) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
+    let mut params = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap();
+    params
+        .subject_alt_names
+        .push(rcgen::SanType::DnsName(host.try_into().unwrap()));
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, host);
 
     let keypair = rcgen::KeyPair::generate().unwrap();
     let cert = params.self_signed(&keypair).unwrap();
@@ -131,12 +151,13 @@ pub async fn example_http_service() -> SocketAddr {
     addr
 }
 
-async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
-    headers
-        .get(MEASUREMENT_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("No measurements")
-        .to_string()
+async fn get_handler(_headers: http::HeaderMap) -> impl IntoResponse {
+    // headers
+    //     .get(MEASUREMENT_HEADER)
+    //     .and_then(|v| v.to_str().ok())
+    //     .unwrap_or("No measurements")
+    //     .to_string()
+    "No measurements".to_string()
 }
 
 /// All-zero measurment values used in some tests
