@@ -1,11 +1,7 @@
 use anyhow::{anyhow, ensure};
 use attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy};
 use clap::{Parser, Subcommand};
-use std::{
-    fs::File,
-    net::{IpAddr, SocketAddr},
-    path::PathBuf,
-};
+use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio::io::AsyncWriteExt;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
@@ -78,9 +74,6 @@ enum CliCommand {
         // Address to listen on for health checks
         #[arg(long)]
         listen_addr_healthcheck: Option<SocketAddr>,
-        /// Enables verification of self-signed TLS certificates
-        #[arg(long)]
-        allow_self_signed: bool,
     },
     /// Run a proxy server
     Server {
@@ -118,9 +111,6 @@ enum CliCommand {
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
-        /// Enables verification of self-signed TLS certificates
-        #[arg(long)]
-        allow_self_signed: bool,
         /// Filename to write measurements as JSON to
         #[arg(long)]
         out_measurements: Option<PathBuf>,
@@ -158,9 +148,6 @@ enum CliCommand {
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
-        /// Enables verification of self-signed TLS certificates
-        #[arg(long)]
-        allow_self_signed: bool,
     },
 }
 
@@ -235,7 +222,6 @@ async fn main() -> anyhow::Result<()> {
             tls_ca_certificate,
             dev_dummy_dcap,
             listen_addr_healthcheck,
-            allow_self_signed,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
@@ -304,11 +290,8 @@ async fn main() -> anyhow::Result<()> {
                 health_check::server(listen_addr_healthcheck).await?;
             }
 
-            let tls_cert_and_chain = load_tls_cert_and_key_server(
-                tls_certificate_path,
-                tls_private_key_path,
-                listen_addr.ip(),
-            )?;
+            let tls_cert_and_chain =
+                load_tls_cert_and_key_server(tls_certificate_path, tls_private_key_path)?;
 
             let local_attestation_generator =
                 AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)
@@ -333,7 +316,6 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::GetTlsCert {
             server,
             tls_ca_certificate,
-            allow_self_signed,
             out_measurements,
         } => {
             let remote_tls_cert = match tls_ca_certificate {
@@ -392,7 +374,6 @@ async fn main() -> anyhow::Result<()> {
             target_addr,
             url_path,
             tls_ca_certificate,
-            allow_self_signed,
         } => {
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
@@ -429,7 +410,6 @@ async fn main() -> anyhow::Result<()> {
 fn load_tls_cert_and_key_server(
     cert_chain: Option<PathBuf>,
     private_key: Option<PathBuf>,
-    ip: IpAddr,
 ) -> anyhow::Result<TlsCertAndKey> {
     if let Some(private_key) = private_key {
         load_tls_cert_and_key(
@@ -438,13 +418,10 @@ fn load_tls_cert_and_key_server(
         )
     } else {
         if cert_chain.is_some() {
-            return Err(anyhow!("Certificate chain provided but no private key"));
+            Err(anyhow!("Certificate chain provided but no private key"))
+        } else {
+            Err(anyhow!("No private key provided"))
         }
-        tracing::warn!("No TLS ceritifcate provided - generating self-signed");
-        todo!()
-        // Ok(attested_tls_proxy::self_signed::generate_self_signed_cert(
-        //     ip,
-        // )?)
     }
 }
 
