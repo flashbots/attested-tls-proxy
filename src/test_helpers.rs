@@ -1,8 +1,7 @@
 //! Helper functions used in tests
 use axum::response::IntoResponse;
 use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::{Arc, Once},
 };
 use tokio::net::TcpListener;
@@ -14,29 +13,6 @@ use tokio_rustls::rustls::{
 use tracing_subscriber::{EnvFilter, fmt};
 
 static INIT: Once = Once::new();
-
-use attestation::measurements::{DcapMeasurementRegister, MultiMeasurements};
-
-/// Helper to generate a self-signed certificate for testing
-pub fn generate_certificate_chain(
-    ip: IpAddr,
-) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
-    let mut params = rcgen::CertificateParams::new(vec![]).unwrap();
-    params.subject_alt_names.push(rcgen::SanType::IpAddress(ip));
-    params
-        .subject_alt_names
-        .push(rcgen::SanType::DnsName(ip.to_string().try_into().unwrap()));
-    params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, ip.to_string());
-
-    let keypair = rcgen::KeyPair::generate().unwrap();
-    let cert = params.self_signed(&keypair).unwrap();
-
-    let certs = vec![CertificateDer::from(cert)];
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(keypair.serialize_der()));
-    (certs, key)
-}
 
 /// Helper to generate a self-signed certificate for testing with a DNS subject name
 pub fn generate_certificate_chain_for_host(

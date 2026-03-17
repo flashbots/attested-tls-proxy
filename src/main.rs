@@ -316,7 +316,7 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::GetTlsCert {
             server,
             tls_ca_certificate,
-            out_measurements,
+            out_measurements: _, // TODO
         } => {
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
@@ -416,12 +416,10 @@ fn load_tls_cert_and_key_server(
             cert_chain.ok_or(anyhow!("Private key given but no certificate chain"))?,
             private_key,
         )
+    } else if cert_chain.is_some() {
+        Err(anyhow!("Certificate chain provided but no private key"))
     } else {
-        if cert_chain.is_some() {
-            Err(anyhow!("Certificate chain provided but no private key"))
-        } else {
-            Err(anyhow!("No private key provided"))
-        }
+        Err(anyhow!("No private key provided"))
     }
 }
 

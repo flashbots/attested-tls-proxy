@@ -561,38 +561,6 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fadd-attestation-crate#4ebc03703510e65fd1317736b8887fc388860481"
-dependencies = [
- "anyhow",
- "az-tdx-vtpm",
- "base64 0.22.1",
- "configfs-tsm",
- "dcap-qvl 0.3.12 (git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override)",
- "hex",
- "http",
- "num-bigint",
- "once_cell",
- "openssl",
- "parity-scale-codec",
- "pem-rfc7468",
- "rand_core 0.6.4",
- "reqwest",
- "rustls-webpki",
- "serde",
- "serde_json",
- "tdx-quote",
- "thiserror 2.0.17",
- "time",
- "tokio",
- "tokio-rustls",
- "tracing",
- "tss-esapi",
- "x509-parser 0.18.1",
-]
-
-[[package]]
-name = "attestation"
-version = "0.0.1"
 source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#5c109dba74d4f9de58b4b846f480599752dfb1f9"
 dependencies = [
  "anyhow",
@@ -644,7 +612,7 @@ version = "0.0.1"
 dependencies = [
  "alloy-rpc-client",
  "alloy-transport-http",
- "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fadd-attestation-crate)",
+ "attestation",
  "bytes",
  "futures-util",
  "http",
@@ -673,7 +641,7 @@ version = "0.0.1"
 source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#5c109dba74d4f9de58b4b846f480599752dfb1f9"
 dependencies = [
  "anyhow",
- "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate)",
+ "attestation",
  "ra-tls",
  "rcgen 0.14.7",
  "rustls",
@@ -691,7 +659,7 @@ name = "attested-tls-proxy"
 version = "1.1.1"
 dependencies = [
  "anyhow",
- "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate)",
+ "attestation",
  "attested-tls 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate)",
  "axum",
  "bytes",
