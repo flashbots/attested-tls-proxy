@@ -686,7 +686,7 @@ impl ProxyClient {
     ) -> Result<(HttpSender, HttpConnection), ProxyError> {
         let outbound_stream = tokio::net::TcpStream::connect(target).await?;
 
-        let domain = server_name_from_host(target).unwrap();
+        let domain = server_name_from_host(target)?;
         let tls_stream = nesting_tls_connector
             .connect(domain, outbound_stream)
             .await?;
@@ -785,6 +785,12 @@ pub enum ProxyError {
     IntConversion(#[from] TryFromIntError),
     #[error("Bad host name: {0}")]
     BadDnsName(#[from] tokio_rustls::rustls::pki_types::InvalidDnsNameError),
+    #[error("Invalid certificate encoding")]
+    InvalidCertificateEncoding,
+    #[error("Missing common name in certificate subject")]
+    MissingCertificateName,
+    #[error("Certificate common name is not valid UTF-8")]
+    InvalidCertificateName,
     #[error("HTTP: {0}")]
     Hyper(#[from] hyper::Error),
     #[error("Attested TLS: {0}")]
@@ -809,17 +815,15 @@ impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {
 fn hostname_from_cert(cert: &CertificateDer<'static>) -> Result<String, ProxyError> {
     let cert = x509_parser::parse_x509_certificate(cert.as_ref())
         .map(|(_, parsed)| parsed)
-        .unwrap();
+        .map_err(|_| ProxyError::InvalidCertificateEncoding)?;
 
     Ok(cert
         .subject()
         .iter_common_name()
         .next()
-        .unwrap()
-        // .ok_or_else(|| Self::bad_encoding("Missing common name"))?
+        .ok_or(ProxyError::MissingCertificateName)?
         .as_str()
-        // .map_err(|err| Self::bad_encoding(format!("Invalid common name: {err}")))
-        .unwrap()
+        .map_err(|_| ProxyError::InvalidCertificateName)?
         .to_string())
 }
 
