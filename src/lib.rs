@@ -1,24 +1,29 @@
 //! An attested TLS protocol and HTTPS proxy
-pub mod attested_get;
+// pub mod attested_get;
 pub mod file_server;
 pub mod health_check;
 pub mod normalize_pem;
-pub mod self_signed;
+// pub mod self_signed;
 
-pub use attested_tls;
-pub use attested_tls::attestation;
-pub use attested_tls::attestation::AttestationGenerator;
+pub use attestation;
+pub use attestation::AttestationGenerator;
 
 mod http_version;
 
 #[cfg(test)]
 mod test_helpers;
 
+use attestation::{
+    AttestationError, AttestationType, AttestationVerifier, measurements::MultiMeasurements,
+};
+use attested_tls::{AttestedCertificateResolver, AttestedCertificateVerifier};
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::{Response, service::service_fn};
 use hyper_util::rt::TokioIo;
+use nested_tls::server::NestingTlsStream;
+use nested_tls::{client::NestingTlsConnector, server::NestingTlsAcceptor};
 use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::io;
@@ -26,17 +31,12 @@ use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 use tokio_rustls::rustls::{
-    self, ClientConfig, RootCertStore, ServerConfig, pki_types::CertificateDer,
+    self, ClientConfig, RootCertStore, ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer, ServerName},
 };
 use tracing::{debug, error, warn};
 
 use crate::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
-use attested_tls::{
-    AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey,
-    attestation::{
-        AttestationError, AttestationType, AttestationVerifier, measurements::MultiMeasurements,
-    },
-};
 
 /// The header name for giving attestation type
 const ATTESTATION_TYPE_HEADER: &str = "X-Flashbots-Attestation-Type";
@@ -61,6 +61,14 @@ type RequestWithResponseSender = (
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
 );
 
+/// TLS Credentials
+pub struct TlsCertAndKey {
+    /// Der-encoded TLS certificate chain
+    pub cert_chain: Vec<CertificateDer<'static>>,
+    /// Der-encoded TLS private key
+    pub key: PrivateKeyDer<'static>,
+}
+
 /// Adds HTTP 1 and 2 to the list of allowed protocols
 fn ensure_proxy_alpn_protocols(alpn_protocols: &mut Vec<Vec<u8>>) {
     for protocol in [ALPN_H2, ALPN_HTTP11] {
@@ -72,33 +80,32 @@ fn ensure_proxy_alpn_protocols(alpn_protocols: &mut Vec<Vec<u8>>) {
     }
 }
 
-/// Retrieve the attested remote TLS certificate.
-pub async fn get_tls_cert(
-    server_name: String,
-    attestation_verifier: AttestationVerifier,
-    remote_certificate: Option<CertificateDer<'static>>,
-    allow_self_signed: bool,
-) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
-    let (cert, measurements) = if allow_self_signed {
-        let client_tls_config = self_signed::client_tls_config_allow_self_signed()?;
-        attested_tls::get_tls_cert_with_config(
-            &server_name,
-            attestation_verifier,
-            client_tls_config,
-        )
-        .await?
-    } else {
-        attested_tls::get_tls_cert(server_name, attestation_verifier, remote_certificate).await?
-    };
-
-    debug!("[get-tls-cert] Connected to proxy server with measurements: {measurements:?}");
-    Ok((cert, measurements))
-}
+// /// Retrieve the attested remote TLS certificate.
+// pub async fn get_tls_cert(
+//     server_name: String,
+//     attestation_verifier: AttestationVerifier,
+//     remote_certificate: Option<CertificateDer<'static>>,
+//     allow_self_signed: bool,
+// ) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
+//     let (cert, measurements) = if allow_self_signed {
+//         let client_tls_config = self_signed::client_tls_config_allow_self_signed()?;
+//         attested_tls::get_tls_cert_with_config(
+//             &server_name,
+//             attestation_verifier,
+//             client_tls_config,
+//         )
+//         .await?
+//     } else {
+//         attested_tls::get_tls_cert(server_name, attestation_verifier, remote_certificate).await?
+//     };
+//
+//     debug!("[get-tls-cert] Connected to proxy server with measurements: {measurements:?}");
+//     Ok((cert, measurements))
+// }
 
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer {
-    /// The underlying attested TLS server
-    attested_tls_server: AttestedTlsServer,
+    nesting_tls_acceptor: NestingTlsAcceptor,
     /// The underlying TCP listener
     listener: Arc<TcpListener>,
     /// The address/hostname of the target service we are proxying to
@@ -114,7 +121,7 @@ impl ProxyServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
-        let mut server_config = if client_auth {
+        let outer_server_config = if client_auth {
             let root_store =
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
@@ -133,46 +140,49 @@ impl ProxyServer {
                     cert_and_key.key.clone_key(),
                 )?
         };
-        ensure_proxy_alpn_protocols(&mut server_config.alpn_protocols);
 
-        let attested_tls_server = AttestedTlsServer::new_with_tls_config(
+        Self::new_with_tls_config(
             cert_and_key.cert_chain,
-            server_config,
+            outer_server_config,
+            local,
+            target,
             attestation_generator,
             attestation_verifier,
-        )?;
-
-        let listener = TcpListener::bind(local).await?;
-
-        Ok(Self {
-            attested_tls_server,
-            listener: listener.into(),
-            target,
-        })
+        )
+        .await
     }
 
     /// Start with preconfigured TLS
     pub async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
-        mut server_config: ServerConfig,
+        mut outer_server_config: ServerConfig,
         local: impl ToSocketAddrs,
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
-        ensure_proxy_alpn_protocols(&mut server_config.alpn_protocols);
-
-        let attested_tls_server = AttestedTlsServer::new_with_tls_config(
-            cert_chain,
-            server_config,
+        ensure_proxy_alpn_protocols(&mut outer_server_config.alpn_protocols);
+        let server_name = hostname_from_cert(cert_chain.get(0).unwrap()).unwrap();
+        let inner_cert_resolver = AttestedCertificateResolver::new(
             attestation_generator,
-            attestation_verifier,
-        )?;
+            None,
+            server_name.to_string(), // TODO get name from outer certificate
+            vec![],
+        )
+        .await
+        .unwrap();
 
+        let inner_server_config =
+            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth() // TODO
+                .with_cert_resolver(Arc::new(inner_cert_resolver));
+
+        let nesting_tls_acceptor =
+            NestingTlsAcceptor::new(Arc::new(outer_server_config), Arc::new(inner_server_config));
         let listener = TcpListener::bind(local).await?;
 
         Ok(Self {
-            attested_tls_server,
+            nesting_tls_acceptor,
             listener: listener.into(),
             target,
         })
@@ -184,19 +194,12 @@ impl ProxyServer {
     pub async fn accept(&self) -> Result<tokio::task::JoinHandle<()>, ProxyError> {
         let target = self.target.clone();
         let (inbound, client_addr) = self.listener.accept().await?;
-        let attested_tls_server = self.attested_tls_server.clone();
+        let nesting_tls_acceptor = self.nesting_tls_acceptor.clone();
 
         let join_handle = tokio::spawn(async move {
-            match attested_tls_server.handle_connection(inbound).await {
-                Ok((tls_stream, measurements, attestation_type)) => {
-                    if let Err(err) = Self::handle_connection(
-                        tls_stream,
-                        measurements,
-                        attestation_type,
-                        target,
-                        client_addr,
-                    )
-                    .await
+            match nesting_tls_acceptor.accept(inbound).await {
+                Ok(tls_stream) => {
+                    if let Err(err) = Self::handle_connection(tls_stream, target, client_addr).await
                     {
                         warn!("Failed to handle connection: {err}");
                     }
@@ -217,13 +220,11 @@ impl ProxyServer {
 
     /// Handle an incoming connection from a proxy-client
     async fn handle_connection(
-        tls_stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
-        measurements: Option<MultiMeasurements>,
-        remote_attestation_type: AttestationType,
+        tls_stream: NestingTlsStream<tokio::net::TcpStream>,
         target: String,
         client_addr: SocketAddr,
     ) -> Result<(), ProxyError> {
-        debug!("[proxy-server] accepted connection with measurements: {measurements:?}");
+        debug!("[proxy-server] accepted connection");
 
         let http_version = HttpVersion::from_negotiated_protocol_server(&tls_stream);
 
@@ -250,27 +251,6 @@ impl ProxyServer {
                 };
 
             update_header(headers, &X_FORWARDED_FOR, &new_x_forwarded_for);
-
-            // If we have measurements, from the remote peer, add them to the request header
-            let measurements = measurements.clone();
-            if let Some(measurements) = measurements {
-                match measurements.to_header_format() {
-                    Ok(header_value) => {
-                        headers.insert(MEASUREMENT_HEADER, header_value);
-                    }
-                    Err(e) => {
-                        // This error is highly unlikely - that the measurement values fail to
-                        // encode to JSON or fit in an HTTP header
-                        error!("Failed to encode measurement values: {e}");
-                    }
-                }
-            }
-
-            update_header(
-                headers,
-                ATTESTATION_TYPE_HEADER,
-                remote_attestation_type.as_str(),
-            );
 
             let target = target.clone();
             async move {
@@ -381,7 +361,7 @@ impl ProxyClient {
             None => RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
         };
 
-        let mut client_config = if let Some(ref cert_and_key) = cert_and_key {
+        let mut outer_client_config = if let Some(ref cert_and_key) = cert_and_key {
             ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .with_root_certificates(root_store)
                 .with_client_auth_cert(
@@ -393,43 +373,48 @@ impl ProxyClient {
                 .with_root_certificates(root_store)
                 .with_no_client_auth()
         };
-        ensure_proxy_alpn_protocols(&mut client_config.alpn_protocols);
 
-        let attested_tls_client = AttestedTlsClient::new_with_tls_config(
-            client_config,
+        Self::new_with_tls_config(
+            outer_client_config,
+            address,
+            server_name,
             attestation_generator,
             attestation_verifier,
-            cert_and_key.map(|c| c.cert_chain),
-        )?;
-
-        Self::new_with_inner(address, attested_tls_client, &server_name).await
+            remote_certificate,
+        )
+        .await
     }
 
     /// Create a new proxy client with given TLS configuration
     pub async fn new_with_tls_config(
-        mut client_config: ClientConfig,
+        mut outer_client_config: ClientConfig,
         address: impl ToSocketAddrs,
         target_name: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, ProxyError> {
-        ensure_proxy_alpn_protocols(&mut client_config.alpn_protocols);
+        ensure_proxy_alpn_protocols(&mut outer_client_config.alpn_protocols);
 
-        let attested_tls_client = AttestedTlsClient::new_with_tls_config(
-            client_config,
-            attestation_generator,
-            attestation_verifier,
-            cert_chain,
-        )?;
+        let attested_cert_verifier =
+            AttestedCertificateVerifier::new(None, attestation_verifier).unwrap();
 
-        Self::new_with_inner(address, attested_tls_client, &target_name).await
+        let inner_client_config =
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
+                .with_no_client_auth();
+
+        let nesting_tls_connector =
+            NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
+
+        Self::new_with_inner(address, nesting_tls_connector, &target_name).await
     }
 
     /// Create a new proxy client with given [AttestedTlsClient]
     pub async fn new_with_inner(
         address: impl ToSocketAddrs,
-        attested_tls_client: AttestedTlsClient,
+        nesting_tls_connector: NestingTlsConnector,
         target_name: &str,
     ) -> Result<Self, ProxyError> {
         let listener = TcpListener::bind(address).await?;
@@ -452,9 +437,9 @@ impl ProxyClient {
             let mut first = true;
             let mut ready_tx = Some(ready_tx);
             'reconnect: loop {
-                let (mut sender, conn, measurements, remote_attestation_type) =
+                let (mut sender, conn) =
                     // Connect to the proxy server and provide / verify attestation
-                    match Self::setup_connection_with_backoff(&target, &attested_tls_client, first)
+                    match Self::setup_connection_with_backoff(&target, &nesting_tls_connector, first)
                         .await
                     {
                         Ok(output) => {
@@ -494,29 +479,8 @@ impl ProxyClient {
                                 debug!("[proxy-client] Read incoming request from source client: {req:?}");
                                 // Attempt to forward it to the proxy server
                                 let (response, should_reconnect) = match sender.send_request(req).await {
-                                    Ok(mut resp) => {
+                                    Ok(resp) => {
                                         debug!("[proxy-client] Read response from proxy-server: {resp:?}");
-                                        // If we have measurements from the proxy-server, inject them into the
-                                        // response header
-                                        let headers = resp.headers_mut();
-                                        if let Some(measurements) = measurements.clone() {
-                                            match measurements.to_header_format() {
-                                                Ok(header_value) => {
-                                                    headers.insert(MEASUREMENT_HEADER, header_value);
-                                                }
-                                                Err(e) => {
-                                                    // This error is highly unlikely - that the measurement values fail to
-                                                    // encode to JSON or fit in an HTTP header
-                                                    error!("Failed to encode measurement values: {e}");
-                                                }
-                                            }
-                                        }
-
-                                        update_header(
-                                            headers,
-                                            ATTESTATION_TYPE_HEADER,
-                                            remote_attestation_type.as_str(),
-                                        );
                                         (Ok(resp.map(|b| b.boxed())), false)
                                     }
                                     Err(e) => {
@@ -622,22 +586,14 @@ impl ProxyClient {
     // If it fails retry with a backoff (indefinately)
     async fn setup_connection_with_backoff(
         target: &str,
-        attested_tls_client: &AttestedTlsClient,
+        nesting_tls_connector: &NestingTlsConnector,
         should_bail: bool,
-    ) -> Result<
-        (
-            HttpSender,
-            HttpConnection,
-            Option<MultiMeasurements>,
-            AttestationType,
-        ),
-        ProxyError,
-    > {
+    ) -> Result<(HttpSender, HttpConnection), ProxyError> {
         let mut delay = Duration::from_secs(1);
         let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
 
         loop {
-            match Self::setup_connection(attested_tls_client, target).await {
+            match Self::setup_connection(nesting_tls_connector, target).await {
                 Ok(output) => {
                     return Ok(output);
                 }
@@ -659,19 +615,16 @@ impl ProxyClient {
 
     /// Connect to the proxy-server, do TLS handshake and remote attestation
     async fn setup_connection(
-        inner: &AttestedTlsClient,
+        nesting_tls_connector: &NestingTlsConnector,
         target: &str,
-    ) -> Result<
-        (
-            HttpSender,
-            HttpConnection,
-            Option<MultiMeasurements>,
-            AttestationType,
-        ),
-        ProxyError,
-    > {
-        let (tls_stream, measurements, remote_attestation_type) = inner.connect_tcp(target).await?;
-        debug!("[proxy-client] Connected to proxy server with measurements: {measurements:?}");
+    ) -> Result<(HttpSender, HttpConnection), ProxyError> {
+        let outbound_stream = tokio::net::TcpStream::connect(target).await?;
+
+        let domain = ServerName::try_from(target).unwrap();
+        let tls_stream = nesting_tls_connector
+            .connect(domain, outbound_stream)
+            .await?;
+        debug!("[proxy-client] Connected to proxy server");
 
         // The attestation exchange is now complete - setup an HTTP client
         let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
@@ -697,7 +650,7 @@ impl ProxyClient {
         };
 
         // Return the HTTP client, as well as remote measurements
-        Ok((sender, conn, measurements, remote_attestation_type))
+        Ok((sender, conn))
     }
 
     // Handle a request from the source client to the proxy server
@@ -755,14 +708,32 @@ pub enum ProxyError {
     OneShotRecv(#[from] oneshot::error::RecvError),
     #[error("Failed to send request, connection to proxy-server dropped")]
     MpscSend,
-    #[error("Attested TLS: {0}")]
-    AttestedTls(#[from] AttestedTlsError),
+    // #[error("Attested TLS: {0}")]
+    // AttestedTls(#[from] AttestedTlsError),
 }
 
 impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {
     fn from(_err: mpsc::error::SendError<RequestWithResponseSender>) -> Self {
         Self::MpscSend
     }
+}
+
+/// Given a certifcate, get the hostname
+fn hostname_from_cert(cert: &CertificateDer<'static>) -> Result<String, ProxyError> {
+    let cert = x509_parser::parse_x509_certificate(cert.as_ref())
+        .map(|(_, parsed)| parsed)
+        .unwrap();
+
+    Ok(cert
+        .subject()
+        .iter_common_name()
+        .next()
+        .unwrap()
+        // .ok_or_else(|| Self::bad_encoding("Missing common name"))?
+        .as_str()
+        // .map_err(|err| Self::bad_encoding(format!("Invalid common name: {err}")))
+        .unwrap()
+        .to_string())
 }
 
 /// If no port was provided, default to 443
@@ -1437,6 +1408,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
+
         assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
