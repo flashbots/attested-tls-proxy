@@ -97,9 +97,8 @@ pub async fn get_inner_tls_cert(
 pub async fn get_inner_tls_cert_with_config(
     server_name: String,
     attestation_verifier: AttestationVerifier,
-    mut outer_client_config: ClientConfig,
+    outer_client_config: ClientConfig,
 ) -> Result<Vec<CertificateDer<'static>>, ProxyError> {
-    ensure_proxy_alpn_protocols(&mut outer_client_config.alpn_protocols);
     let outbound_stream = tokio::net::TcpStream::connect(&server_name).await?;
 
     let domain = server_name_from_host(&server_name)?;
@@ -205,19 +204,18 @@ impl ProxyServer {
     /// Start with preconfigured TLS and require client auth on both nested sessions
     pub async fn new_with_tls_config_and_client_auth(
         cert_chain: Vec<CertificateDer<'static>>,
-        mut outer_server_config: ServerConfig,
+        outer_server_config: ServerConfig,
         local: impl ToSocketAddrs,
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
-        ensure_proxy_alpn_protocols(&mut outer_server_config.alpn_protocols);
         let server_name = certificate_identity_from_chain(&cert_chain)?;
         let inner_cert_resolver =
             build_attested_cert_resolver(attestation_generator, &cert_chain).await?;
 
-        let inner_server_config = if client_auth {
+        let mut inner_server_config = if client_auth {
             let attested_cert_verifier =
                 AttestedCertificateVerifier::new(None, attestation_verifier)?;
             ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -229,6 +227,8 @@ impl ProxyServer {
                 .with_no_client_auth()
                 .with_cert_resolver(Arc::new(inner_cert_resolver))
         };
+
+        ensure_proxy_alpn_protocols(&mut inner_server_config.alpn_protocols);
 
         let nesting_tls_acceptor =
             NestingTlsAcceptor::new(Arc::new(outer_server_config), Arc::new(inner_server_config));
@@ -440,14 +440,13 @@ impl ProxyClient {
 
     /// Create a new proxy client with given TLS configuration
     pub async fn new_with_tls_config(
-        mut outer_client_config: ClientConfig,
+        outer_client_config: ClientConfig,
         address: impl ToSocketAddrs,
         target_name: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, ProxyError> {
-        ensure_proxy_alpn_protocols(&mut outer_client_config.alpn_protocols);
         let outer_has_client_auth = outer_client_config.client_auth_cert_resolver.has_certs();
         let inner_has_client_auth = cert_chain.is_some();
 
@@ -457,7 +456,7 @@ impl ProxyClient {
 
         let attested_cert_verifier = AttestedCertificateVerifier::new(None, attestation_verifier)?;
 
-        let inner_client_config = if let Some(cert_chain) = cert_chain.as_ref() {
+        let mut inner_client_config = if let Some(cert_chain) = cert_chain.as_ref() {
             let inner_cert_resolver =
                 build_attested_cert_resolver(attestation_generator, cert_chain).await?;
             ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -470,6 +469,7 @@ impl ProxyClient {
                 .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
                 .with_no_client_auth()
         };
+        ensure_proxy_alpn_protocols(&mut inner_client_config.alpn_protocols);
 
         let nesting_tls_connector =
             NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
@@ -903,6 +903,56 @@ mod tests {
         ensure_proxy_alpn_protocols(&mut protocols);
 
         assert_eq!(protocols, vec![ALPN_HTTP11.to_vec(), ALPN_H2.to_vec()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_proxy_negotiates_http2_by_default() {
+        let target_addr = example_http_service().await;
+
+        let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
+        let (server_config, outer_client_config) =
+            generate_tls_config(cert_chain.clone(), private_key);
+
+        let proxy_server = ProxyServer::new_with_tls_config(
+            cert_chain,
+            server_config,
+            "127.0.0.1:0",
+            target_addr.to_string(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let attested_cert_verifier =
+            AttestedCertificateVerifier::new(None, AttestationVerifier::mock()).unwrap();
+        let mut inner_client_config =
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
+                .with_no_client_auth();
+        ensure_proxy_alpn_protocols(&mut inner_client_config.alpn_protocols);
+
+        let nesting_tls_connector = NestingTlsConnector::new(
+            Arc::new(outer_client_config),
+            Arc::new(inner_client_config),
+        );
+
+        let (sender, conn) = ProxyClient::setup_connection(
+            &nesting_tls_connector,
+            &format!("localhost:{}", proxy_addr.port()),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(sender, HttpSender::Http2(_)));
+        assert!(matches!(conn, HttpConnection::Http2 { .. }));
     }
 
     #[tokio::test(flavor = "multi_thread")]
