@@ -939,10 +939,8 @@ mod tests {
                 .with_no_client_auth();
         ensure_proxy_alpn_protocols(&mut inner_client_config.alpn_protocols);
 
-        let nesting_tls_connector = NestingTlsConnector::new(
-            Arc::new(outer_client_config),
-            Arc::new(inner_client_config),
-        );
+        let nesting_tls_connector =
+            NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
 
         let (sender, conn) = ProxyClient::setup_connection(
             &nesting_tls_connector,
