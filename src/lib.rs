@@ -89,9 +89,9 @@ where
 {
     fn certificate_name(&self) -> Result<Option<String>, ProxyError> {
         match &self.tls {
-            OuterTlsMode::CertAndKey(cert_and_key) => {
-                Ok(Some(certificate_identity_from_chain(&cert_and_key.cert_chain)?))
-            }
+            OuterTlsMode::CertAndKey(cert_and_key) => Ok(Some(certificate_identity_from_chain(
+                &cert_and_key.cert_chain,
+            )?)),
             OuterTlsMode::Preconfigured {
                 certificate_name, ..
             } => Ok(certificate_name.clone()),
@@ -130,10 +130,8 @@ where
         };
 
         let outer_listener = Arc::new(TcpListener::bind(listen_addr).await?);
-        let outer_tls_acceptor = NestingTlsAcceptor::new(
-            Arc::new(outer_server_config),
-            inner_server_config,
-        );
+        let outer_tls_acceptor =
+            NestingTlsAcceptor::new(Arc::new(outer_server_config), inner_server_config);
 
         Ok((outer_listener, outer_tls_acceptor))
     }
