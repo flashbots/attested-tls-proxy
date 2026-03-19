@@ -62,17 +62,81 @@ pub struct TlsCertAndKey {
     pub key: PrivateKeyDer<'static>,
 }
 
+/// Configuration for the optional outer nested-TLS listener.
 pub struct OuterTlsConfig<A> {
+    /// The socket address to bind for the outer listener.
     pub listen_addr: A,
+    /// How the outer TLS server configuration should be constructed.
     pub tls: OuterTlsMode,
 }
 
+/// TLS configuration sources for the outer nested-TLS listener.
 pub enum OuterTlsMode {
+    /// Build the outer TLS server config from certificate and key material.
     CertAndKey(TlsCertAndKey),
+    /// Use an already-constructed outer TLS server config.
     Preconfigured {
+        /// The outer TLS server configuration to expose on the listener.
         server_config: ServerConfig,
+        /// The server identity to embed into the inner attested certificate.
         certificate_name: Option<String>,
     },
+}
+
+impl<A> OuterTlsConfig<A>
+where
+    A: ToSocketAddrs,
+{
+    fn certificate_name(&self) -> Result<Option<String>, ProxyError> {
+        match &self.tls {
+            OuterTlsMode::CertAndKey(cert_and_key) => {
+                Ok(Some(certificate_identity_from_chain(&cert_and_key.cert_chain)?))
+            }
+            OuterTlsMode::Preconfigured {
+                certificate_name, ..
+            } => Ok(certificate_name.clone()),
+        }
+    }
+
+    async fn into_listener_and_acceptor(
+        self,
+        inner_server_config: Arc<ServerConfig>,
+        client_auth: bool,
+    ) -> Result<(Arc<TcpListener>, NestingTlsAcceptor), ProxyError> {
+        let listen_addr = self.listen_addr;
+        let outer_server_config = match self.tls {
+            OuterTlsMode::CertAndKey(cert_and_key) => {
+                if client_auth {
+                    let root_store =
+                        RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+                    let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
+
+                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                        .with_client_cert_verifier(verifier)
+                        .with_single_cert(
+                            cert_and_key.cert_chain.clone(),
+                            cert_and_key.key.clone_key(),
+                        )?
+                } else {
+                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                        .with_no_client_auth()
+                        .with_single_cert(
+                            cert_and_key.cert_chain.clone(),
+                            cert_and_key.key.clone_key(),
+                        )?
+                }
+            }
+            OuterTlsMode::Preconfigured { server_config, .. } => server_config,
+        };
+
+        let outer_listener = Arc::new(TcpListener::bind(listen_addr).await?);
+        let outer_tls_acceptor = NestingTlsAcceptor::new(
+            Arc::new(outer_server_config),
+            inner_server_config,
+        );
+
+        Ok((outer_listener, outer_tls_acceptor))
+    }
 }
 
 /// Adds HTTP 1 and 2 to the list of allowed protocols
@@ -168,95 +232,11 @@ impl ProxyServer {
     where
         O: ToSocketAddrs,
     {
-        let outer_session = match outer_session {
-            Some(OuterTlsConfig {
-                listen_addr,
-                tls: OuterTlsMode::CertAndKey(cert_and_key),
-            }) => {
-                let certificate_name =
-                    Some(certificate_identity_from_chain(&cert_and_key.cert_chain)?);
-                let server_config = if client_auth {
-                    let root_store =
-                        RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-                    let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
-
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_client_cert_verifier(verifier)
-                        .with_single_cert(
-                            cert_and_key.cert_chain.clone(),
-                            cert_and_key.key.clone_key(),
-                        )?
-                } else {
-                    ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                        .with_no_client_auth()
-                        .with_single_cert(
-                            cert_and_key.cert_chain.clone(),
-                            cert_and_key.key.clone_key(),
-                        )?
-                };
-
-                Some(OuterTlsConfig {
-                    listen_addr,
-                    tls: OuterTlsMode::Preconfigured {
-                        server_config,
-                        certificate_name,
-                    },
-                })
-            }
-            Some(OuterTlsConfig {
-                listen_addr,
-                tls:
-                    OuterTlsMode::Preconfigured {
-                        server_config,
-                        certificate_name,
-                    },
-            }) => Some(OuterTlsConfig {
-                listen_addr,
-                tls: OuterTlsMode::Preconfigured {
-                    server_config,
-                    certificate_name,
-                },
-            }),
-            None => None,
-        };
-
-        Self::new_inner(
-            outer_session,
-            inner_local,
-            target,
-            attestation_generator,
-            attestation_verifier,
-            client_auth,
-        )
-        .await
-    }
-
-    async fn new_inner<O>(
-        outer_session: Option<OuterTlsConfig<O>>,
-        inner_local: impl ToSocketAddrs,
-        target: String,
-        attestation_generator: AttestationGenerator,
-        attestation_verifier: AttestationVerifier,
-        client_auth: bool,
-    ) -> Result<Self, ProxyError>
-    where
-        O: ToSocketAddrs,
-    {
-        let (outer_server_config, certificate_name, outer_local) = match outer_session {
-            Some(OuterTlsConfig {
-                listen_addr,
-                tls:
-                    OuterTlsMode::Preconfigured {
-                        server_config,
-                        certificate_name,
-                    },
-            }) => (Some(server_config), certificate_name, Some(listen_addr)),
-            Some(OuterTlsConfig {
-                listen_addr: _,
-                tls: OuterTlsMode::CertAndKey(_),
-            }) => unreachable!("cert/key outer session should be normalized via ProxyServer::new"),
-            None => (None, None, None),
-        };
+        let certificate_name = outer_session
+            .as_ref()
+            .map(OuterTlsConfig::certificate_name)
+            .transpose()?
+            .flatten();
         let inner_server_config = Arc::new(
             build_inner_server_config(
                 attestation_generator,
@@ -269,19 +249,14 @@ impl ProxyServer {
         let inner_listener = Arc::new(TcpListener::bind(inner_local).await?);
         let inner_tls_acceptor = TlsAcceptor::from(inner_server_config.clone());
 
-        let (outer_listener, outer_tls_acceptor) = match (outer_server_config, outer_local) {
-            (Some(outer_server_config), Some(outer_local)) => {
-                let outer_listener = Arc::new(TcpListener::bind(outer_local).await?);
-                let acceptor = NestingTlsAcceptor::new(
-                    Arc::new(outer_server_config),
-                    inner_server_config.clone(),
-                );
-                (Some(outer_listener), Some(acceptor))
+        let (outer_listener, outer_tls_acceptor) = match outer_session {
+            Some(outer_session) => {
+                let (outer_listener, outer_tls_acceptor) = outer_session
+                    .into_listener_and_acceptor(inner_server_config.clone(), client_auth)
+                    .await?;
+                (Some(outer_listener), Some(outer_tls_acceptor))
             }
-            (Some(_), None) => {
-                unreachable!("outer config without outer listener is unrepresentable")
-            }
-            (None, _) => (None, None),
+            None => (None, None),
         };
 
         Ok(Self {
