@@ -7,8 +7,9 @@ use tower_http::services::ServeDir;
 /// Setup a static file server serving the given directory, and a proxy server targetting it
 pub async fn attested_file_server(
     path_to_serve: PathBuf,
-    cert_and_key: TlsCertAndKey,
-    listen_addr: impl ToSocketAddrs,
+    outer_cert_and_key: Option<TlsCertAndKey>,
+    outer_listen_addr: impl ToSocketAddrs,
+    inner_listen_addr: impl ToSocketAddrs,
     attestation_generator: AttestationGenerator,
     attestation_verifier: AttestationVerifier,
     client_auth: bool,
@@ -16,8 +17,9 @@ pub async fn attested_file_server(
     let target_addr = static_file_server(path_to_serve).await?;
 
     let server = ProxyServer::new(
-        cert_and_key,
-        listen_addr,
+        outer_cert_and_key,
+        Some(outer_listen_addr),
+        inner_listen_addr,
         target_addr.to_string(),
         attestation_generator,
         attestation_verifier,
@@ -99,12 +101,14 @@ mod tests {
 
         // Setup a proxy server targetting the static file server
         let proxy_server = ProxyServer::new_with_tls_config(
-            cert_chain,
-            server_config,
+            Some(server_config),
+            Some("127.0.0.1:0"),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
+            false,
+            Some("localhost".to_string()),
         )
         .await
         .unwrap();

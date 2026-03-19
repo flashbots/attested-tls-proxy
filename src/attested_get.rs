@@ -78,12 +78,14 @@ mod tests {
 
         // Setup a proxy server targetting the static file server
         let proxy_server = ProxyServer::new_with_tls_config(
-            cert_chain,
-            server_config,
+            Some(server_config),
+            Some("127.0.0.1:0"),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
+            false,
+            Some("localhost".to_string()),
         )
         .await
         .unwrap();

@@ -77,9 +77,12 @@ enum CliCommand {
     },
     /// Run a proxy server
     Server {
-        /// Socket address to listen on
-        #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
-        listen_addr: SocketAddr,
+        /// Socket address to listen on for the outer nested-TLS listener
+        #[arg(long, default_value = "0.0.0.0:443")]
+        outer_listen_addr: SocketAddr,
+        /// Socket address to listen on for the inner-only attested TLS listener
+        #[arg(long, default_value = "0.0.0.0:4433")]
+        inner_listen_addr: SocketAddr,
         /// The hostname:port or ip:port of the target service to forward traffic to
         target_addr: String,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
@@ -119,19 +122,22 @@ enum CliCommand {
     AttestedFileServer {
         /// Filesystem path to statically serve
         path_to_serve: PathBuf,
-        /// Socket address to listen on
-        #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
-        listen_addr: SocketAddr,
+        /// Socket address to listen on for the outer nested-TLS listener
+        #[arg(long, default_value = "0.0.0.0:443")]
+        outer_listen_addr: SocketAddr,
+        /// Socket address to listen on for the inner-only attested TLS listener
+        #[arg(long, default_value = "0.0.0.0:4433")]
+        inner_listen_addr: SocketAddr,
         /// Type of attestation to present (dafaults to none)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
         server_attestation_type: Option<String>,
         /// The path to a PEM encoded private key
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
-        tls_private_key_path: PathBuf,
+        tls_private_key_path: Option<PathBuf>,
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
-        tls_certificate_path: PathBuf,
+        tls_certificate_path: Option<PathBuf>,
         /// URL of the remote dummy attestation service. Only use with --server-attestation-type
         /// dummy
         #[arg(long)]
@@ -277,7 +283,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         CliCommand::Server {
-            listen_addr,
+            outer_listen_addr,
+            inner_listen_addr,
             target_addr,
             tls_private_key_path,
             tls_certificate_path,
@@ -299,7 +306,8 @@ async fn main() -> anyhow::Result<()> {
 
             let server = ProxyServer::new(
                 tls_cert_and_chain,
-                listen_addr,
+                Some(outer_listen_addr),
+                inner_listen_addr,
                 target_addr,
                 local_attestation_generator,
                 attestation_verifier,
@@ -344,14 +352,15 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::AttestedFileServer {
             path_to_serve,
-            listen_addr,
+            outer_listen_addr,
+            inner_listen_addr,
             server_attestation_type,
             tls_private_key_path,
             tls_certificate_path,
             dev_dummy_dcap,
         } => {
             let tls_cert_and_chain =
-                load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
+                load_tls_cert_and_key_server(tls_certificate_path, tls_private_key_path)?;
 
             let server_attestation_type: AttestationType = serde_json::from_value(
                 serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
@@ -363,7 +372,8 @@ async fn main() -> anyhow::Result<()> {
             attested_file_server(
                 path_to_serve,
                 tls_cert_and_chain,
-                listen_addr,
+                outer_listen_addr,
+                inner_listen_addr,
                 attestation_generator,
                 attestation_verifier,
                 false,
@@ -410,16 +420,14 @@ async fn main() -> anyhow::Result<()> {
 fn load_tls_cert_and_key_server(
     cert_chain: Option<PathBuf>,
     private_key: Option<PathBuf>,
-) -> anyhow::Result<TlsCertAndKey> {
-    if let Some(private_key) = private_key {
-        load_tls_cert_and_key(
-            cert_chain.ok_or(anyhow!("Private key given but no certificate chain"))?,
-            private_key,
-        )
-    } else if cert_chain.is_some() {
-        Err(anyhow!("Certificate chain provided but no private key"))
-    } else {
-        Err(anyhow!("No private key provided"))
+) -> anyhow::Result<Option<TlsCertAndKey>> {
+    match (cert_chain, private_key) {
+        (Some(cert_chain), Some(private_key)) => {
+            Ok(Some(load_tls_cert_and_key(cert_chain, private_key)?))
+        }
+        (Some(_), None) => Err(anyhow!("Certificate chain provided but no private key")),
+        (None, Some(_)) => Err(anyhow!("Private key given but no certificate chain")),
+        (None, None) => Ok(None),
     }
 }
 
