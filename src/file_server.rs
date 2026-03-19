@@ -142,27 +142,23 @@ mod tests {
         let client = reqwest::Client::new();
 
         // This makes the request
-        let (body, content_type) = get_body_and_content_type(
-            format!("http://{}/foo.txt", proxy_client_addr.to_string()),
-            &client,
-        )
-        .await;
+        let (body, content_type) =
+            get_body_and_content_type(format!("http://{}/foo.txt", proxy_client_addr), &client)
+                .await;
         assert_eq!(content_type, "text/plain");
         assert_eq!(body, b"bar");
 
         let (body, content_type) = get_body_and_content_type(
-            format!("http://{}/index.html", proxy_client_addr.to_string()),
+            format!("http://{}/index.html", proxy_client_addr),
             &client,
         )
         .await;
         assert_eq!(content_type, "text/html");
         assert_eq!(body, b"<html><body>foo</body></html>");
 
-        let (body, content_type) = get_body_and_content_type(
-            format!("http://{}/data.bin", proxy_client_addr.to_string()),
-            &client,
-        )
-        .await;
+        let (body, content_type) =
+            get_body_and_content_type(format!("http://{}/data.bin", proxy_client_addr), &client)
+                .await;
         assert_eq!(content_type, "application/octet-stream");
         assert_eq!(body, [0u8; 32]);
     }

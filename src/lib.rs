@@ -144,6 +144,7 @@ pub struct ProxyServer {
 
 impl ProxyServer {
     /// Start with dual listeners. The outer nested-TLS listener is optional.
+    #[allow(clippy::too_many_arguments)]
     pub async fn new<O>(
         outer_cert_and_key: Option<TlsCertAndKey>,
         outer_local: Option<O>,
@@ -204,6 +205,7 @@ impl ProxyServer {
     }
 
     /// Start with preconfigured TLS
+    #[allow(clippy::too_many_arguments)]
     pub async fn new_with_tls_config<O>(
         outer_server_config: Option<ServerConfig>,
         outer_local: Option<O>,
@@ -1299,7 +1301,7 @@ mod tests {
             proxy_client.accept().await.unwrap();
         });
 
-        let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+        let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
 
@@ -1420,7 +1422,7 @@ mod tests {
             proxy_client.accept().await.unwrap();
         });
 
-        let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+        let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
 
@@ -1704,7 +1706,7 @@ mod tests {
             proxy_client.accept().await.unwrap();
         });
 
-        let _initial_response = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+        let _initial_response = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
 
@@ -1712,7 +1714,7 @@ mod tests {
         connection_breaker_tx.send(()).unwrap();
 
         // Make another request
-        let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+        let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
 
@@ -1767,7 +1769,7 @@ mod tests {
             proxy_client.accept().await.unwrap();
         });
 
-        let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
+        let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
 
