@@ -7,9 +7,9 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
-    AttestationGenerator, ProxyClient, ProxyServer, TlsCertAndKey, attested_get::attested_get,
-    file_server::attested_file_server, get_inner_tls_cert, health_check,
-    normalize_pem::normalize_private_key_pem_to_pkcs8,
+    AttestationGenerator, OuterTlsConfig, OuterTlsMode, ProxyClient, ProxyServer, TlsCertAndKey,
+    attested_get::attested_get, file_server::attested_file_server, get_inner_tls_cert,
+    health_check, normalize_pem::normalize_private_key_pem_to_pkcs8,
 };
 
 const GIT_REV: &str = match option_env!("GIT_REV") {
@@ -305,8 +305,10 @@ async fn main() -> anyhow::Result<()> {
                     .await?;
 
             let server = ProxyServer::new(
-                tls_cert_and_chain,
-                Some(outer_listen_addr),
+                tls_cert_and_chain.map(|cert_and_key| OuterTlsConfig {
+                    listen_addr: outer_listen_addr,
+                    tls: OuterTlsMode::CertAndKey(cert_and_key),
+                }),
                 inner_listen_addr,
                 target_addr,
                 local_attestation_generator,

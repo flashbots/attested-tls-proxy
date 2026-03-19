@@ -1,5 +1,8 @@
 //! Static HTTP file server provided by an attested TLS proxy server
-use crate::{AttestationGenerator, AttestationVerifier, ProxyError, ProxyServer, TlsCertAndKey};
+use crate::{
+    AttestationGenerator, AttestationVerifier, OuterTlsConfig, OuterTlsMode, ProxyError,
+    ProxyServer, TlsCertAndKey,
+};
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
 use tower_http::services::ServeDir;
@@ -17,8 +20,10 @@ pub async fn attested_file_server(
     let target_addr = static_file_server(path_to_serve).await?;
 
     let server = ProxyServer::new(
-        outer_cert_and_key,
-        Some(outer_listen_addr),
+        outer_cert_and_key.map(|cert_and_key| OuterTlsConfig {
+            listen_addr: outer_listen_addr,
+            tls: OuterTlsMode::CertAndKey(cert_and_key),
+        }),
         inner_listen_addr,
         target_addr.to_string(),
         attestation_generator,
@@ -54,7 +59,7 @@ pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, Prox
 
 #[cfg(test)]
 mod tests {
-    use crate::{ProxyClient, attestation::AttestationType};
+    use crate::{OuterTlsConfig, OuterTlsMode, ProxyClient, attestation::AttestationType};
 
     use super::*;
     use crate::test_helpers::{generate_certificate_chain_for_host, generate_tls_config};
@@ -100,15 +105,19 @@ mod tests {
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
         // Setup a proxy server targetting the static file server
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some("localhost".to_string()),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             false,
-            Some("localhost".to_string()),
         )
         .await
         .unwrap();
@@ -148,11 +157,9 @@ mod tests {
         assert_eq!(content_type, "text/plain");
         assert_eq!(body, b"bar");
 
-        let (body, content_type) = get_body_and_content_type(
-            format!("http://{}/index.html", proxy_client_addr),
-            &client,
-        )
-        .await;
+        let (body, content_type) =
+            get_body_and_content_type(format!("http://{}/index.html", proxy_client_addr), &client)
+                .await;
         assert_eq!(content_type, "text/html");
         assert_eq!(body, b"<html><body>foo</body></html>");
 

@@ -62,6 +62,19 @@ pub struct TlsCertAndKey {
     pub key: PrivateKeyDer<'static>,
 }
 
+pub struct OuterTlsConfig<A> {
+    pub listen_addr: A,
+    pub tls: OuterTlsMode,
+}
+
+pub enum OuterTlsMode {
+    CertAndKey(TlsCertAndKey),
+    Preconfigured {
+        server_config: ServerConfig,
+        certificate_name: Option<String>,
+    },
+}
+
 /// Adds HTTP 1 and 2 to the list of allowed protocols
 fn ensure_proxy_alpn_protocols(alpn_protocols: &mut Vec<Vec<u8>>) {
     for protocol in [ALPN_H2, ALPN_HTTP11] {
@@ -144,10 +157,8 @@ pub struct ProxyServer {
 
 impl ProxyServer {
     /// Start with dual listeners. The outer nested-TLS listener is optional.
-    #[allow(clippy::too_many_arguments)]
     pub async fn new<O>(
-        outer_cert_and_key: Option<TlsCertAndKey>,
-        outer_local: Option<O>,
+        outer_session: Option<OuterTlsConfig<O>>,
         inner_local: impl ToSocketAddrs,
         target: String,
         attestation_generator: AttestationGenerator,
@@ -157,17 +168,14 @@ impl ProxyServer {
     where
         O: ToSocketAddrs,
     {
-        if outer_cert_and_key.is_some() && outer_local.is_none() {
-            return Err(ProxyError::OuterTlsWithoutOuterListener);
-        }
-
-        let outer_certificate_name = outer_cert_and_key
-            .as_ref()
-            .map(|cert_and_key| certificate_identity_from_chain(&cert_and_key.cert_chain))
-            .transpose()?;
-        let outer_server_config = match outer_cert_and_key {
-            Some(cert_and_key) => {
-                let config = if client_auth {
+        let outer_session = match outer_session {
+            Some(OuterTlsConfig {
+                listen_addr,
+                tls: OuterTlsMode::CertAndKey(cert_and_key),
+            }) => {
+                let certificate_name =
+                    Some(certificate_identity_from_chain(&cert_and_key.cert_chain)?);
+                let server_config = if client_auth {
                     let root_store =
                         RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
                     let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
@@ -186,43 +194,69 @@ impl ProxyServer {
                             cert_and_key.key.clone_key(),
                         )?
                 };
-                Some(config)
+
+                Some(OuterTlsConfig {
+                    listen_addr,
+                    tls: OuterTlsMode::Preconfigured {
+                        server_config,
+                        certificate_name,
+                    },
+                })
             }
+            Some(OuterTlsConfig {
+                listen_addr,
+                tls:
+                    OuterTlsMode::Preconfigured {
+                        server_config,
+                        certificate_name,
+                    },
+            }) => Some(OuterTlsConfig {
+                listen_addr,
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name,
+                },
+            }),
             None => None,
         };
 
-        Self::new_with_tls_config(
-            outer_server_config,
-            outer_local,
+        Self::new_inner(
+            outer_session,
             inner_local,
             target,
             attestation_generator,
             attestation_verifier,
             client_auth,
-            outer_certificate_name,
         )
         .await
     }
 
-    /// Start with preconfigured TLS
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new_with_tls_config<O>(
-        outer_server_config: Option<ServerConfig>,
-        outer_local: Option<O>,
+    async fn new_inner<O>(
+        outer_session: Option<OuterTlsConfig<O>>,
         inner_local: impl ToSocketAddrs,
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
-        certificate_name: Option<String>,
     ) -> Result<Self, ProxyError>
     where
         O: ToSocketAddrs,
     {
-        if outer_server_config.is_some() && outer_local.is_none() {
-            return Err(ProxyError::OuterTlsWithoutOuterListener);
-        }
-
+        let (outer_server_config, certificate_name, outer_local) = match outer_session {
+            Some(OuterTlsConfig {
+                listen_addr,
+                tls:
+                    OuterTlsMode::Preconfigured {
+                        server_config,
+                        certificate_name,
+                    },
+            }) => (Some(server_config), certificate_name, Some(listen_addr)),
+            Some(OuterTlsConfig {
+                listen_addr: _,
+                tls: OuterTlsMode::CertAndKey(_),
+            }) => unreachable!("cert/key outer session should be normalized via ProxyServer::new"),
+            None => (None, None, None),
+        };
         let inner_server_config = Arc::new(
             build_inner_server_config(
                 attestation_generator,
@@ -244,7 +278,9 @@ impl ProxyServer {
                 );
                 (Some(outer_listener), Some(acceptor))
             }
-            (Some(_), None) => return Err(ProxyError::OuterTlsWithoutOuterListener),
+            (Some(_), None) => {
+                unreachable!("outer config without outer listener is unrepresentable")
+            }
             (None, _) => (None, None),
         };
 
@@ -903,8 +939,6 @@ pub enum ProxyError {
     MpscSend,
     #[error("Client auth must be configured on both the inner and outer TLS sessions")]
     ClientAuthMisconfigured,
-    #[error("Outer TLS configuration requires an outer listener address")]
-    OuterTlsWithoutOuterListener,
 }
 
 impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {
@@ -1046,8 +1080,10 @@ mod tests {
         };
 
         let dual_listener_server = ProxyServer::new(
-            Some(tls_cert_and_key),
-            Some("127.0.0.1:0"),
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::CertAndKey(tls_cert_and_key),
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
@@ -1063,8 +1099,7 @@ mod tests {
         assert_ne!(outer_addr, inner_addr);
 
         let inner_only_server = ProxyServer::new(
-            None,
-            None::<&str>,
+            None::<OuterTlsConfig<&str>>,
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
@@ -1080,40 +1115,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn outer_tls_requires_outer_listener_address() {
-        let target_addr = example_http_service().await;
-
-        let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
-        let tls_cert_and_key = TlsCertAndKey {
-            cert_chain,
-            key: private_key,
-        };
-
-        let result = ProxyServer::new(
-            Some(tls_cert_and_key),
-            None::<&str>,
-            "127.0.0.1:0",
-            target_addr.to_string(),
-            AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::expect_none(),
-            false,
-        )
-        .await;
-
-        assert!(matches!(
-            result,
-            Err(ProxyError::OuterTlsWithoutOuterListener)
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn inner_only_listener_negotiates_http2_by_default() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let target_addr = example_http_service().await;
 
         let proxy_server = ProxyServer::new(
-            None,
-            None::<&str>,
+            None::<OuterTlsConfig<&str>>,
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
@@ -1162,15 +1169,19 @@ mod tests {
         let (server_config, outer_client_config) =
             generate_tls_config(cert_chain.clone(), private_key);
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             false,
-            Some(certificate_identity_from_chain(&cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1265,15 +1276,19 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             false,
-            Some(certificate_identity_from_chain(&cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1329,15 +1344,21 @@ mod tests {
             server_private_key,
         );
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_tls_server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config: server_tls_server_config,
+                    certificate_name: Some(
+                        certificate_identity_from_chain(&server_cert_chain).unwrap(),
+                    ),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             true,
-            Some(certificate_identity_from_chain(&server_cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1383,15 +1404,21 @@ mod tests {
         let (server_config, client_config) =
             generate_tls_config(server_cert_chain.clone(), server_private_key);
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some(
+                        certificate_identity_from_chain(&server_cert_chain).unwrap(),
+                    ),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             false,
-            Some(certificate_identity_from_chain(&server_cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1449,15 +1476,21 @@ mod tests {
             server_private_key,
         );
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_tls_server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config: server_tls_server_config,
+                    certificate_name: Some(
+                        certificate_identity_from_chain(&server_cert_chain).unwrap(),
+                    ),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::mock(),
             true,
-            Some(certificate_identity_from_chain(&server_cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1505,15 +1538,19 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             false,
-            Some(certificate_identity_from_chain(&cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1549,15 +1586,19 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
             false,
-            Some(certificate_identity_from_chain(&cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1591,15 +1632,19 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             false,
-            Some(certificate_identity_from_chain(&cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1658,15 +1703,19 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             false,
-            Some(certificate_identity_from_chain(&cert_chain).unwrap()),
         )
         .await
         .unwrap();
@@ -1733,15 +1782,19 @@ mod tests {
 
         server_config.alpn_protocols.push(ALPN_HTTP11.to_vec());
 
-        let proxy_server = ProxyServer::new_with_tls_config(
-            Some(server_config),
-            Some("127.0.0.1:0"),
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                },
+            }),
             "127.0.0.1:0",
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             false,
-            Some(certificate_identity_from_chain(&cert_chain).unwrap()),
         )
         .await
         .unwrap();
