@@ -11,8 +11,8 @@ use tower_http::services::ServeDir;
 pub async fn attested_file_server(
     path_to_serve: PathBuf,
     outer_cert_and_key: Option<TlsCertAndKey>,
-    outer_listen_addr: impl ToSocketAddrs,
-    inner_listen_addr: impl ToSocketAddrs,
+    outer_listen_addr: Option<impl ToSocketAddrs>,
+    inner_listen_addr: Option<impl ToSocketAddrs>,
     attestation_generator: AttestationGenerator,
     attestation_verifier: AttestationVerifier,
     client_auth: bool,
@@ -20,10 +20,12 @@ pub async fn attested_file_server(
     let target_addr = static_file_server(path_to_serve).await?;
 
     let server = ProxyServer::new(
-        outer_cert_and_key.map(|cert_and_key| OuterTlsConfig {
-            listen_addr: outer_listen_addr,
-            tls: OuterTlsMode::CertAndKey(cert_and_key),
-        }),
+        outer_cert_and_key
+            .zip(outer_listen_addr)
+            .map(|(cert_and_key, listen_addr)| OuterTlsConfig {
+                listen_addr,
+                tls: OuterTlsMode::CertAndKey(cert_and_key),
+            }),
         inner_listen_addr,
         target_addr.to_string(),
         attestation_generator,
@@ -113,7 +115,7 @@ mod tests {
                     certificate_name: "localhost".to_string(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),

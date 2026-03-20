@@ -52,6 +52,9 @@ type RequestWithResponseSender = (
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
 );
 
+type OuterProxySession = (Arc<TcpListener>, NestingTlsAcceptor);
+type InnerProxySession = (Arc<TcpListener>, TlsAcceptor);
+
 /// TLS Credentials
 pub struct TlsCertAndKey {
     /// Der-encoded TLS certificate chain
@@ -207,19 +210,17 @@ pub async fn get_inner_tls_cert_with_config(
 
 /// A TLS over TCP server which provides an attestation before forwarding traffic to a given target address
 pub struct ProxyServer {
-    outer_listener: Option<Arc<TcpListener>>,
-    outer_tls_acceptor: Option<NestingTlsAcceptor>,
-    inner_listener: Arc<TcpListener>,
-    inner_tls_acceptor: TlsAcceptor,
+    outer: Option<OuterProxySession>,
+    inner: Option<InnerProxySession>,
     /// The address/hostname of the target service we are proxying to
     target: String,
 }
 
 impl ProxyServer {
     /// Start with dual listeners. The outer nested-TLS listener is optional.
-    pub async fn new<O>(
+    pub async fn new<O, I>(
         outer_session: Option<OuterTlsConfig<O>>,
-        inner_local: impl ToSocketAddrs,
+        inner_local: Option<I>,
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
@@ -227,7 +228,12 @@ impl ProxyServer {
     ) -> Result<Self, ProxyError>
     where
         O: ToSocketAddrs,
+        I: ToSocketAddrs,
     {
+        if outer_session.is_none() && inner_local.is_none() {
+            return Err(ProxyError::NoListenersConfigured);
+        }
+
         let certificate_name = outer_session
             .as_ref()
             .map(OuterTlsConfig::certificate_name)
@@ -241,24 +247,28 @@ impl ProxyServer {
             )
             .await?,
         );
-        let inner_listener = Arc::new(TcpListener::bind(inner_local).await?);
-        let inner_tls_acceptor = TlsAcceptor::from(inner_server_config.clone());
+        let inner = match inner_local {
+            Some(inner_local) => {
+                let inner_listener = Arc::new(TcpListener::bind(inner_local).await?);
+                let inner_tls_acceptor = TlsAcceptor::from(inner_server_config.clone());
+                Some((inner_listener, inner_tls_acceptor))
+            }
+            None => None,
+        };
 
-        let (outer_listener, outer_tls_acceptor) = match outer_session {
+        let outer = match outer_session {
             Some(outer_session) => {
                 let (outer_listener, outer_tls_acceptor) = outer_session
                     .into_listener_and_acceptor(inner_server_config.clone(), client_auth)
                     .await?;
-                (Some(outer_listener), Some(outer_tls_acceptor))
+                Some((outer_listener, outer_tls_acceptor))
             }
-            None => (None, None),
+            None => None,
         };
 
         Ok(Self {
-            outer_listener,
-            outer_tls_acceptor,
-            inner_listener,
-            inner_tls_acceptor,
+            outer,
+            inner,
             target,
         })
     }
@@ -268,13 +278,14 @@ impl ProxyServer {
     /// Returns the handle for the task handling the connection
     pub async fn accept(&self) -> Result<tokio::task::JoinHandle<()>, ProxyError> {
         let target = self.target.clone();
-        let outer_listener = self.outer_listener.clone();
-        let outer_tls_acceptor = self.outer_tls_acceptor.clone();
-        let inner_listener = self.inner_listener.clone();
-        let inner_tls_acceptor = self.inner_tls_acceptor.clone();
+        let outer = self.outer.clone();
+        let inner = self.inner.clone();
 
-        let join_handle = match (outer_listener, outer_tls_acceptor) {
-            (Some(outer_listener), Some(outer_tls_acceptor)) => {
+        let join_handle = match (outer, inner) {
+            (
+                Some((outer_listener, outer_tls_acceptor)),
+                Some((inner_listener, inner_tls_acceptor)),
+            ) => {
                 let ((inbound, client_addr), use_outer) = tokio::select! {
                     accepted = outer_listener.accept() => (accepted?, true),
                     accepted = inner_listener.accept() => (accepted?, false),
@@ -312,7 +323,7 @@ impl ProxyServer {
                     }
                 })
             }
-            _ => {
+            (None, Some((inner_listener, inner_tls_acceptor))) => {
                 let (inbound, client_addr) = inner_listener.accept().await?;
                 tokio::spawn(async move {
                     match inner_tls_acceptor.accept(inbound).await {
@@ -329,6 +340,24 @@ impl ProxyServer {
                     }
                 })
             }
+            (Some((outer_listener, outer_tls_acceptor)), None) => {
+                let (inbound, client_addr) = outer_listener.accept().await?;
+                tokio::spawn(async move {
+                    match outer_tls_acceptor.accept(inbound).await {
+                        Ok(tls_stream) => {
+                            if let Err(err) =
+                                Self::handle_outer_connection(tls_stream, target, client_addr).await
+                            {
+                                warn!("Failed to handle outer connection: {err}");
+                            }
+                        }
+                        Err(err) => {
+                            warn!("Outer attestation exchange failed: {err}");
+                        }
+                    }
+                })
+            }
+            _ => return Err(ProxyError::NoListenersConfigured),
         };
 
         Ok(join_handle)
@@ -336,21 +365,29 @@ impl ProxyServer {
 
     /// Helper to get the socket address of the underlying TCP listener
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        match &self.outer_listener {
-            Some(listener) => listener.local_addr(),
-            None => self.inner_listener.local_addr(),
+        match &self.outer {
+            Some((listener, _)) => listener.local_addr(),
+            None => self
+                .inner
+                .as_ref()
+                .map(|(listener, _)| listener)
+                .ok_or_else(|| std::io::Error::other("no listeners configured"))?
+                .local_addr(),
         }
     }
 
     pub fn outer_local_addr(&self) -> std::io::Result<Option<SocketAddr>> {
-        self.outer_listener
+        self.outer
             .as_ref()
-            .map(|listener| listener.local_addr())
+            .map(|(listener, _)| listener.local_addr())
             .transpose()
     }
 
-    pub fn inner_local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.inner_listener.local_addr()
+    pub fn inner_local_addr(&self) -> std::io::Result<Option<SocketAddr>> {
+        self.inner
+            .as_ref()
+            .map(|(listener, _)| listener.local_addr())
+            .transpose()
     }
 
     async fn handle_outer_connection(
@@ -909,6 +946,8 @@ pub enum ProxyError {
     MpscSend,
     #[error("Client auth must be configured on both the inner and outer TLS sessions")]
     ClientAuthMisconfigured,
+    #[error("At least one server listener must be configured")]
+    NoListenersConfigured,
 }
 
 impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {
@@ -1040,6 +1079,21 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn proxy_server_requires_at_least_one_listener() {
+        let result = ProxyServer::new(
+            None::<OuterTlsConfig<&str>>,
+            None::<&str>,
+            "127.0.0.1:1".to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            false,
+        )
+        .await;
+
+        assert!(matches!(result, Err(ProxyError::NoListenersConfigured)));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn dual_listener_server_reports_expected_addresses() {
         let target_addr = example_http_service().await;
 
@@ -1054,7 +1108,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::CertAndKey(tls_cert_and_key),
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
@@ -1064,13 +1118,13 @@ mod tests {
         .unwrap();
 
         let outer_addr = dual_listener_server.outer_local_addr().unwrap().unwrap();
-        let inner_addr = dual_listener_server.inner_local_addr().unwrap();
+        let inner_addr = dual_listener_server.inner_local_addr().unwrap().unwrap();
         assert_eq!(dual_listener_server.local_addr().unwrap(), outer_addr);
         assert_ne!(outer_addr, inner_addr);
 
         let inner_only_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
@@ -1079,7 +1133,7 @@ mod tests {
         .await
         .unwrap();
 
-        let inner_only_addr = inner_only_server.inner_local_addr().unwrap();
+        let inner_only_addr = inner_only_server.inner_local_addr().unwrap().unwrap();
         assert!(inner_only_server.outer_local_addr().unwrap().is_none());
         assert_eq!(inner_only_server.local_addr().unwrap(), inner_only_addr);
     }
@@ -1091,7 +1145,7 @@ mod tests {
 
         let proxy_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1100,7 +1154,7 @@ mod tests {
         .await
         .unwrap();
 
-        let inner_addr = proxy_server.inner_local_addr().unwrap();
+        let inner_addr = proxy_server.inner_local_addr().unwrap().unwrap();
 
         tokio::spawn(async move {
             proxy_server.accept().await.unwrap();
@@ -1147,7 +1201,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1254,7 +1308,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1322,7 +1376,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&server_cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
@@ -1380,7 +1434,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&server_cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
@@ -1450,7 +1504,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&server_cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::mock(),
@@ -1510,7 +1564,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1558,7 +1612,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
@@ -1604,7 +1658,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1675,7 +1729,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1754,7 +1808,7 @@ mod tests {
                     certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),

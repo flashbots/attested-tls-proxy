@@ -85,7 +85,7 @@ mod tests {
                     certificate_name: "localhost".to_string(),
                 },
             }),
-            "127.0.0.1:0",
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
