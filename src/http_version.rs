@@ -7,6 +7,9 @@ use std::task::{Context, Poll};
 pub const ALPN_H2: &[u8] = b"h2";
 pub const ALPN_HTTP11: &[u8] = b"http/1.1";
 
+type ProxyClientTlsStream =
+    tokio_rustls::client::TlsStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
+
 /// Supported HTTP versions
 #[derive(Debug)]
 pub enum HttpVersion {
@@ -55,13 +58,11 @@ impl HttpVersion {
 type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
 type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
 
-type Http1Connection = hyper::client::conn::http1::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
->;
+type Http1Connection =
+    hyper::client::conn::http1::Connection<TokioIo<ProxyClientTlsStream>, hyper::body::Incoming>;
 
 type Http2Connection = hyper::client::conn::http2::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+    TokioIo<ProxyClientTlsStream>,
     hyper::body::Incoming,
     crate::TokioExecutor,
 >;

@@ -1,8 +1,7 @@
 //! Helper functions used in tests
 use axum::response::IntoResponse;
 use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::{Arc, Once},
 };
 use tokio::net::TcpListener;
@@ -15,20 +14,17 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 static INIT: Once = Once::new();
 
-use crate::{
-    MEASUREMENT_HEADER,
-    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
-};
-
-/// Helper to generate a self-signed certificate for testing
-pub fn generate_certificate_chain(
-    ip: IpAddr,
+/// Helper to generate a self-signed certificate for testing with a DNS subject name
+pub fn generate_certificate_chain_for_host(
+    host: &str,
 ) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
-    let mut params = rcgen::CertificateParams::new(vec![]).unwrap();
-    params.subject_alt_names.push(rcgen::SanType::IpAddress(ip));
+    let mut params = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap();
+    params
+        .subject_alt_names
+        .push(rcgen::SanType::DnsName(host.try_into().unwrap()));
     params
         .distinguished_name
-        .push(rcgen::DnType::CommonName, ip.to_string());
+        .push(rcgen::DnType::CommonName, host);
 
     let keypair = rcgen::KeyPair::generate().unwrap();
     let cert = params.self_signed(&keypair).unwrap();
@@ -131,23 +127,13 @@ pub async fn example_http_service() -> SocketAddr {
     addr
 }
 
-async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
-    headers
-        .get(MEASUREMENT_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("No measurements")
-        .to_string()
-}
-
-/// All-zero measurment values used in some tests
-pub fn mock_dcap_measurements() -> MultiMeasurements {
-    MultiMeasurements::Dcap(HashMap::from([
-        (DcapMeasurementRegister::MRTD, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR0, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR1, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR2, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR3, [0u8; 48]),
-    ]))
+async fn get_handler(_headers: http::HeaderMap) -> impl IntoResponse {
+    // headers
+    //     .get(MEASUREMENT_HEADER)
+    //     .and_then(|v| v.to_str().ok())
+    //     .unwrap_or("No measurements")
+    //     .to_string()
+    "No measurements".to_string()
 }
 
 pub fn init_tracing() {
