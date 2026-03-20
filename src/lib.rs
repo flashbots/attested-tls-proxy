@@ -1284,7 +1284,7 @@ mod tests {
         .await
         .unwrap();
 
-        let proy_client_addr = proxy_client.local_addr().unwrap();
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
 
         tokio::spawn(async move {
             proxy_client.accept().await.unwrap();
