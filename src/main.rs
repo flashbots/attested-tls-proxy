@@ -77,7 +77,7 @@ enum CliCommand {
     },
     /// Run a proxy server
     Server {
-        /// Socket address to listen on for the outer nested-TLS listener
+        /// Socket address to listen on for the outer nested-TLS listener, if enabled
         #[arg(long, default_value = "0.0.0.0:443")]
         outer_listen_addr: SocketAddr,
         /// Socket address to listen on for the inner-only attested TLS listener
@@ -86,13 +86,13 @@ enum CliCommand {
         /// The hostname:port or ip:port of the target service to forward traffic to
         target_addr: String,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
-        /// If other than None, a TLS key and certicate must also be given
+        /// This configures the inner attested TLS listener and does not require outer TLS certs.
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
         server_attestation_type: Option<String>,
-        /// The path to a PEM encoded private key
+        /// The path to a PEM encoded private key for the optional outer nested-TLS listener
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: Option<PathBuf>,
-        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
+        /// PEM certificate chain for the optional outer nested-TLS listener
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: Option<PathBuf>,
         /// Whether to use client authentication. If the client is running in a CVM this must be
@@ -122,20 +122,20 @@ enum CliCommand {
     AttestedFileServer {
         /// Filesystem path to statically serve
         path_to_serve: PathBuf,
-        /// Socket address to listen on for the outer nested-TLS listener
+        /// Socket address to listen on for the outer nested-TLS listener, if enabled
         #[arg(long, default_value = "0.0.0.0:443")]
         outer_listen_addr: SocketAddr,
         /// Socket address to listen on for the inner-only attested TLS listener
         #[arg(long, default_value = "0.0.0.0:4433")]
         inner_listen_addr: SocketAddr,
         /// Type of attestation to present (dafaults to none)
-        /// If other than None, a TLS key and certicate must also be given
+        /// This configures the inner attested TLS listener and does not require outer TLS certs.
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
         server_attestation_type: Option<String>,
-        /// The path to a PEM encoded private key
+        /// The path to a PEM encoded private key for the optional outer nested-TLS listener
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: Option<PathBuf>,
-        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
+        /// PEM certificate chain for the optional outer nested-TLS listener
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: Option<PathBuf>,
         /// URL of the remote dummy attestation service. Only use with --server-attestation-type
