@@ -47,8 +47,6 @@ const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 
 const KEEP_ALIVE_INTERVAL: u64 = 30;
 const KEEP_ALIVE_TIMEOUT: u64 = 10;
-const DEFAULT_INNER_CERTIFICATE_NAME: &str = "localhost";
-
 type RequestWithResponseSender = (
     http::Request<hyper::body::Incoming>,
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
@@ -79,7 +77,7 @@ pub enum OuterTlsMode {
         /// The outer TLS server configuration to expose on the listener.
         server_config: ServerConfig,
         /// The server identity to embed into the inner attested certificate.
-        certificate_name: Option<String>,
+        certificate_name: String,
     },
 }
 
@@ -87,11 +85,11 @@ impl<A> OuterTlsConfig<A>
 where
     A: ToSocketAddrs,
 {
-    fn certificate_name(&self) -> Result<Option<String>, ProxyError> {
+    fn certificate_name(&self) -> Result<String, ProxyError> {
         match &self.tls {
-            OuterTlsMode::CertAndKey(cert_and_key) => Ok(Some(certificate_identity_from_chain(
-                &cert_and_key.cert_chain,
-            )?)),
+            OuterTlsMode::CertAndKey(cert_and_key) => {
+                Ok(certificate_identity_from_chain(&cert_and_key.cert_chain)?)
+            }
             OuterTlsMode::Preconfigured {
                 certificate_name, ..
             } => Ok(certificate_name.clone()),
@@ -233,8 +231,7 @@ impl ProxyServer {
         let certificate_name = outer_session
             .as_ref()
             .map(OuterTlsConfig::certificate_name)
-            .transpose()?
-            .flatten();
+            .transpose()?;
         let inner_server_config = Arc::new(
             build_inner_server_config(
                 attestation_generator,
@@ -565,7 +562,7 @@ impl ProxyClient {
         let mut inner_client_config = if let Some(cert_chain) = cert_chain.as_ref() {
             let inner_cert_resolver = build_attested_cert_resolver(
                 attestation_generator,
-                Some(certificate_identity_from_chain(cert_chain)?),
+                certificate_identity_from_chain(cert_chain)?,
             )
             .await?;
             ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -944,15 +941,12 @@ fn certificate_identity_from_chain(
 
 async fn build_attested_cert_resolver(
     attestation_generator: AttestationGenerator,
-    certificate_name: Option<String>,
+    certificate_name: String,
 ) -> Result<AttestedCertificateResolver, ProxyError> {
-    Ok(AttestedCertificateResolver::new(
-        attestation_generator,
-        None,
-        certificate_name.unwrap_or_else(|| DEFAULT_INNER_CERTIFICATE_NAME.to_string()),
-        vec![],
+    Ok(
+        AttestedCertificateResolver::new(attestation_generator, None, certificate_name, vec![])
+            .await?,
     )
-    .await?)
 }
 
 async fn build_inner_server_config(
@@ -961,8 +955,11 @@ async fn build_inner_server_config(
     client_auth: bool,
     certificate_name: Option<String>,
 ) -> Result<ServerConfig, ProxyError> {
-    let inner_cert_resolver =
-        build_attested_cert_resolver(attestation_generator, certificate_name).await?;
+    let inner_cert_resolver = build_attested_cert_resolver(
+        attestation_generator,
+        certificate_name.unwrap_or_else(|| "localhost".to_string()),
+    )
+    .await?;
 
     let mut inner_server_config = if client_auth {
         let attested_cert_verifier = AttestedCertificateVerifier::new(None, attestation_verifier)?;
@@ -1147,7 +1144,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                    certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1254,7 +1251,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                    certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1322,9 +1319,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config: server_tls_server_config,
-                    certificate_name: Some(
-                        certificate_identity_from_chain(&server_cert_chain).unwrap(),
-                    ),
+                    certificate_name: certificate_identity_from_chain(&server_cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1382,9 +1377,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some(
-                        certificate_identity_from_chain(&server_cert_chain).unwrap(),
-                    ),
+                    certificate_name: certificate_identity_from_chain(&server_cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1454,9 +1447,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config: server_tls_server_config,
-                    certificate_name: Some(
-                        certificate_identity_from_chain(&server_cert_chain).unwrap(),
-                    ),
+                    certificate_name: certificate_identity_from_chain(&server_cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1516,7 +1507,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                    certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1564,7 +1555,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                    certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1610,7 +1601,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                    certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1681,7 +1672,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                    certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",
@@ -1760,7 +1751,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some(certificate_identity_from_chain(&cert_chain).unwrap()),
+                    certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
                 },
             }),
             "127.0.0.1:0",

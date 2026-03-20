@@ -110,7 +110,7 @@ mod tests {
                 listen_addr: "127.0.0.1:0",
                 tls: OuterTlsMode::Preconfigured {
                     server_config,
-                    certificate_name: Some("localhost".to_string()),
+                    certificate_name: "localhost".to_string(),
                 },
             }),
             "127.0.0.1:0",
