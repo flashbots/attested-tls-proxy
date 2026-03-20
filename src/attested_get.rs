@@ -55,7 +55,7 @@ async fn attested_get_with_client(
 mod tests {
     use super::*;
     use crate::{
-        ProxyServer,
+        OuterTlsConfig, OuterTlsMode, ProxyServer,
         attestation::AttestationType,
         file_server::static_file_server,
         test_helpers::{generate_certificate_chain_for_host, generate_tls_config},
@@ -77,13 +77,19 @@ mod tests {
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
         // Setup a proxy server targetting the static file server
-        let proxy_server = ProxyServer::new_with_tls_config(
-            cert_chain,
-            server_config,
-            "127.0.0.1:0",
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: "localhost".to_string(),
+                },
+            }),
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
+            false,
         )
         .await
         .unwrap();
