@@ -18,14 +18,19 @@ pub async fn attested_file_server(
     client_auth: bool,
 ) -> Result<(), ProxyError> {
     let target_addr = static_file_server(path_to_serve).await?;
+    let outer_session = match (outer_cert_and_key, outer_listen_addr) {
+        (Some(cert_and_key), Some(listen_addr)) => Some(OuterTlsConfig {
+            listen_addr,
+            tls: OuterTlsMode::CertAndKey(cert_and_key),
+        }),
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(ProxyError::NoListenersConfigured);
+        }
+        (None, None) => None,
+    };
 
     let server = ProxyServer::new(
-        outer_cert_and_key
-            .zip(outer_listen_addr)
-            .map(|(cert_and_key, listen_addr)| OuterTlsConfig {
-                listen_addr,
-                tls: OuterTlsMode::CertAndKey(cert_and_key),
-            }),
+        outer_session,
         inner_listen_addr,
         target_addr.to_string(),
         attestation_generator,
