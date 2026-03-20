@@ -363,7 +363,7 @@ impl ProxyServer {
         Ok(join_handle)
     }
 
-    /// Helper to get the socket address of the underlying TCP listener
+    /// Helper to get the socket address of either underlying TCP listener
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         match &self.outer {
             Some((listener, _)) => listener.local_addr(),
@@ -376,6 +376,7 @@ impl ProxyServer {
         }
     }
 
+    /// Helper to get the socket address of the underlying outer TCP listener if present
     pub fn outer_local_addr(&self) -> std::io::Result<Option<SocketAddr>> {
         self.outer
             .as_ref()
@@ -383,6 +384,7 @@ impl ProxyServer {
             .transpose()
     }
 
+    /// Helper to get the socket address of the underlying inner TCP listener if present
     pub fn inner_local_addr(&self) -> std::io::Result<Option<SocketAddr>> {
         self.inner
             .as_ref()
@@ -1239,58 +1241,6 @@ mod tests {
         assert!(matches!(conn, HttpConnection::Http2 { .. }));
     }
 
-    // #[tokio::test(flavor = "multi_thread")]
-    // async fn http_proxy_default_constructors_work() {
-    //     let target_addr = example_http_service().await;
-    //
-    //     let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
-    //     let server_cert = cert_chain[0].clone();
-    //
-    //     let proxy_server = ProxyServer::new(
-    //         TlsCertAndKey {
-    //             cert_chain,
-    //             key: private_key,
-    //         },
-    //         "127.0.0.1:0",
-    //         target_addr.to_string(),
-    //         AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
-    //         AttestationVerifier::expect_none(),
-    //         false,
-    //     )
-    //     .await
-    //     .unwrap();
-    //
-    //     let proxy_addr = proxy_server.local_addr().unwrap();
-    //
-    //     tokio::spawn(async move {
-    //         proxy_server.accept().await.unwrap();
-    //     });
-    //
-    //     let proxy_client = ProxyClient::new(
-    //         None,
-    //         "127.0.0.1:0".to_string(),
-    //         format!("localhost:{}", proxy_addr.port()),
-    //         AttestationGenerator::with_no_attestation(),
-    //         AttestationVerifier::mock(),
-    //         Some(server_cert),
-    //     )
-    //     .await
-    //     .unwrap();
-    //
-    //     let proxy_client_addr = proxy_client.local_addr().unwrap();
-    //
-    //     tokio::spawn(async move {
-    //         proxy_client.accept().await.unwrap();
-    //     });
-    //
-    //     let res = reqwest::get(format!("http://{}", proxy_client_addr))
-    //         .await
-    //         .unwrap();
-    //
-    //     let res_body = res.text().await.unwrap();
-    //     assert_eq!(res_body, "No measurements");
-    // }
-
     // Server has mock DCAP, client has no attestation and no client auth
     #[tokio::test(flavor = "multi_thread")]
     async fn http_proxy_with_server_attestation() {
@@ -1334,7 +1284,7 @@ mod tests {
         .await
         .unwrap();
 
-        let proxy_client_addr = proxy_client.local_addr().unwrap();
+        let proy_client_addr = proxy_client.local_addr().unwrap();
 
         tokio::spawn(async move {
             proxy_client.accept().await.unwrap();
