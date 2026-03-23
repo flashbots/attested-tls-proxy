@@ -591,6 +591,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "attestation"
+version = "0.0.1"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#ed0a0c5125562b45631a2522d1212b4ece143393"
+dependencies = [
+ "anyhow",
+ "az-tdx-vtpm",
+ "base64 0.22.1",
+ "configfs-tsm",
+ "dcap-qvl 0.3.12 (git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override)",
+ "hex",
+ "http",
+ "num-bigint",
+ "once_cell",
+ "openssl",
+ "parity-scale-codec",
+ "pem-rfc7468",
+ "rand_core 0.6.4",
+ "reqwest",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "tdx-quote",
+ "thiserror 2.0.17",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tss-esapi",
+ "x509-parser 0.18.1",
+]
+
+[[package]]
 name = "attestation-provider-server"
 version = "0.1.0"
 dependencies = [
@@ -612,7 +644,7 @@ version = "0.0.1"
 dependencies = [
  "alloy-rpc-client",
  "alloy-transport-http",
- "attestation",
+ "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate)",
  "bytes",
  "futures-util",
  "http",
@@ -638,10 +670,10 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#5c109dba74d4f9de58b4b846f480599752dfb1f9"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#ed0a0c5125562b45631a2522d1212b4ece143393"
 dependencies = [
  "anyhow",
- "attestation",
+ "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
  "ra-tls",
  "rcgen 0.14.7",
  "rustls",
@@ -659,8 +691,8 @@ name = "attested-tls-proxy"
 version = "1.1.1"
 dependencies = [
  "anyhow",
- "attestation",
- "attested-tls 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate)",
+ "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
+ "attested-tls 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
  "axum",
  "bytes",
  "clap",
@@ -1072,7 +1104,7 @@ dependencies = [
 [[package]]
 name = "cc-eventlog"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
@@ -1661,7 +1693,7 @@ dependencies = [
 [[package]]
 name = "dstack-attest"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -1687,7 +1719,7 @@ dependencies = [
 [[package]]
 name = "dstack-types"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
 dependencies = [
  "parity-scale-codec",
  "serde",
@@ -2976,7 +3008,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#5c109dba74d4f9de58b4b846f480599752dfb1f9"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#ed0a0c5125562b45631a2522d1212b4ece143393"
 dependencies = [
  "rustls",
  "tokio",
@@ -3673,7 +3705,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 [[package]]
 name = "ra-tls"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
 dependencies = [
  "anyhow",
  "bon",
@@ -4480,7 +4512,7 @@ checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 [[package]]
 name = "size-parser"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
 dependencies = [
  "anyhow",
  "serde",
@@ -4671,7 +4703,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 [[package]]
 name = "tdx-attest"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
 dependencies = [
  "anyhow",
  "cc-eventlog",
