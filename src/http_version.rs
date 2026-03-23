@@ -1,7 +1,7 @@
 //! HTTP Version support and negotiation
+use bytes::Bytes;
 use hyper::Response;
 use hyper_util::rt::TokioIo;
-use bytes::Bytes;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -59,11 +59,10 @@ impl HttpVersion {
 type Http1Sender = hyper::client::conn::http1::SendRequest<http_body_util::Full<Bytes>>;
 type Http2Sender = hyper::client::conn::http2::SendRequest<http_body_util::Full<Bytes>>;
 
-type Http1Connection =
-    hyper::client::conn::http1::Connection<
-        TokioIo<ProxyClientTlsStream>,
-        http_body_util::Full<Bytes>,
-    >;
+type Http1Connection = hyper::client::conn::http1::Connection<
+    TokioIo<ProxyClientTlsStream>,
+    http_body_util::Full<Bytes>,
+>;
 
 type Http2Connection = hyper::client::conn::http2::Connection<
     TokioIo<ProxyClientTlsStream>,

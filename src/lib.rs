@@ -410,11 +410,20 @@ impl ProxyServer {
             let (_io, server_connection) = tls_stream.get_ref();
 
             match server_connection.peer_certificates() {
-                Some(remote_cert_chain) => Some(
-                    AttestedCertificateVerifier::extract_custom_attestation_from_cert(
-                        remote_cert_chain.first().ok_or(ProxyError::NoCertificate)?,
-                    )?,
-                ),
+                Some(remote_cert_chain) => remote_cert_chain
+                    .first()
+                    .and_then(|cert| {
+                        match AttestedCertificateVerifier::extract_custom_attestation_from_cert(cert)
+                        {
+                            Ok(attestation) => Some(attestation),
+                            Err(err) => {
+                                warn!(
+                                    "Failed to extract remote attestation from inner-session certificate: {err}"
+                                );
+                                None
+                            }
+                        }
+                    }),
                 None => None,
             }
         };
@@ -435,11 +444,15 @@ impl ProxyServer {
             let (_io, server_connection) = tls_stream.get_ref();
 
             match server_connection.peer_certificates() {
-                Some(remote_cert_chain) => Some(
-                    AttestedCertificateVerifier::extract_custom_attestation_from_cert(
-                        remote_cert_chain.first().ok_or(ProxyError::NoCertificate)?,
-                    )?,
-                ),
+                Some(remote_cert_chain) => remote_cert_chain.first().and_then(|cert| {
+                    match AttestedCertificateVerifier::extract_custom_attestation_from_cert(cert) {
+                        Ok(attestation) => Some(attestation),
+                        Err(err) => {
+                            warn!("Failed to extract remote attestation from certificate: {err}");
+                            None
+                        }
+                    }
+                }),
                 None => None,
             }
         };
@@ -461,7 +474,13 @@ impl ProxyServer {
         let (remote_attestation_type, measurements) = match attestation {
             Some(attestation) => (
                 Some(attestation.attestation_type),
-                attestation.get_measurements()?,
+                match attestation.get_measurements() {
+                    Ok(measurements) => measurements,
+                    Err(err) => {
+                        warn!("Failed to extract measurements from peer attestation: {err}");
+                        None
+                    }
+                },
             ),
             None => (None, None),
         };
@@ -715,7 +734,7 @@ impl ProxyClient {
             let mut first = true;
             let mut ready_tx = Some(ready_tx);
             'reconnect: loop {
-                let (mut sender, conn, attestation) =
+                let (mut sender, conn) =
                     // Connect to the proxy server and provide / verify attestation
                     match Self::setup_connection_with_backoff(&target, &nesting_tls_connector, first)
                         .await
@@ -745,9 +764,6 @@ impl ProxyClient {
                 let (conn_done_tx, mut conn_done_rx) =
                     tokio::sync::watch::channel::<Option<hyper::Error>>(None);
 
-                let mut remote_attestation_type = attestation.attestation_type;
-                let mut measurements = attestation.get_measurements().ok().flatten();
-
                 tokio::spawn(async move {
                     let res = conn.await;
                     let _ = conn_done_tx.send(res.err());
@@ -760,45 +776,60 @@ impl ProxyClient {
                                 debug!("[proxy-client] Read incoming request from source client: {req:?}");
                                 // Attempt to forward it to the proxy server
                                 let response = loop {
-                                    match sender.send_request(req.clone()).await {
-                                        Ok(mut resp) => {
-                                        debug!("[proxy-client] Read response from proxy-server: {resp:?}");
-                                        // If we have measurements from the proxy-server, inject them into the
-                                        // response header
-                                        let headers = resp.headers_mut();
-                                        if let Some(measurements) = measurements.clone() {
-                                            match measurements.to_header_format() {
-                                                Ok(header_value) => {
-                                                    headers.insert(MEASUREMENT_HEADER, header_value);
-                                                }
-                                                Err(e) => {
-                                                    // This error is highly unlikely - that the measurement values fail to
-                                                    // encode to JSON or fit in an HTTP header
-                                                    error!("Failed to encode measurement values: {e}");
-                                                }
-                                            }
-                                        }
-
-                                        update_header(
-                                            headers,
-                                            ATTESTATION_TYPE_HEADER,
-                                            remote_attestation_type.as_str(),
-                                        );
-                                            break Ok(resp.map(|b| b.boxed()));
-                                        }
-                                        Err(e) => {
-                                        warn!("Failed to send request to proxy-server: {e}");
+                                    let send_result = tokio::select! {
+                                        result = sender.send_request(req.clone()) => result,
+                                        _ = conn_done_rx.changed() => {
+                                            warn!("Connection dropped while request was in flight");
                                             match Self::setup_connection_with_backoff(
                                                 &target,
                                                 &nesting_tls_connector,
-                                                false,
+                                                true,
                                             )
                                             .await
                                             {
-                                                Ok((new_sender, new_conn, new_attestation)) => {
+                                                Ok((new_sender, new_conn)) => {
                                                     sender = new_sender;
-                                                    remote_attestation_type = new_attestation.attestation_type;
-                                                    measurements = new_attestation.get_measurements().ok().flatten();
+
+                                                    let (new_conn_done_tx, new_conn_done_rx) =
+                                                        tokio::sync::watch::channel::<Option<hyper::Error>>(None);
+                                                    conn_done_rx = new_conn_done_rx;
+
+                                                    tokio::spawn(async move {
+                                                        let res = new_conn.await;
+                                                        let _ = new_conn_done_tx.send(res.err());
+                                                    });
+
+                                                    warn!("Reconnected to proxy-server, retrying request");
+                                                    continue;
+                                                }
+                                                Err(reconnect_err) => {
+                                                    warn!("Reconnect after in-flight drop failed: {reconnect_err}");
+                                                    let mut resp = Response::new(full(
+                                                        "Request failed: connection to proxy-server dropped",
+                                                    ));
+                                                    *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
+                                                    break Ok(resp);
+                                                }
+                                            }
+                                        }
+                                    };
+
+                                    match send_result {
+                                        Ok(resp) => {
+                                            debug!("[proxy-client] Read response from proxy-server: {resp:?}");
+                                            break Ok(resp.map(|b| b.boxed()));
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to send request to proxy-server: {e}");
+                                            match Self::setup_connection_with_backoff(
+                                                &target,
+                                                &nesting_tls_connector,
+                                                true,
+                                            )
+                                            .await
+                                            {
+                                                Ok((new_sender, new_conn)) => {
+                                                    sender = new_sender;
 
                                                     let (new_conn_done_tx, new_conn_done_rx) =
                                                         tokio::sync::watch::channel::<Option<hyper::Error>>(None);
@@ -915,7 +946,7 @@ impl ProxyClient {
         target: &str,
         nesting_tls_connector: &NestingTlsConnector,
         should_bail: bool,
-    ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
+    ) -> Result<(HttpSender, HttpConnection), ProxyError> {
         let mut delay = Duration::from_secs(1);
         let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
 
@@ -944,7 +975,7 @@ impl ProxyClient {
     async fn setup_connection(
         nesting_tls_connector: &NestingTlsConnector,
         target: &str,
-    ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
+    ) -> Result<(HttpSender, HttpConnection), ProxyError> {
         let outbound_stream = tokio::net::TcpStream::connect(target).await?;
 
         let domain = server_name_from_host(target)?;
@@ -953,19 +984,6 @@ impl ProxyClient {
             .await?;
 
         debug!("[proxy-client] Connected to proxy server");
-
-        // Get attestation from session
-        let attestation = {
-            let (_io, server_connection) = tls_stream.get_ref();
-
-            let remote_cert_chain = server_connection
-                .peer_certificates()
-                .ok_or(ProxyError::NoCertificate)?;
-
-            AttestedCertificateVerifier::extract_custom_attestation_from_cert(
-                remote_cert_chain.first().ok_or(ProxyError::NoCertificate)?,
-            )?
-        };
 
         // The attestation exchange is now complete - setup an HTTP client
         let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
@@ -990,8 +1008,7 @@ impl ProxyClient {
             }
         };
 
-        // Return the HTTP client, as well as remote attestation
-        Ok((sender, conn, attestation))
+        Ok((sender, conn))
     }
 
     // Handle a request from the source client to the proxy server
@@ -1364,7 +1381,7 @@ mod tests {
         let nesting_tls_connector =
             NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
 
-        let (sender, conn, _attestation) = ProxyClient::setup_connection(
+        let (sender, conn) = ProxyClient::setup_connection(
             &nesting_tls_connector,
             &format!("localhost:{}", proxy_addr.port()),
         )
