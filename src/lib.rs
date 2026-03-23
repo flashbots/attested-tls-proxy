@@ -54,7 +54,7 @@ const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 const KEEP_ALIVE_INTERVAL: u64 = 30;
 const KEEP_ALIVE_TIMEOUT: u64 = 10;
 type RequestWithResponseSender = (
-    http::Request<Bytes>,
+    http::Request<hyper::body::Incoming>,
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
 );
 
@@ -721,7 +721,7 @@ impl ProxyClient {
 
         // Channel for getting incoming requests from the source client
         let (requests_tx, mut requests_rx) = mpsc::channel::<(
-            http::Request<Bytes>,
+            http::Request<hyper::body::Incoming>,
             oneshot::Sender<
                 Result<http::Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>,
             >,
@@ -764,8 +764,8 @@ impl ProxyClient {
                 let (conn_done_tx, mut conn_done_rx) =
                     tokio::sync::watch::channel::<Option<hyper::Error>>(None);
 
-                let mut remote_attestation_type = attestation.attestation_type;
-                let mut measurements = attestation.get_measurements().ok().flatten();
+                let remote_attestation_type = attestation.attestation_type;
+                let measurements = attestation.get_measurements().ok().flatten();
 
                 tokio::spawn(async move {
                     let res = conn.await;
@@ -778,112 +778,47 @@ impl ProxyClient {
                             if let Some((req, response_tx)) = incoming_req_option {
                                 debug!("[proxy-client] Read incoming request from source client: {req:?}");
                                 // Attempt to forward it to the proxy server
-                                let response = loop {
-                                    let send_result = tokio::select! {
-                                        result = sender.send_request(req.clone()) => result,
-                                        _ = conn_done_rx.changed() => {
-                                            warn!("Connection dropped while request was in flight");
-                                            match Self::setup_connection_with_backoff(
-                                                &target,
-                                                &nesting_tls_connector,
-                                                true,
-                                            )
-                                            .await
-                                            {
-                                                Ok((new_sender, new_conn, new_attestation)) => {
-                                                    sender = new_sender;
-                                                    remote_attestation_type = new_attestation.attestation_type;
-                                                    measurements = new_attestation.get_measurements().ok().flatten();
-
-                                                    let (new_conn_done_tx, new_conn_done_rx) =
-                                                        tokio::sync::watch::channel::<Option<hyper::Error>>(None);
-                                                    conn_done_rx = new_conn_done_rx;
-
-                                                    tokio::spawn(async move {
-                                                        let res = new_conn.await;
-                                                        let _ = new_conn_done_tx.send(res.err());
-                                                    });
-
-                                                    warn!("Reconnected to proxy-server, retrying request");
-                                                    continue;
+                                let (response, should_reconnect) = match sender.send_request(req).await {
+                                    Ok(mut resp) => {
+                                        debug!("[proxy-client] Read response from proxy-server: {resp:?}");
+                                        let headers = resp.headers_mut();
+                                        if let Some(measurements) = measurements.clone() {
+                                            match measurements.to_header_format() {
+                                                Ok(header_value) => {
+                                                    headers.insert(MEASUREMENT_HEADER, header_value);
                                                 }
-                                                Err(reconnect_err) => {
-                                                    warn!("Reconnect after in-flight drop failed: {reconnect_err}");
-                                                    let mut resp = Response::new(full(
-                                                        "Request failed: connection to proxy-server dropped",
-                                                    ));
-                                                    *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
-                                                    break Ok(resp);
+                                                Err(e) => {
+                                                    error!("Failed to encode measurement values: {e}");
                                                 }
                                             }
                                         }
-                                    };
 
-                                    match send_result {
-                                        Ok(mut resp) => {
-                                            debug!("[proxy-client] Read response from proxy-server: {resp:?}");
-                                            let headers = resp.headers_mut();
-                                            if let Some(measurements) = measurements.clone() {
-                                                match measurements.to_header_format() {
-                                                    Ok(header_value) => {
-                                                        headers.insert(MEASUREMENT_HEADER, header_value);
-                                                    }
-                                                    Err(e) => {
-                                                        error!("Failed to encode measurement values: {e}");
-                                                    }
-                                                }
-                                            }
+                                        update_header(
+                                            headers,
+                                            ATTESTATION_TYPE_HEADER,
+                                            remote_attestation_type.as_str(),
+                                        );
 
-                                            update_header(
-                                                headers,
-                                                ATTESTATION_TYPE_HEADER,
-                                                remote_attestation_type.as_str(),
-                                            );
+                                        (Ok(resp.map(|b| b.boxed())), false)
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to send request to proxy-server: {e}");
+                                        let mut resp = Response::new(full(format!("Request failed: {e}")));
+                                        *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
 
-                                            break Ok(resp.map(|b| b.boxed()));
-                                        }
-                                        Err(e) => {
-                                            warn!("Failed to send request to proxy-server: {e}");
-                                            match Self::setup_connection_with_backoff(
-                                                &target,
-                                                &nesting_tls_connector,
-                                                true,
-                                            )
-                                            .await
-                                            {
-                                                Ok((new_sender, new_conn, new_attestation)) => {
-                                                    sender = new_sender;
-                                                    remote_attestation_type = new_attestation.attestation_type;
-                                                    measurements = new_attestation.get_measurements().ok().flatten();
-
-                                                    let (new_conn_done_tx, new_conn_done_rx) =
-                                                        tokio::sync::watch::channel::<Option<hyper::Error>>(None);
-                                                    conn_done_rx = new_conn_done_rx;
-
-                                                    tokio::spawn(async move {
-                                                        let res = new_conn.await;
-                                                        let _ = new_conn_done_tx.send(res.err());
-                                                    });
-
-                                                    warn!("Reconnected to proxy-server, retrying request");
-                                                    continue;
-                                                }
-                                                Err(reconnect_err) => {
-                                                    warn!("Reconnect after request failure failed: {reconnect_err}");
-                                                    let mut resp = Response::new(full(format!(
-                                                        "Request failed: {e}"
-                                                    )));
-                                                    *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
-                                                    break Ok(resp);
-                                                }
-                                            }
-                                        }
+                                        (Ok(resp), true)
                                     }
                                 };
 
                                 // Send the response back to the source client
                                 if response_tx.send(response).is_err() {
                                     warn!("Failed to forward response to source client, probably they dropped the connection");
+                                }
+
+                                if should_reconnect {
+                                    // Leave the inner loop and continue on the reconnect loop
+                                    warn!("Reconnecting to proxy-server due to failed request");
+                                    break;
                                 }
                             } else {
                                 // The request sender was dropped - so no more incoming requests
@@ -1033,13 +968,13 @@ impl ProxyClient {
                     .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
                     .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
                     .keep_alive_while_idle(true)
-                    .handshake::<_, http_body_util::Full<Bytes>>(outbound_io)
+                    .handshake::<_, hyper::body::Incoming>(outbound_io)
                     .await?;
                 (sender.into(), conn.into())
             }
             HttpVersion::Http1 => {
                 let (sender, conn) = hyper::client::conn::http1::Builder::new()
-                    .handshake::<_, http_body_util::Full<Bytes>>(outbound_io)
+                    .handshake::<_, hyper::body::Incoming>(outbound_io)
                     .await?;
                 (sender.into(), conn.into())
             }
@@ -1053,10 +988,6 @@ impl ProxyClient {
         req: hyper::Request<hyper::body::Incoming>,
         requests_tx: mpsc::Sender<RequestWithResponseSender>,
     ) -> Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, ProxyError> {
-        let (parts, body) = req.into_parts();
-        let body = body.collect().await?.to_bytes();
-        let req = http::Request::from_parts(parts, body);
-
         let (response_tx, response_rx) = oneshot::channel();
         requests_tx.send((req, response_tx)).await?;
         Ok(response_rx.await??)
@@ -1245,6 +1176,10 @@ where
 mod tests {
     use attestation::{AttestationType, measurements::MeasurementPolicy};
     use std::collections::HashMap;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tokio_rustls::TlsConnector;
 
     use super::*;
@@ -1932,6 +1867,7 @@ mod tests {
 
         // This is used to trigger a dropped connection to the proxy server
         let (connection_breaker_tx, connection_breaker_rx) = oneshot::channel();
+        let (reconnected_tx, reconnected_rx) = oneshot::channel();
 
         tokio::spawn(async move {
             let connection_handle = proxy_server.accept().await.unwrap();
@@ -1943,6 +1879,7 @@ mod tests {
 
             // Now accept another connection
             proxy_server.accept().await.unwrap();
+            let _ = reconnected_tx.send(());
         });
 
         let proxy_client = ProxyClient::new_with_tls_config(
@@ -1971,6 +1908,7 @@ mod tests {
 
         // Now break the connection
         connection_breaker_tx.send(()).unwrap();
+        reconnected_rx.await.unwrap();
 
         // Make another request
         let res = reqwest::get(format!("http://{}", proxy_client_addr))
@@ -1982,6 +1920,128 @@ mod tests {
 
         let res_body = res.text().await.unwrap();
         assert_eq!(res_body, "No measurements");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_proxy_does_not_retry_failed_request() {
+        init_tracing();
+
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let request_seen = Arc::new(tokio::sync::Notify::new());
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = listener.local_addr().unwrap();
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get({
+                let request_count = request_count.clone();
+                let request_seen = request_seen.clone();
+                let release_rx = release_rx.clone();
+
+                move || {
+                    let request_count = request_count.clone();
+                    let request_seen = request_seen.clone();
+                    let mut release_rx = release_rx.clone();
+
+                    async move {
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        request_seen.notify_waiters();
+
+                        if !*release_rx.borrow() {
+                            release_rx.changed().await.unwrap();
+                        }
+
+                        "ok"
+                    }
+                }
+            }),
+        );
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
+        let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
+
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: certificate_identity_from_chain(&cert_chain).unwrap(),
+                },
+            }),
+            Some("127.0.0.1:0"),
+            target_addr.to_string(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
+            AttestationVerifier::expect_none(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+
+        let (connection_breaker_tx, connection_breaker_rx) = oneshot::channel();
+        let (reconnected_tx, reconnected_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let connection_handle = proxy_server.accept().await.unwrap();
+            connection_breaker_rx.await.unwrap();
+            connection_handle.abort();
+            proxy_server.accept().await.unwrap();
+            let _ = reconnected_tx.send(());
+        });
+
+        let proxy_client = ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0".to_string(),
+            format!("localhost:{}", proxy_addr.port()),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+            proxy_client.accept().await.unwrap();
+        });
+
+        let request_url = format!("http://{}", proxy_client_addr);
+        let failed_request = tokio::spawn(async move { reqwest::get(request_url).await.unwrap() });
+
+        loop {
+            if request_count.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+
+            request_seen.notified().await;
+        }
+
+        connection_breaker_tx.send(()).unwrap();
+        release_tx.send(true).unwrap();
+
+        let failed_response = failed_request.await.unwrap();
+        assert_eq!(failed_response.status(), hyper::StatusCode::BAD_GATEWAY);
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+        reconnected_rx.await.unwrap();
+
+        let res = reqwest::get(format!("http://{}", proxy_client_addr))
+            .await
+            .unwrap();
+
+        assert_attestation_type_header(res.headers(), "dcap-tdx");
+        assert_mock_measurements_header(res.headers());
+        assert_eq!(res.text().await.unwrap(), "ok");
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
     }
 
     // Use HTTP 1.1

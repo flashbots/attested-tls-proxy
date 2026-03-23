@@ -1,5 +1,4 @@
 //! HTTP Version support and negotiation
-use bytes::Bytes;
 use hyper::Response;
 use hyper_util::rt::TokioIo;
 use std::pin::Pin;
@@ -56,17 +55,15 @@ impl HttpVersion {
     }
 }
 
-type Http1Sender = hyper::client::conn::http1::SendRequest<http_body_util::Full<Bytes>>;
-type Http2Sender = hyper::client::conn::http2::SendRequest<http_body_util::Full<Bytes>>;
+type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
+type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
 
-type Http1Connection = hyper::client::conn::http1::Connection<
-    TokioIo<ProxyClientTlsStream>,
-    http_body_util::Full<Bytes>,
->;
+type Http1Connection =
+    hyper::client::conn::http1::Connection<TokioIo<ProxyClientTlsStream>, hyper::body::Incoming>;
 
 type Http2Connection = hyper::client::conn::http2::Connection<
     TokioIo<ProxyClientTlsStream>,
-    http_body_util::Full<Bytes>,
+    hyper::body::Incoming,
     crate::TokioExecutor,
 >;
 
@@ -91,9 +88,8 @@ impl From<Http2Sender> for HttpSender {
 impl HttpSender {
     pub async fn send_request(
         &mut self,
-        request: http::Request<Bytes>,
+        request: http::Request<hyper::body::Incoming>,
     ) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
-        let request = request.map(http_body_util::Full::new);
         match self {
             Self::Http1(sender) => sender.send_request(request).await,
             Self::Http2(sender) => sender.send_request(request).await,
