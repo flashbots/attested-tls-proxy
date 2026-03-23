@@ -734,7 +734,7 @@ impl ProxyClient {
             let mut first = true;
             let mut ready_tx = Some(ready_tx);
             'reconnect: loop {
-                let (mut sender, conn) =
+                let (mut sender, conn, attestation) =
                     // Connect to the proxy server and provide / verify attestation
                     match Self::setup_connection_with_backoff(&target, &nesting_tls_connector, first)
                         .await
@@ -764,6 +764,9 @@ impl ProxyClient {
                 let (conn_done_tx, mut conn_done_rx) =
                     tokio::sync::watch::channel::<Option<hyper::Error>>(None);
 
+                let mut remote_attestation_type = attestation.attestation_type;
+                let mut measurements = attestation.get_measurements().ok().flatten();
+
                 tokio::spawn(async move {
                     let res = conn.await;
                     let _ = conn_done_tx.send(res.err());
@@ -787,8 +790,10 @@ impl ProxyClient {
                                             )
                                             .await
                                             {
-                                                Ok((new_sender, new_conn)) => {
+                                                Ok((new_sender, new_conn, new_attestation)) => {
                                                     sender = new_sender;
+                                                    remote_attestation_type = new_attestation.attestation_type;
+                                                    measurements = new_attestation.get_measurements().ok().flatten();
 
                                                     let (new_conn_done_tx, new_conn_done_rx) =
                                                         tokio::sync::watch::channel::<Option<hyper::Error>>(None);
@@ -815,8 +820,26 @@ impl ProxyClient {
                                     };
 
                                     match send_result {
-                                        Ok(resp) => {
+                                        Ok(mut resp) => {
                                             debug!("[proxy-client] Read response from proxy-server: {resp:?}");
+                                            let headers = resp.headers_mut();
+                                            if let Some(measurements) = measurements.clone() {
+                                                match measurements.to_header_format() {
+                                                    Ok(header_value) => {
+                                                        headers.insert(MEASUREMENT_HEADER, header_value);
+                                                    }
+                                                    Err(e) => {
+                                                        error!("Failed to encode measurement values: {e}");
+                                                    }
+                                                }
+                                            }
+
+                                            update_header(
+                                                headers,
+                                                ATTESTATION_TYPE_HEADER,
+                                                remote_attestation_type.as_str(),
+                                            );
+
                                             break Ok(resp.map(|b| b.boxed()));
                                         }
                                         Err(e) => {
@@ -828,8 +851,10 @@ impl ProxyClient {
                                             )
                                             .await
                                             {
-                                                Ok((new_sender, new_conn)) => {
+                                                Ok((new_sender, new_conn, new_attestation)) => {
                                                     sender = new_sender;
+                                                    remote_attestation_type = new_attestation.attestation_type;
+                                                    measurements = new_attestation.get_measurements().ok().flatten();
 
                                                     let (new_conn_done_tx, new_conn_done_rx) =
                                                         tokio::sync::watch::channel::<Option<hyper::Error>>(None);
@@ -946,7 +971,7 @@ impl ProxyClient {
         target: &str,
         nesting_tls_connector: &NestingTlsConnector,
         should_bail: bool,
-    ) -> Result<(HttpSender, HttpConnection), ProxyError> {
+    ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
         let mut delay = Duration::from_secs(1);
         let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
 
@@ -975,7 +1000,7 @@ impl ProxyClient {
     async fn setup_connection(
         nesting_tls_connector: &NestingTlsConnector,
         target: &str,
-    ) -> Result<(HttpSender, HttpConnection), ProxyError> {
+    ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
         let outbound_stream = tokio::net::TcpStream::connect(target).await?;
 
         let domain = server_name_from_host(target)?;
@@ -984,6 +1009,18 @@ impl ProxyClient {
             .await?;
 
         debug!("[proxy-client] Connected to proxy server");
+
+        let attestation = {
+            let (_io, server_connection) = tls_stream.get_ref();
+
+            let remote_cert_chain = server_connection
+                .peer_certificates()
+                .ok_or(ProxyError::NoCertificate)?;
+
+            AttestedCertificateVerifier::extract_custom_attestation_from_cert(
+                remote_cert_chain.first().ok_or(ProxyError::NoCertificate)?,
+            )?
+        };
 
         // The attestation exchange is now complete - setup an HTTP client
         let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
@@ -1008,7 +1045,7 @@ impl ProxyClient {
             }
         };
 
-        Ok((sender, conn))
+        Ok((sender, conn, attestation))
     }
 
     // Handle a request from the source client to the proxy server
@@ -1207,6 +1244,7 @@ where
 #[cfg(test)]
 mod tests {
     use attestation::{AttestationType, measurements::MeasurementPolicy};
+    use std::collections::HashMap;
     use tokio_rustls::TlsConnector;
 
     use super::*;
@@ -1214,6 +1252,43 @@ mod tests {
         example_http_service, generate_certificate_chain_for_host, generate_tls_config,
         generate_tls_config_with_client_auth, init_tracing,
     };
+
+    fn expected_mock_measurements() -> HashMap<String, String> {
+        let zero_measurement = "0".repeat(96);
+        HashMap::from([
+            ("0".to_string(), zero_measurement.clone()),
+            ("1".to_string(), zero_measurement.clone()),
+            ("2".to_string(), zero_measurement.clone()),
+            ("3".to_string(), zero_measurement.clone()),
+            ("4".to_string(), zero_measurement),
+        ])
+    }
+
+    fn assert_mock_measurements(body: &str) {
+        let parsed: HashMap<String, String> = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed, expected_mock_measurements());
+    }
+
+    fn assert_mock_measurements_header(headers: &http::HeaderMap) {
+        let body = headers
+            .get(MEASUREMENT_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .unwrap();
+        assert_mock_measurements(body);
+    }
+
+    fn assert_attestation_type_header(headers: &http::HeaderMap, expected: &str) {
+        assert_eq!(
+            headers
+                .get(ATTESTATION_TYPE_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some(expected)
+        );
+    }
+
+    fn assert_no_measurements_header(headers: &http::HeaderMap) {
+        assert!(headers.get(MEASUREMENT_HEADER).is_none());
+    }
 
     #[test]
     fn proxy_alpn_protocols_prefer_http2() {
@@ -1381,7 +1456,7 @@ mod tests {
         let nesting_tls_connector =
             NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
 
-        let (sender, conn) = ProxyClient::setup_connection(
+        let (sender, conn, _attestation) = ProxyClient::setup_connection(
             &nesting_tls_connector,
             &format!("localhost:{}", proxy_addr.port()),
         )
@@ -1444,6 +1519,9 @@ mod tests {
         let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
+
+        assert_attestation_type_header(res.headers(), "dcap-tdx");
+        assert_mock_measurements_header(res.headers());
 
         let res_body = res.text().await.unwrap();
         assert_eq!(res_body, "No measurements");
@@ -1513,8 +1591,11 @@ mod tests {
             .await
             .unwrap();
 
+        assert_attestation_type_header(res.headers(), "none");
+        assert_no_measurements_header(res.headers());
+
         let res_body = res.text().await.unwrap();
-        assert_eq!(res_body, "No measurements");
+        assert_mock_measurements(&res_body);
     }
 
     // Server has no attestation, client has mock DCAP but no client auth
@@ -1574,7 +1655,11 @@ mod tests {
             .await
             .unwrap();
 
-        let _res_body = res.text().await.unwrap();
+        assert_attestation_type_header(res.headers(), "none");
+        assert_no_measurements_header(res.headers());
+
+        let res_body = res.text().await.unwrap();
+        assert_eq!(res_body, "No measurements");
     }
 
     // Server has mock DCAP, client has mock DCAP and client auth
@@ -1641,12 +1726,16 @@ mod tests {
         let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
-        assert_eq!(res.text().await.unwrap(), "No measurements");
+        assert_attestation_type_header(res.headers(), "dcap-tdx");
+        assert_mock_measurements_header(res.headers());
+        assert_mock_measurements(&res.text().await.unwrap());
 
         let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
-        assert_eq!(res.text().await.unwrap(), "No measurements");
+        assert_attestation_type_header(res.headers(), "dcap-tdx");
+        assert_mock_measurements_header(res.headers());
+        assert_mock_measurements(&res.text().await.unwrap());
     }
 
     // Server has mock DCAP, client no attestation - just get the server certificate
@@ -1874,9 +1963,11 @@ mod tests {
             proxy_client.accept().await.unwrap();
         });
 
-        let _initial_response = reqwest::get(format!("http://{}", proxy_client_addr))
+        let initial_response = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
+        assert_attestation_type_header(initial_response.headers(), "dcap-tdx");
+        assert_mock_measurements_header(initial_response.headers());
 
         // Now break the connection
         connection_breaker_tx.send(()).unwrap();
@@ -1885,6 +1976,9 @@ mod tests {
         let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
+
+        assert_attestation_type_header(res.headers(), "dcap-tdx");
+        assert_mock_measurements_header(res.headers());
 
         let res_body = res.text().await.unwrap();
         assert_eq!(res_body, "No measurements");
@@ -1944,6 +2038,9 @@ mod tests {
         let res = reqwest::get(format!("http://{}", proxy_client_addr))
             .await
             .unwrap();
+
+        assert_attestation_type_header(res.headers(), "dcap-tdx");
+        assert_mock_measurements_header(res.headers());
 
         let res_body = res.text().await.unwrap();
         assert_eq!(res_body, "No measurements");

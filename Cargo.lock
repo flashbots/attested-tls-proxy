@@ -593,7 +593,7 @@ dependencies = [
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#ed0a0c5125562b45631a2522d1212b4ece143393"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#2e4273cd93670e705e789555c00d43ca9c1e4af2"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
@@ -670,7 +670,7 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#ed0a0c5125562b45631a2522d1212b4ece143393"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#2e4273cd93670e705e789555c00d43ca9c1e4af2"
 dependencies = [
  "anyhow",
  "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
@@ -3008,7 +3008,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#ed0a0c5125562b45631a2522d1212b4ece143393"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#2e4273cd93670e705e789555c00d43ca9c1e4af2"
 dependencies = [
  "rustls",
  "tokio",
