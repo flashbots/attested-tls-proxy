@@ -509,6 +509,10 @@ impl ProxyServer {
 
             update_header(headers, &X_FORWARDED_FOR, &new_x_forwarded_for);
 
+            // Strip any caller-provided attestation metadata before injecting authenticated values.
+            headers.remove(ATTESTATION_TYPE_HEADER);
+            headers.remove(MEASUREMENT_HEADER);
+
             // If we have measurements, from the remote peer, add them to the request header
             let measurements = measurements.clone();
 
@@ -782,6 +786,8 @@ impl ProxyClient {
                                     Ok(mut resp) => {
                                         debug!("[proxy-client] Read response from proxy-server: {resp:?}");
                                         let headers = resp.headers_mut();
+                                        headers.remove(MEASUREMENT_HEADER);
+
                                         if let Some(measurements) = measurements.clone() {
                                             match measurements.to_header_format() {
                                                 Ok(header_value) => {
@@ -1225,6 +1231,56 @@ mod tests {
         assert!(headers.get(MEASUREMENT_HEADER).is_none());
     }
 
+    /// Test service that echoes attestation-related request headers as JSON.
+    async fn request_header_echo_service() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(|headers: http::HeaderMap| async move {
+                axum::Json(serde_json::json!({
+                    "measurement": headers
+                        .get(MEASUREMENT_HEADER)
+                        .and_then(|v| v.to_str().ok()),
+                    "attestation_type": headers
+                        .get(ATTESTATION_TYPE_HEADER)
+                        .and_then(|v| v.to_str().ok()),
+                }))
+            }),
+        );
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        addr
+    }
+
+    /// Test service that deliberately returns a spoofed measurement header.
+    async fn spoofed_response_measurement_service() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(|| async move {
+                let mut response = http::Response::new("ok".to_string());
+                response.headers_mut().insert(
+                    MEASUREMENT_HEADER,
+                    HeaderValue::from_static("{\"spoofed\":\"value\"}"),
+                );
+                response
+            }),
+        );
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        addr
+    }
+
     #[test]
     fn proxy_alpn_protocols_prefer_http2() {
         let mut protocols = Vec::new();
@@ -1595,6 +1651,68 @@ mod tests {
 
         let res_body = res.text().await.unwrap();
         assert_eq!(res_body, "No measurements");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_proxy_strips_spoofed_request_attestation_headers() {
+        let target_addr = request_header_echo_service().await;
+
+        let (server_cert_chain, server_private_key) =
+            generate_certificate_chain_for_host("localhost");
+        let (server_config, client_config) =
+            generate_tls_config(server_cert_chain.clone(), server_private_key);
+
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: certificate_identity_from_chain(&server_cert_chain).unwrap(),
+                },
+            }),
+            Some("127.0.0.1:0"),
+            target_addr.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let proxy_client = ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0",
+            format!("localhost:{}", proxy_addr.port()),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+        });
+
+        let res = reqwest::Client::new()
+            .get(format!("http://{}", proxy_client_addr))
+            .header(MEASUREMENT_HEADER, "{\"spoofed\":\"request\"}")
+            .header(ATTESTATION_TYPE_HEADER, "dcap-tdx")
+            .send()
+            .await
+            .unwrap();
+
+        let echoed: serde_json::Value = res.json().await.unwrap();
+        assert!(echoed["measurement"].is_null());
+        assert!(echoed["attestation_type"].is_null());
     }
 
     // Server has mock DCAP, client has mock DCAP and client auth
@@ -2042,6 +2160,64 @@ mod tests {
         assert_mock_measurements_header(res.headers());
         assert_eq!(res.text().await.unwrap(), "ok");
         assert_eq!(request_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_proxy_strips_spoofed_response_measurement_header() {
+        let target_addr = spoofed_response_measurement_service().await;
+
+        let (server_cert_chain, server_private_key) =
+            generate_certificate_chain_for_host("localhost");
+        let (server_config, client_config) =
+            generate_tls_config(server_cert_chain.clone(), server_private_key);
+
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: certificate_identity_from_chain(&server_cert_chain).unwrap(),
+                },
+            }),
+            Some("127.0.0.1:0"),
+            target_addr.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let proxy_client = ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0",
+            format!("localhost:{}", proxy_addr.port()),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+        });
+
+        let res = reqwest::get(format!("http://{}", proxy_client_addr))
+            .await
+            .unwrap();
+
+        assert_attestation_type_header(res.headers(), "none");
+        assert_no_measurements_header(res.headers());
+        assert_eq!(res.text().await.unwrap(), "ok");
     }
 
     // Use HTTP 1.1
