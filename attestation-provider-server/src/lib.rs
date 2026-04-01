@@ -1,8 +1,9 @@
 pub use attested_tls_proxy::attestation::AttestationGenerator;
 use std::net::SocketAddr;
 
-use anyhow::anyhow;
-use attested_tls_proxy::attestation::{AttestationExchangeMessage, AttestationVerifier};
+use attested_tls_proxy::attestation::{
+    AttestationError, AttestationExchangeMessage, AttestationVerifier,
+};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -40,7 +41,7 @@ async fn get_attest(
 ) -> Result<(StatusCode, Vec<u8>), ServerError> {
     let input_data: [u8; 64] = hex::decode(input_data)?
         .try_into()
-        .map_err(|_| anyhow!("Input data must be 64 bytes"))?;
+        .map_err(|_| ServerError::InvalidLength)?;
 
     let attestation = shared_state
         .attestation_generator
@@ -77,21 +78,31 @@ pub async fn attestation_provider_client(
     Ok(remote_attestation_message)
 }
 
-struct ServerError(pub anyhow::Error);
-
-impl<E> From<E> for ServerError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(err: E) -> Self {
-        ServerError(err.into())
-    }
+#[derive(Debug, thiserror::Error)]
+enum ServerError {
+    #[error(transparent)]
+    InvalidHex(#[from] hex::FromHexError),
+    #[error("Input data must be 64 bytes")]
+    InvalidLength,
+    #[error(transparent)]
+    AttestationFailed(#[from] AttestationError),
 }
 
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
-        eprintln!("{:?}", self.0);
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("{:?}", self.0)).into_response()
+        let (status, message) = match &self {
+            ServerError::InvalidHex(_) | ServerError::InvalidLength => {
+                (StatusCode::BAD_REQUEST, self.to_string())
+            }
+            ServerError::AttestationFailed(_) => {
+                tracing::error!("{self:?}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
+            }
+        };
+        (status, message).into_response()
     }
 }
 
