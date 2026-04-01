@@ -561,13 +561,13 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#5c109dba74d4f9de58b4b846f480599752dfb1f9"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#a96ec2d9096f491e652624c53d3df2b1526ef9f2"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
  "base64 0.22.1",
  "configfs-tsm",
- "dcap-qvl 0.3.12 (git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override)",
+ "dcap-qvl 0.3.12 (git+https://github.com/flashbots/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
  "hex",
  "http",
  "num-bigint",
@@ -638,7 +638,7 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#5c109dba74d4f9de58b4b846f480599752dfb1f9"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#a96ec2d9096f491e652624c53d3df2b1526ef9f2"
 dependencies = [
  "anyhow",
  "attestation",
@@ -1072,7 +1072,7 @@ dependencies = [
 [[package]]
 name = "cc-eventlog"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
@@ -1439,7 +1439,7 @@ dependencies = [
 [[package]]
 name = "dcap-qvl"
 version = "0.3.12"
-source = "git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override#e38818f0b7b600ceadad1ec3efd9e681bcbdc1e5"
+source = "git+https://github.com/flashbots/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1#f1dcc65371e941a7b83e3234833d23a1fb232ab1"
 dependencies = [
  "anyhow",
  "asn1_der",
@@ -1661,7 +1661,7 @@ dependencies = [
 [[package]]
 name = "dstack-attest"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -1687,7 +1687,7 @@ dependencies = [
 [[package]]
 name = "dstack-types"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
 dependencies = [
  "parity-scale-codec",
  "serde",
@@ -2976,7 +2976,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#5c109dba74d4f9de58b4b846f480599752dfb1f9"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#a96ec2d9096f491e652624c53d3df2b1526ef9f2"
 dependencies = [
  "rustls",
  "tokio",
@@ -3673,7 +3673,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 [[package]]
 name = "ra-tls"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
 dependencies = [
  "anyhow",
  "bon",
@@ -4480,7 +4480,7 @@ checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 [[package]]
 name = "size-parser"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
 dependencies = [
  "anyhow",
  "serde",
@@ -4671,7 +4671,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 [[package]]
 name = "tdx-attest"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
 dependencies = [
  "anyhow",
  "cc-eventlog",
