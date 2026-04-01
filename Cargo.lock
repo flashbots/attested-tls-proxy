@@ -591,6 +591,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "attestation"
+version = "0.0.1"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#f977f11b3a9275fb29430a2d84a8672ded4bc73b"
+dependencies = [
+ "anyhow",
+ "az-tdx-vtpm",
+ "base64 0.22.1",
+ "configfs-tsm",
+ "dcap-qvl 0.3.12 (git+https://github.com/flashbots/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
+ "hex",
+ "http",
+ "num-bigint",
+ "once_cell",
+ "openssl",
+ "parity-scale-codec",
+ "pem-rfc7468",
+ "rand_core 0.6.4",
+ "reqwest",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "tdx-quote",
+ "thiserror 2.0.17",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tss-esapi",
+ "x509-parser 0.18.1",
+]
+
+[[package]]
 name = "attestation-provider-server"
 version = "0.1.0"
 dependencies = [
@@ -612,7 +644,7 @@ version = "0.0.1"
 dependencies = [
  "alloy-rpc-client",
  "alloy-transport-http",
- "attestation",
+ "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate)",
  "bytes",
  "futures-util",
  "http",
@@ -638,10 +670,10 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#a96ec2d9096f491e652624c53d3df2b1526ef9f2"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#f977f11b3a9275fb29430a2d84a8672ded4bc73b"
 dependencies = [
  "anyhow",
- "attestation",
+ "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
  "ra-tls",
  "rcgen 0.14.7",
  "rustls",
@@ -659,8 +691,8 @@ name = "attested-tls-proxy"
 version = "1.1.1"
 dependencies = [
  "anyhow",
- "attestation",
- "attested-tls 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate)",
+ "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
+ "attested-tls 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
  "axum",
  "bytes",
  "clap",
@@ -2976,7 +3008,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#a96ec2d9096f491e652624c53d3df2b1526ef9f2"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#f977f11b3a9275fb29430a2d84a8672ded4bc73b"
 dependencies = [
  "rustls",
  "tokio",

@@ -12,6 +12,8 @@ use tokio_rustls::rustls::{
 };
 use tracing_subscriber::{EnvFilter, fmt};
 
+use crate::MEASUREMENT_HEADER;
+
 static INIT: Once = Once::new();
 
 /// Helper to generate a self-signed certificate for testing with a DNS subject name
@@ -127,13 +129,12 @@ pub async fn example_http_service() -> SocketAddr {
     addr
 }
 
-async fn get_handler(_headers: http::HeaderMap) -> impl IntoResponse {
-    // headers
-    //     .get(MEASUREMENT_HEADER)
-    //     .and_then(|v| v.to_str().ok())
-    //     .unwrap_or("No measurements")
-    //     .to_string()
-    "No measurements".to_string()
+async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
+    headers
+        .get(MEASUREMENT_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("No measurements")
+        .to_string()
 }
 
 pub fn init_tracing() {
