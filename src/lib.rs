@@ -1938,7 +1938,7 @@ mod tests {
         let attestation_verifier = AttestationVerifier {
             measurement_policy,
             pccs_url: None,
-            log_dcap_quote: false,
+            dump_dcap_quotes: false,
             override_azure_outdated_tcb: false,
         };
 
