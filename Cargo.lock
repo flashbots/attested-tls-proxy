@@ -561,13 +561,13 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#5c109dba74d4f9de58b4b846f480599752dfb1f9"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#a96ec2d9096f491e652624c53d3df2b1526ef9f2"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
  "base64 0.22.1",
  "configfs-tsm",
- "dcap-qvl 0.3.12 (git+https://github.com/flashbots/dcap-qvl.git?branch=peg%2Fazure-outdated-tcp-override)",
+ "dcap-qvl 0.3.12 (git+https://github.com/flashbots/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
  "hex",
  "http",
  "num-bigint",
@@ -1104,7 +1104,7 @@ dependencies = [
 [[package]]
 name = "cc-eventlog"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
+source = "git+https://github.com/Dstack-TEE/dstack.git#01c26b7878890f765b32b2bde5b4a0086e55fb24"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
@@ -1505,6 +1505,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "dcap-qvl"
+version = "0.3.12"
+source = "git+https://github.com/flashbots/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1#f1dcc65371e941a7b83e3234833d23a1fb232ab1"
+dependencies = [
+ "anyhow",
+ "asn1_der",
+ "base64 0.22.1",
+ "borsh",
+ "byteorder",
+ "chrono",
+ "const-oid",
+ "dcap-qvl-webpki",
+ "der",
+ "derive_more 2.1.1",
+ "futures",
+ "hex",
+ "log",
+ "p256",
+ "parity-scale-codec",
+ "pem",
+ "reqwest",
+ "ring",
+ "rustls-pki-types",
+ "scale-info",
+ "serde",
+ "serde-human-bytes",
+ "serde_json",
+ "sha2",
+ "signature",
+ "tracing",
+ "urlencoding",
+ "wasm-bindgen-futures",
+ "x509-cert",
+]
+
+[[package]]
 name = "dcap-qvl-webpki"
 version = "0.103.4+dcap.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1693,7 +1729,7 @@ dependencies = [
 [[package]]
 name = "dstack-attest"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
+source = "git+https://github.com/Dstack-TEE/dstack.git#01c26b7878890f765b32b2bde5b4a0086e55fb24"
 dependencies = [
  "anyhow",
  "cc-eventlog",
@@ -1719,7 +1755,7 @@ dependencies = [
 [[package]]
 name = "dstack-types"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
+source = "git+https://github.com/Dstack-TEE/dstack.git#01c26b7878890f765b32b2bde5b4a0086e55fb24"
 dependencies = [
  "parity-scale-codec",
  "serde",
@@ -3705,7 +3741,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 [[package]]
 name = "ra-tls"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
+source = "git+https://github.com/Dstack-TEE/dstack.git#01c26b7878890f765b32b2bde5b4a0086e55fb24"
 dependencies = [
  "anyhow",
  "bon",
@@ -4512,7 +4548,7 @@ checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 [[package]]
 name = "size-parser"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
+source = "git+https://github.com/Dstack-TEE/dstack.git#01c26b7878890f765b32b2bde5b4a0086e55fb24"
 dependencies = [
  "anyhow",
  "serde",
@@ -4703,7 +4739,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 [[package]]
 name = "tdx-attest"
 version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git#f87c97728ad222a3f3553cf0fb756830f7634eb6"
+source = "git+https://github.com/Dstack-TEE/dstack.git#01c26b7878890f765b32b2bde5b4a0086e55fb24"
 dependencies = [
  "anyhow",
  "cc-eventlog",

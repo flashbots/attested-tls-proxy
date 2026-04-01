@@ -1710,7 +1710,7 @@ mod tests {
             .await
             .unwrap();
 
-        let echoed: serde_json::Value = res.json().await.unwrap();
+        let echoed: serde_json::Value = serde_json::from_slice(&res.bytes().await.unwrap()).unwrap();
         assert!(echoed["measurement"].is_null());
         assert!(echoed["attestation_type"].is_null());
     }

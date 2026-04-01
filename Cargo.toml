@@ -57,6 +57,9 @@ default = []
 # Adds support for Microsoft Azure attestation generation and verification
 azure = ["attestation/azure"]
 
+# Adds support for mock attestations for testing. Do not enable in production.
+mock = ["attestation/mock"]
+
 [package.metadata.deb]
 maintainer = "Flashbots Team <devops+ci@flashbots.net>"
 depends = "$auto"
