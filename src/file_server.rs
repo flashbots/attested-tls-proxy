@@ -1,5 +1,8 @@
 //! Static HTTP file server provided by an attested TLS proxy server
-use crate::{AttestationGenerator, AttestationVerifier, ProxyError, ProxyServer, TlsCertAndKey};
+use crate::{
+    AttestationGenerator, AttestationVerifier, OuterTlsConfig, OuterTlsMode, ProxyError,
+    ProxyServer, TlsCertAndKey,
+};
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
 use tower_http::services::ServeDir;
@@ -7,17 +10,28 @@ use tower_http::services::ServeDir;
 /// Setup a static file server serving the given directory, and a proxy server targetting it
 pub async fn attested_file_server(
     path_to_serve: PathBuf,
-    cert_and_key: TlsCertAndKey,
-    listen_addr: impl ToSocketAddrs,
+    outer_cert_and_key: Option<TlsCertAndKey>,
+    outer_listen_addr: Option<impl ToSocketAddrs>,
+    inner_listen_addr: Option<impl ToSocketAddrs>,
     attestation_generator: AttestationGenerator,
     attestation_verifier: AttestationVerifier,
     client_auth: bool,
 ) -> Result<(), ProxyError> {
     let target_addr = static_file_server(path_to_serve).await?;
+    let outer_session = match (outer_cert_and_key, outer_listen_addr) {
+        (Some(cert_and_key), Some(listen_addr)) => Some(OuterTlsConfig {
+            listen_addr,
+            tls: OuterTlsMode::CertAndKey(cert_and_key),
+        }),
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(ProxyError::NoListenersConfigured);
+        }
+        (None, None) => None,
+    };
 
     let server = ProxyServer::new(
-        cert_and_key,
-        listen_addr,
+        outer_session,
+        inner_listen_addr,
         target_addr.to_string(),
         attestation_generator,
         attestation_verifier,
@@ -52,10 +66,10 @@ pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, Prox
 
 #[cfg(test)]
 mod tests {
-    use crate::{ProxyClient, attestation::AttestationType};
+    use crate::{OuterTlsConfig, OuterTlsMode, ProxyClient, attestation::AttestationType};
 
     use super::*;
-    use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
+    use crate::test_helpers::{generate_certificate_chain_for_host, generate_tls_config};
     use tempfile::tempdir;
 
     /// Given a URL, fetch response body and content type header
@@ -74,7 +88,7 @@ mod tests {
         (body.to_vec(), content_type)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_static_file_server() {
         // Create a temporary directory with some files to serve
         let dir = tempdir().unwrap();
@@ -94,17 +108,23 @@ mod tests {
         let target_addr = static_file_server(dir.path().to_path_buf()).await.unwrap();
 
         // Create TLS configuration
-        let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (server_config, client_config) = generate_tls_config(cert_chain.clone(), private_key);
 
         // Setup a proxy server targetting the static file server
-        let proxy_server = ProxyServer::new_with_tls_config(
-            cert_chain,
-            server_config,
-            "127.0.0.1:0",
+        let proxy_server = ProxyServer::new(
+            Some(OuterTlsConfig {
+                listen_addr: "127.0.0.1:0",
+                tls: OuterTlsMode::Preconfigured {
+                    server_config,
+                    certificate_name: "localhost".to_string(),
+                },
+            }),
+            Some("127.0.0.1:0"),
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
+            false,
         )
         .await
         .unwrap();
@@ -118,7 +138,7 @@ mod tests {
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
-            proxy_addr.to_string(),
+            format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
             None,
@@ -128,35 +148,31 @@ mod tests {
 
         let proxy_client_addr = proxy_client.local_addr().unwrap();
 
-        // Proxy cient accepts a single connection
+        // Accept one client connection per request.
         tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+            proxy_client.accept().await.unwrap();
             proxy_client.accept().await.unwrap();
         });
 
         let client = reqwest::Client::new();
 
         // This makes the request
-        let (body, content_type) = get_body_and_content_type(
-            format!("http://{}/foo.txt", proxy_client_addr.to_string()),
-            &client,
-        )
-        .await;
+        let (body, content_type) =
+            get_body_and_content_type(format!("http://{}/foo.txt", proxy_client_addr), &client)
+                .await;
         assert_eq!(content_type, "text/plain");
         assert_eq!(body, b"bar");
 
-        let (body, content_type) = get_body_and_content_type(
-            format!("http://{}/index.html", proxy_client_addr.to_string()),
-            &client,
-        )
-        .await;
+        let (body, content_type) =
+            get_body_and_content_type(format!("http://{}/index.html", proxy_client_addr), &client)
+                .await;
         assert_eq!(content_type, "text/html");
         assert_eq!(body, b"<html><body>foo</body></html>");
 
-        let (body, content_type) = get_body_and_content_type(
-            format!("http://{}/data.bin", proxy_client_addr.to_string()),
-            &client,
-        )
-        .await;
+        let (body, content_type) =
+            get_body_and_content_type(format!("http://{}/data.bin", proxy_client_addr), &client)
+                .await;
         assert_eq!(content_type, "application/octet-stream");
         assert_eq!(body, [0u8; 32]);
     }
