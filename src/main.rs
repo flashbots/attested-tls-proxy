@@ -1,6 +1,7 @@
 use anyhow::{anyhow, ensure};
 use attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy};
 use clap::{Parser, Subcommand};
+use pccs::Pccs;
 use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio::io::AsyncWriteExt;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -28,7 +29,7 @@ struct Cli {
     /// If no measurements file is specified, a single attestion type to allow
     #[arg(long, global = true)]
     allowed_remote_attestation_type: Option<String>,
-    /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
+    /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to an internal PCCS.
     #[arg(long, global = true)]
     pccs_url: Option<String>,
     /// Log debug messages
@@ -159,6 +160,8 @@ enum CliCommand {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let cli = Cli::parse();
 
     ensure!(
@@ -216,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
         pccs_url: cli.pccs_url,
         dump_dcap_quotes: cli.log_dcap_quote,
         override_azure_outdated_tcb: cli.override_azure_outdated_tcb,
+        internal_pccs: Some(Pccs::new(None)),
     };
 
     match cli.command {
