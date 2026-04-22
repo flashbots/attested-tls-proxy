@@ -11,7 +11,8 @@ use attested_tls_proxy::{
     AttestationGenerator, OuterTlsConfig, OuterTlsMode, ProxyClient, ProxyServer, TlsCertAndKey,
     attested_get::attested_get,
     file_server::{AttestedFileServerConfig, attested_file_server},
-    get_inner_tls_cert, health_check, normalize_pem::normalize_private_key_pem_to_pkcs8,
+    get_inner_tls_cert, health_check,
+    normalize_pem::normalize_private_key_pem_to_pkcs8,
 };
 
 const GIT_REV: &str = match option_env!("GIT_REV") {

@@ -28,9 +28,7 @@ pub struct AttestedFileServerConfig<A> {
 }
 
 /// Setup a static file server serving the given directory, and a proxy server targetting it
-pub async fn attested_file_server<A>(
-    config: AttestedFileServerConfig<A>,
-) -> Result<(), ProxyError>
+pub async fn attested_file_server<A>(config: AttestedFileServerConfig<A>) -> Result<(), ProxyError>
 where
     A: ToSocketAddrs,
 {

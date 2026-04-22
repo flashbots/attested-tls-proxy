@@ -19,23 +19,20 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::{Response, service::service_fn};
 use hyper_util::rt::TokioIo;
-use nested_tls::{client::NestingTlsConnector, server::NestingTlsAcceptor, server::NestingTlsStream};
-use std::{
-    net::SocketAddr,
-    num::TryFromIntError,
-    sync::Arc,
-    time::Duration,
+use nested_tls::{
+    client::NestingTlsConnector, server::NestingTlsAcceptor, server::NestingTlsStream,
 };
+use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::io::{self, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::{mpsc, oneshot};
-use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 use tokio_rustls::rustls::{
     self, ClientConfig, RootCertStore, ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
 };
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{debug, error, warn};
 
 use crate::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
@@ -71,8 +68,7 @@ enum ProxyTlsConnector {
     InnerOnly(TlsConnector),
 }
 
-impl ProxyTlsConnector {
-}
+impl ProxyTlsConnector {}
 
 /// TLS Credentials
 pub struct TlsCertAndKey {
@@ -1033,9 +1029,7 @@ impl ProxyClient {
                         let (sender, conn) =
                             hyper::client::conn::http2::Builder::new(TokioExecutor)
                                 .timer(hyper_util::rt::tokio::TokioTimer::new())
-                                .keep_alive_interval(Some(Duration::from_secs(
-                                    KEEP_ALIVE_INTERVAL,
-                                )))
+                                .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
                                 .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
                                 .keep_alive_while_idle(true)
                                 .handshake::<_, hyper::body::Incoming>(outbound_io)
@@ -1065,9 +1059,7 @@ impl ProxyClient {
                         let (sender, conn) =
                             hyper::client::conn::http2::Builder::new(TokioExecutor)
                                 .timer(hyper_util::rt::tokio::TokioTimer::new())
-                                .keep_alive_interval(Some(Duration::from_secs(
-                                    KEEP_ALIVE_INTERVAL,
-                                )))
+                                .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
                                 .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
                                 .keep_alive_while_idle(true)
                                 .handshake::<_, hyper::body::Incoming>(outbound_io)
