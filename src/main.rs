@@ -64,10 +64,10 @@ enum CliCommand {
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
         client_attestation_type: Option<String>,
-        /// The path to a PEM encoded private key for client authentication
+        /// The path to a PEM encoded private key for client authentication in nested-TLS mode
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: Option<PathBuf>,
-        /// The path to a PEM encoded certificate chain for client authentication
+        /// The path to a PEM encoded certificate chain for client authentication in nested-TLS mode
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: Option<PathBuf>,
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
@@ -254,6 +254,13 @@ async fn main() -> anyhow::Result<()> {
                 health_check::server(listen_addr_healthcheck).await?;
             }
 
+            validate_client_args(
+                inner_session_only,
+                tls_private_key_path.as_ref(),
+                tls_certificate_path.as_ref(),
+                tls_ca_certificate.as_ref(),
+            )?;
+
             let tls_cert_and_chain = if let Some(private_key) = tls_private_key_path {
                 Some(load_tls_cert_and_key(
                     tls_certificate_path
@@ -267,8 +274,6 @@ async fn main() -> anyhow::Result<()> {
                 );
                 None
             };
-
-            validate_client_args(inner_session_only, tls_ca_certificate.as_ref())?;
 
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
@@ -506,11 +511,19 @@ fn validate_listener_args(
 
 fn validate_client_args(
     inner_session_only: bool,
+    tls_private_key_path: Option<&PathBuf>,
+    tls_certificate_path: Option<&PathBuf>,
     tls_ca_certificate: Option<&PathBuf>,
 ) -> anyhow::Result<()> {
     if inner_session_only && tls_ca_certificate.is_some() {
         return Err(anyhow!(
             "--tls-ca-certificate cannot be used with --inner-session-only"
+        ));
+    }
+
+    if inner_session_only && (tls_private_key_path.is_some() || tls_certificate_path.is_some()) {
+        return Err(anyhow!(
+            "--tls-private-key-path and --tls-certificate-path are not supported with --inner-session-only"
         ));
     }
 
@@ -558,9 +571,19 @@ mod tests {
     #[test]
     fn client_rejects_tls_ca_certificate_in_inner_only_mode() {
         let cert_path = PathBuf::from("ca.pem");
-        let err = validate_client_args(true, Some(&cert_path))
+        let err = validate_client_args(true, None, None, Some(&cert_path))
             .unwrap_err()
             .to_string();
         assert!(err.contains("--tls-ca-certificate"));
+    }
+
+    #[test]
+    fn client_rejects_tls_client_auth_in_inner_only_mode() {
+        let cert_path = PathBuf::from("client.crt");
+        let key_path = PathBuf::from("client.key");
+        let err = validate_client_args(true, Some(&key_path), Some(&cert_path), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--tls-private-key-path"));
     }
 }

@@ -736,12 +736,16 @@ impl ProxyClient {
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
+        if cert_and_key.is_some() {
+            return Err(ProxyError::InnerOnlyClientAuthUnsupported);
+        }
+
         Self::new_inner_only_with_tls_config(
             address,
             server_name,
             attestation_generator,
             attestation_verifier,
-            cert_and_key.map(|cert_and_key| cert_and_key.cert_chain),
+            None,
         )
         .await
     }
@@ -1177,6 +1181,8 @@ pub enum ProxyError {
     MpscSend,
     #[error("Client auth must be configured on both the inner and outer TLS sessions")]
     ClientAuthMisconfigured,
+    #[error("Inner-session-only mode does not support user-supplied TLS client certificates")]
+    InnerOnlyClientAuthUnsupported,
     #[error("At least one server listener must be configured")]
     NoListenersConfigured,
 }
@@ -1561,6 +1567,26 @@ mod tests {
         assert_attestation_type_header(res.headers(), "dcap-tdx");
         assert_mock_measurements_header(res.headers());
         assert_eq!(res.text().await.unwrap(), "No measurements");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inner_only_client_rejects_user_supplied_tls_client_cert() {
+        let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
+        let err = ProxyClient::new_inner_only(
+            Some(TlsCertAndKey {
+                cert_chain,
+                key: private_key,
+            }),
+            "127.0.0.1:0",
+            "localhost:443".to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("Inner-session-only mode"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
