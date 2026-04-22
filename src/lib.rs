@@ -1363,7 +1363,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn inner_only_listener_negotiates_http2_by_default() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let target_addr = example_http_service().await;
 
         let proxy_server = ProxyServer::new(

@@ -16,7 +16,7 @@ nested-tls = { git = "https://github.com/flashbots/attested-tls", branch = "main
 attestation = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
 pccs = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
 tokio = { version = "1.50.0", features = ["full"] }
-tokio-rustls = { version = "0.26.4", default-features = false }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws_lc_rs"] }
 x509-parser = { version = "0.18.0", features = ["verify"] }
 thiserror = "2.0.17"
 clap = { version = "4.5.51", features = ["derive", "env"] }

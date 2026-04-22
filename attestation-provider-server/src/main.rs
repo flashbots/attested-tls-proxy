@@ -99,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
                 pccs_url: None,
                 dump_dcap_quotes: cli.log_dcap_quote,
                 override_azure_outdated_tcb: false,
+                internal_pccs: None,
             };
 
             let attestation_message =
