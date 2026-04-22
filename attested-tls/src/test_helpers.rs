@@ -10,6 +10,10 @@ use crate::SUPPORTED_ALPN_PROTOCOL_VERSIONS;
 
 pub use attestation::measurements::mock_dcap_measurements;
 
+fn install_crypto_provider() {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 /// Helper to generate a self-signed certificate for testing
 pub fn generate_certificate_chain(
     ip: IpAddr,
@@ -36,6 +40,8 @@ pub fn generate_tls_config(
     certificate_chain: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
 ) -> (ServerConfig, ClientConfig) {
+    install_crypto_provider();
+
     let supported_protocols: Vec<_> = SUPPORTED_ALPN_PROTOCOL_VERSIONS
         .into_iter()
         .map(|p| p.to_vec())
@@ -67,6 +73,8 @@ pub fn generate_tls_config_with_client_auth(
     bob_certificate_chain: Vec<CertificateDer<'static>>,
     bob_key: PrivateKeyDer<'static>,
 ) -> ((ServerConfig, ClientConfig), (ServerConfig, ClientConfig)) {
+    install_crypto_provider();
+
     let supported_protocols: Vec<_> = SUPPORTED_ALPN_PROTOCOL_VERSIONS
         .into_iter()
         .map(|p| p.to_vec())
