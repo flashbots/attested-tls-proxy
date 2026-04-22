@@ -7,16 +7,42 @@ use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
 use tower_http::services::ServeDir;
 
+/// Configuration for serving a local directory over the attested proxy
+pub struct AttestedFileServerConfig<A> {
+    /// Filesystem path to expose over HTTP
+    pub path_to_serve: PathBuf,
+    /// TLS certificate and key for the optional outer listener
+    pub outer_cert_and_key: Option<TlsCertAndKey>,
+    /// Bind address for the optional outer nested-TLS listener
+    pub outer_listen_addr: Option<A>,
+    /// Bind address for the optional inner attested-TLS listener
+    pub inner_listen_addr: Option<A>,
+    /// Certificate name to embed in the inner attested certificate
+    pub inner_certificate_name: Option<String>,
+    /// Attestation generator used by the proxy server
+    pub attestation_generator: AttestationGenerator,
+    /// Attestation verifier used for the remote peer
+    pub attestation_verifier: AttestationVerifier,
+    /// Whether inner TLS should require client authentication
+    pub client_auth: bool,
+}
+
 /// Setup a static file server serving the given directory, and a proxy server targetting it
-pub async fn attested_file_server(
-    path_to_serve: PathBuf,
-    outer_cert_and_key: Option<TlsCertAndKey>,
-    outer_listen_addr: Option<impl ToSocketAddrs>,
-    inner_listen_addr: Option<impl ToSocketAddrs>,
-    attestation_generator: AttestationGenerator,
-    attestation_verifier: AttestationVerifier,
-    client_auth: bool,
-) -> Result<(), ProxyError> {
+pub async fn attested_file_server<A>(config: AttestedFileServerConfig<A>) -> Result<(), ProxyError>
+where
+    A: ToSocketAddrs,
+{
+    let AttestedFileServerConfig {
+        path_to_serve,
+        outer_cert_and_key,
+        outer_listen_addr,
+        inner_listen_addr,
+        inner_certificate_name,
+        attestation_generator,
+        attestation_verifier,
+        client_auth,
+    } = config;
+
     let target_addr = static_file_server(path_to_serve).await?;
     let outer_session = match (outer_cert_and_key, outer_listen_addr) {
         (Some(cert_and_key), Some(listen_addr)) => Some(OuterTlsConfig {
@@ -32,6 +58,7 @@ pub async fn attested_file_server(
     let server = ProxyServer::new(
         outer_session,
         inner_listen_addr,
+        inner_certificate_name,
         target_addr.to_string(),
         attestation_generator,
         attestation_verifier,
@@ -121,6 +148,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),

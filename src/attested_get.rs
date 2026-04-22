@@ -86,6 +86,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
