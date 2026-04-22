@@ -53,6 +53,9 @@ enum CliCommand {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
+        /// Connect directly to the server's inner attested TLS listener instead of nested TLS
+        #[arg(long)]
+        inner_session_only: bool,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
@@ -84,6 +87,9 @@ enum CliCommand {
         /// Socket address to listen on for the inner-only attested TLS listener
         #[arg(long)]
         inner_listen_addr: Option<SocketAddr>,
+        /// DNS name to embed into the inner attested certificate when no outer listener is used
+        #[arg(long)]
+        inner_certificate_name: Option<String>,
         /// The hostname:port or ip:port of the target service to forward traffic to
         target_addr: String,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
@@ -129,6 +135,9 @@ enum CliCommand {
         /// Socket address to listen on for the inner-only attested TLS listener
         #[arg(long)]
         inner_listen_addr: Option<SocketAddr>,
+        /// DNS name to embed into the inner attested certificate when no outer listener is used
+        #[arg(long)]
+        inner_certificate_name: Option<String>,
         /// Type of attestation to present (dafaults to none)
         /// This configures the inner attested TLS listener and does not require outer TLS certs.
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
@@ -225,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         CliCommand::Client {
             listen_addr,
+            inner_session_only,
             target_addr,
             client_attestation_type,
             tls_private_key_path,
@@ -256,6 +266,8 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
+            validate_client_args(inner_session_only, tls_ca_certificate.as_ref())?;
+
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
                     load_certs_pem(remote_cert_filename)?
@@ -270,15 +282,26 @@ async fn main() -> anyhow::Result<()> {
                 AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
                     .await?;
 
-            let client = ProxyClient::new(
-                tls_cert_and_chain,
-                listen_addr,
-                target_addr,
-                client_attestation_generator,
-                attestation_verifier,
-                remote_tls_cert,
-            )
-            .await?;
+            let client = if inner_session_only {
+                ProxyClient::new_inner_only(
+                    tls_cert_and_chain,
+                    listen_addr,
+                    target_addr,
+                    client_attestation_generator,
+                    attestation_verifier,
+                )
+                .await?
+            } else {
+                ProxyClient::new(
+                    tls_cert_and_chain,
+                    listen_addr,
+                    target_addr,
+                    client_attestation_generator,
+                    attestation_verifier,
+                    remote_tls_cert,
+                )
+                .await?
+            };
 
             loop {
                 if let Err(err) = client.accept().await {
@@ -289,6 +312,7 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Server {
             outer_listen_addr,
             inner_listen_addr,
+            inner_certificate_name,
             target_addr,
             tls_private_key_path,
             tls_certificate_path,
@@ -321,6 +345,7 @@ async fn main() -> anyhow::Result<()> {
                         tls: OuterTlsMode::CertAndKey(cert_and_key),
                     }),
                 inner_listen_addr,
+                inner_certificate_name,
                 target_addr,
                 local_attestation_generator,
                 attestation_verifier,
@@ -367,6 +392,7 @@ async fn main() -> anyhow::Result<()> {
             path_to_serve,
             outer_listen_addr,
             inner_listen_addr,
+            inner_certificate_name,
             server_attestation_type,
             tls_private_key_path,
             tls_certificate_path,
@@ -392,6 +418,7 @@ async fn main() -> anyhow::Result<()> {
                 tls_cert_and_chain,
                 outer_listen_addr,
                 inner_listen_addr,
+                inner_certificate_name,
                 attestation_generator,
                 attestation_verifier,
                 false,
@@ -475,6 +502,19 @@ fn validate_listener_args(
     Ok(())
 }
 
+fn validate_client_args(
+    inner_session_only: bool,
+    tls_ca_certificate: Option<&PathBuf>,
+) -> anyhow::Result<()> {
+    if inner_session_only && tls_ca_certificate.is_some() {
+        return Err(anyhow!(
+            "--tls-ca-certificate cannot be used with --inner-session-only"
+        ));
+    }
+
+    Ok(())
+}
+
 /// Load TLS details from storage
 fn load_tls_cert_and_key(
     cert_chain: PathBuf,
@@ -507,4 +547,18 @@ fn certs_to_pem_string(certs: &[CertificateDer<'_>]) -> Result<String, pem_rfc74
         out.push('\n');
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_rejects_tls_ca_certificate_in_inner_only_mode() {
+        let cert_path = PathBuf::from("ca.pem");
+        let err = validate_client_args(true, Some(&cert_path))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--tls-ca-certificate"));
+    }
 }

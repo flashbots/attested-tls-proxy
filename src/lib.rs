@@ -19,14 +19,18 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::{Response, service::service_fn};
 use hyper_util::rt::TokioIo;
-use nested_tls::server::NestingTlsStream;
-use nested_tls::{client::NestingTlsConnector, server::NestingTlsAcceptor};
-use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
+use nested_tls::{client::NestingTlsConnector, server::NestingTlsAcceptor, server::NestingTlsStream};
+use std::{
+    net::SocketAddr,
+    num::TryFromIntError,
+    sync::Arc,
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::io::{self, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::{mpsc, oneshot};
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 use tokio_rustls::rustls::{
     self, ClientConfig, RootCertStore, ServerConfig,
@@ -60,6 +64,15 @@ type RequestWithResponseSender = (
 
 type OuterProxySession = (Arc<TcpListener>, NestingTlsAcceptor);
 type InnerProxySession = (Arc<TcpListener>, TlsAcceptor);
+
+#[derive(Clone)]
+enum ProxyTlsConnector {
+    Nested(NestingTlsConnector),
+    InnerOnly(TlsConnector),
+}
+
+impl ProxyTlsConnector {
+}
 
 /// TLS Credentials
 pub struct TlsCertAndKey {
@@ -227,6 +240,7 @@ impl ProxyServer {
     pub async fn new<O, I>(
         outer_session: Option<OuterTlsConfig<O>>,
         inner_local: Option<I>,
+        inner_certificate_name: Option<String>,
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
@@ -243,7 +257,8 @@ impl ProxyServer {
         let certificate_name = outer_session
             .as_ref()
             .map(OuterTlsConfig::certificate_name)
-            .transpose()?;
+            .transpose()?
+            .or(inner_certificate_name);
         let inner_server_config = Arc::new(
             build_inner_server_config(
                 attestation_generator,
@@ -709,13 +724,72 @@ impl ProxyClient {
         let nesting_tls_connector =
             NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
 
-        Self::new_with_inner(address, nesting_tls_connector, &target_name).await
+        Self::new_with_connector(
+            address,
+            ProxyTlsConnector::Nested(nesting_tls_connector),
+            &target_name,
+        )
+        .await
     }
 
-    /// Create a new proxy client with given [AttestedTlsClient]
-    pub async fn new_with_inner(
+    /// Start a proxy client which connects directly to the server's inner attested TLS listener.
+    pub async fn new_inner_only(
+        cert_and_key: Option<TlsCertAndKey>,
         address: impl ToSocketAddrs,
-        nesting_tls_connector: NestingTlsConnector,
+        server_name: String,
+        attestation_generator: AttestationGenerator,
+        attestation_verifier: AttestationVerifier,
+    ) -> Result<Self, ProxyError> {
+        Self::new_inner_only_with_tls_config(
+            address,
+            server_name,
+            attestation_generator,
+            attestation_verifier,
+            cert_and_key.map(|cert_and_key| cert_and_key.cert_chain),
+        )
+        .await
+    }
+
+    /// Create a new inner-only proxy client with given TLS configuration.
+    pub async fn new_inner_only_with_tls_config(
+        address: impl ToSocketAddrs,
+        target_name: String,
+        attestation_generator: AttestationGenerator,
+        attestation_verifier: AttestationVerifier,
+        cert_chain: Option<Vec<CertificateDer<'static>>>,
+    ) -> Result<Self, ProxyError> {
+        let attested_cert_verifier = AttestedCertificateVerifier::new(None, attestation_verifier)?;
+
+        let mut inner_client_config = if let Some(cert_chain) = cert_chain.as_ref() {
+            let inner_cert_resolver = build_attested_cert_resolver(
+                attestation_generator,
+                certificate_identity_from_chain(cert_chain)?,
+            )
+            .await?;
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
+                .with_client_cert_resolver(Arc::new(inner_cert_resolver))
+        } else {
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
+                .with_no_client_auth()
+        };
+        ensure_proxy_alpn_protocols(&mut inner_client_config.alpn_protocols);
+
+        Self::new_with_connector(
+            address,
+            ProxyTlsConnector::InnerOnly(TlsConnector::from(Arc::new(inner_client_config))),
+            &target_name,
+        )
+        .await
+    }
+
+    /// Create a new proxy client with a configured TLS connector.
+    async fn new_with_connector(
+        address: impl ToSocketAddrs,
+        tls_connector: ProxyTlsConnector,
         target_name: &str,
     ) -> Result<Self, ProxyError> {
         let listener = TcpListener::bind(address).await?;
@@ -740,7 +814,7 @@ impl ProxyClient {
             'reconnect: loop {
                 let (mut sender, conn, attestation) =
                     // Connect to the proxy server and provide / verify attestation
-                    match Self::setup_connection_with_backoff(&target, &nesting_tls_connector, first)
+                    match Self::setup_connection_with_backoff(&target, &tls_connector, first)
                         .await
                     {
                         Ok(output) => {
@@ -910,14 +984,14 @@ impl ProxyClient {
     // If it fails retry with a backoff (indefinately)
     async fn setup_connection_with_backoff(
         target: &str,
-        nesting_tls_connector: &NestingTlsConnector,
+        tls_connector: &ProxyTlsConnector,
         should_bail: bool,
     ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
         let mut delay = Duration::from_secs(1);
         let max_delay = Duration::from_secs(SERVER_RECONNECT_MAX_BACKOFF_SECS);
 
         loop {
-            match Self::setup_connection(nesting_tls_connector, target).await {
+            match Self::setup_connection(tls_connector, target).await {
                 Ok(output) => {
                     return Ok(output);
                 }
@@ -939,54 +1013,92 @@ impl ProxyClient {
 
     /// Connect to the proxy-server, do TLS handshake and remote attestation
     async fn setup_connection(
-        nesting_tls_connector: &NestingTlsConnector,
+        tls_connector: &ProxyTlsConnector,
         target: &str,
     ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
         let outbound_stream = tokio::net::TcpStream::connect(target).await?;
 
         let domain = server_name_from_host(target)?;
-        let tls_stream = nesting_tls_connector
-            .connect(domain, outbound_stream)
-            .await?;
+        match tls_connector {
+            ProxyTlsConnector::Nested(connector) => {
+                let tls_stream = connector.connect(domain, outbound_stream).await?;
+                debug!("[proxy-client] Connected to proxy server");
 
-        debug!("[proxy-client] Connected to proxy server");
+                let attestation = Self::extract_peer_attestation(&tls_stream)?;
+                let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
 
-        let attestation = {
-            let (_io, server_connection) = tls_stream.get_ref();
+                let outbound_io = TokioIo::new(tls_stream);
+                let (sender, conn) = match http_version {
+                    HttpVersion::Http2 => {
+                        let (sender, conn) =
+                            hyper::client::conn::http2::Builder::new(TokioExecutor)
+                                .timer(hyper_util::rt::tokio::TokioTimer::new())
+                                .keep_alive_interval(Some(Duration::from_secs(
+                                    KEEP_ALIVE_INTERVAL,
+                                )))
+                                .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
+                                .keep_alive_while_idle(true)
+                                .handshake::<_, hyper::body::Incoming>(outbound_io)
+                                .await?;
+                        (sender.into(), conn.into())
+                    }
+                    HttpVersion::Http1 => {
+                        let (sender, conn) = hyper::client::conn::http1::Builder::new()
+                            .handshake::<_, hyper::body::Incoming>(outbound_io)
+                            .await?;
+                        (sender.into(), conn.into())
+                    }
+                };
 
-            let remote_cert_chain = server_connection
-                .peer_certificates()
-                .ok_or(ProxyError::NoCertificate)?;
-
-            AttestedCertificateVerifier::extract_custom_attestation_from_cert(
-                remote_cert_chain.first().ok_or(ProxyError::NoCertificate)?,
-            )?
-        };
-
-        // The attestation exchange is now complete - setup an HTTP client
-        let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
-
-        let outbound_io = TokioIo::new(tls_stream);
-        let (sender, conn) = match http_version {
-            HttpVersion::Http2 => {
-                let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
-                    .timer(hyper_util::rt::tokio::TokioTimer::new())
-                    .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
-                    .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
-                    .keep_alive_while_idle(true)
-                    .handshake::<_, hyper::body::Incoming>(outbound_io)
-                    .await?;
-                (sender.into(), conn.into())
+                Ok((sender, conn, attestation))
             }
-            HttpVersion::Http1 => {
-                let (sender, conn) = hyper::client::conn::http1::Builder::new()
-                    .handshake::<_, hyper::body::Incoming>(outbound_io)
-                    .await?;
-                (sender.into(), conn.into())
-            }
-        };
+            ProxyTlsConnector::InnerOnly(connector) => {
+                let tls_stream = connector.connect(domain, outbound_stream).await?;
+                debug!("[proxy-client] Connected to proxy server");
 
-        Ok((sender, conn, attestation))
+                let attestation = Self::extract_peer_attestation(&tls_stream)?;
+                let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
+
+                let outbound_io = TokioIo::new(tls_stream);
+                let (sender, conn) = match http_version {
+                    HttpVersion::Http2 => {
+                        let (sender, conn) =
+                            hyper::client::conn::http2::Builder::new(TokioExecutor)
+                                .timer(hyper_util::rt::tokio::TokioTimer::new())
+                                .keep_alive_interval(Some(Duration::from_secs(
+                                    KEEP_ALIVE_INTERVAL,
+                                )))
+                                .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
+                                .keep_alive_while_idle(true)
+                                .handshake::<_, hyper::body::Incoming>(outbound_io)
+                                .await?;
+                        (sender.into(), conn.into())
+                    }
+                    HttpVersion::Http1 => {
+                        let (sender, conn) = hyper::client::conn::http1::Builder::new()
+                            .handshake::<_, hyper::body::Incoming>(outbound_io)
+                            .await?;
+                        (sender.into(), conn.into())
+                    }
+                };
+
+                Ok((sender, conn, attestation))
+            }
+        }
+    }
+
+    fn extract_peer_attestation<IO>(
+        tls_stream: &tokio_rustls::client::TlsStream<IO>,
+    ) -> Result<AttestationExchangeMessage, ProxyError> {
+        let (_io, server_connection) = tls_stream.get_ref();
+        let remote_cert_chain = server_connection
+            .peer_certificates()
+            .ok_or(ProxyError::NoCertificate)?;
+
+        AttestedCertificateVerifier::extract_custom_attestation_from_cert(
+            remote_cert_chain.first().ok_or(ProxyError::NoCertificate)?,
+        )
+        .map_err(ProxyError::from)
     }
 
     // Handle a request from the source client to the proxy server
@@ -1306,6 +1418,7 @@ mod tests {
         let result = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
             None::<&str>,
+            None,
             "127.0.0.1:1".to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
@@ -1332,6 +1445,7 @@ mod tests {
                 tls: OuterTlsMode::CertAndKey(tls_cert_and_key),
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
@@ -1348,6 +1462,7 @@ mod tests {
         let inner_only_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
@@ -1369,6 +1484,7 @@ mod tests {
         let proxy_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1409,6 +1525,164 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn inner_only_client_with_server_attestation() {
+        let target_addr = example_http_service().await;
+
+        let proxy_server = ProxyServer::new(
+            None::<OuterTlsConfig<&str>>,
+            Some("127.0.0.1:0"),
+            None,
+            target_addr.to_string(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
+            AttestationVerifier::expect_none(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.inner_local_addr().unwrap().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let proxy_client = ProxyClient::new_inner_only_with_tls_config(
+            "127.0.0.1:0",
+            format!("localhost:{}", proxy_addr.port()),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+        });
+
+        let res = reqwest::get(format!("http://{}", proxy_client_addr))
+            .await
+            .unwrap();
+
+        assert_attestation_type_header(res.headers(), "dcap-tdx");
+        assert_mock_measurements_header(res.headers());
+        assert_eq!(res.text().await.unwrap(), "No measurements");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inner_only_client_supports_mutual_attestation() {
+        let target_addr = example_http_service().await;
+        let (client_cert_chain, _client_private_key) =
+            generate_certificate_chain_for_host("localhost");
+
+        let proxy_server = ProxyServer::new(
+            None::<OuterTlsConfig<&str>>,
+            Some("127.0.0.1:0"),
+            None,
+            target_addr.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            true,
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.inner_local_addr().unwrap().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let proxy_client = ProxyClient::new_inner_only_with_tls_config(
+            "127.0.0.1:0",
+            format!("localhost:{}", proxy_addr.port()),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
+            AttestationVerifier::expect_none(),
+            Some(client_cert_chain),
+        )
+        .await
+        .unwrap();
+
+        let proxy_client_addr = proxy_client.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            proxy_client.accept().await.unwrap();
+        });
+
+        let res = reqwest::get(format!("http://{}", proxy_client_addr))
+            .await
+            .unwrap();
+
+        assert_attestation_type_header(res.headers(), "none");
+        assert_no_measurements_header(res.headers());
+        assert_mock_measurements(&res.text().await.unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inner_only_server_uses_configured_certificate_name() {
+        use tokio_rustls::rustls::client::ResolvesClientCert;
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let resolver = build_attested_cert_resolver(
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
+            "custom.inner.name".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let certified_key = resolver.resolve(&[], &[]).unwrap();
+        let cert_chain = &certified_key.cert;
+
+        assert_eq!(
+            hostname_from_cert(cert_chain.first().unwrap()).unwrap(),
+            "custom.inner.name"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn nested_client_fails_against_inner_only_listener() {
+        let target_addr = example_http_service().await;
+
+        let proxy_server = ProxyServer::new(
+            None::<OuterTlsConfig<&str>>,
+            Some("127.0.0.1:0"),
+            None,
+            target_addr.to_string(),
+            AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
+            AttestationVerifier::expect_none(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.inner_local_addr().unwrap().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
+        let (_server_config, client_config) = generate_tls_config(cert_chain, private_key);
+
+        let err = ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0",
+            format!("localhost:{}", proxy_addr.port()),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::mock(),
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(!err.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn http_proxy_negotiates_http2_by_default() {
         let target_addr = example_http_service().await;
 
@@ -1425,6 +1699,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1452,7 +1727,7 @@ mod tests {
             NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
 
         let (sender, conn, _attestation) = ProxyClient::setup_connection(
-            &nesting_tls_connector,
+            &ProxyTlsConnector::Nested(nesting_tls_connector),
             &format!("localhost:{}", proxy_addr.port()),
         )
         .await
@@ -1480,6 +1755,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1551,6 +1827,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
@@ -1612,6 +1889,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
@@ -1675,6 +1953,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::mock(),
@@ -1749,6 +2028,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::mock(),
@@ -1813,6 +2093,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1861,6 +2142,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
@@ -1907,6 +2189,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -1979,6 +2262,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -2099,6 +2383,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -2186,6 +2471,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
@@ -2246,6 +2532,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),

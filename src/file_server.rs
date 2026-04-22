@@ -13,6 +13,7 @@ pub async fn attested_file_server(
     outer_cert_and_key: Option<TlsCertAndKey>,
     outer_listen_addr: Option<impl ToSocketAddrs>,
     inner_listen_addr: Option<impl ToSocketAddrs>,
+    inner_certificate_name: Option<String>,
     attestation_generator: AttestationGenerator,
     attestation_verifier: AttestationVerifier,
     client_auth: bool,
@@ -32,6 +33,7 @@ pub async fn attested_file_server(
     let server = ProxyServer::new(
         outer_session,
         inner_listen_addr,
+        inner_certificate_name,
         target_addr.to_string(),
         attestation_generator,
         attestation_verifier,
@@ -121,6 +123,7 @@ mod tests {
                 },
             }),
             Some("127.0.0.1:0"),
+            None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
