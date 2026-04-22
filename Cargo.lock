@@ -561,19 +561,20 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#a96ec2d9096f491e652624c53d3df2b1526ef9f2"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#9fb3002d82918b85f780f37b5545c4e112e0e772"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
  "base64 0.22.1",
  "configfs-tsm",
- "dcap-qvl 0.3.12 (git+https://github.com/flashbots/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
+ "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
  "hex",
  "http",
  "num-bigint",
  "once_cell",
  "openssl",
  "parity-scale-codec",
+ "pccs",
  "pem-rfc7468",
  "rand_core 0.6.4",
  "reqwest",
@@ -593,7 +594,7 @@ dependencies = [
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#f977f11b3a9275fb29430a2d84a8672ded4bc73b"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-crate#a96ec2d9096f491e652624c53d3df2b1526ef9f2"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
@@ -670,10 +671,10 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#f977f11b3a9275fb29430a2d84a8672ded4bc73b"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#9fb3002d82918b85f780f37b5545c4e112e0e772"
 dependencies = [
  "anyhow",
- "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
+ "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=main)",
  "ra-tls",
  "rcgen 0.14.7",
  "rustls",
@@ -691,8 +692,8 @@ name = "attested-tls-proxy"
 version = "1.1.1"
 dependencies = [
  "anyhow",
- "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
- "attested-tls 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier)",
+ "attestation 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=main)",
+ "attested-tls 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=main)",
  "axum",
  "bytes",
  "clap",
@@ -703,6 +704,7 @@ dependencies = [
  "jsonrpsee",
  "nested-tls",
  "p256",
+ "pccs",
  "pem-rfc7468",
  "pin-project-lite",
  "pkcs1",
@@ -1472,6 +1474,42 @@ dependencies = [
 name = "dcap-qvl"
 version = "0.3.12"
 source = "git+https://github.com/flashbots/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1#f1dcc65371e941a7b83e3234833d23a1fb232ab1"
+dependencies = [
+ "anyhow",
+ "asn1_der",
+ "base64 0.22.1",
+ "borsh",
+ "byteorder",
+ "chrono",
+ "const-oid",
+ "dcap-qvl-webpki",
+ "der",
+ "derive_more 2.1.1",
+ "futures",
+ "hex",
+ "log",
+ "p256",
+ "parity-scale-codec",
+ "pem",
+ "reqwest",
+ "ring",
+ "rustls-pki-types",
+ "scale-info",
+ "serde",
+ "serde-human-bytes",
+ "serde_json",
+ "sha2",
+ "signature",
+ "tracing",
+ "urlencoding",
+ "wasm-bindgen-futures",
+ "x509-cert",
+]
+
+[[package]]
+name = "dcap-qvl"
+version = "0.3.12"
+source = "git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1#f1dcc65371e941a7b83e3234833d23a1fb232ab1"
 dependencies = [
  "anyhow",
  "asn1_der",
@@ -3008,7 +3046,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fattested-tls-expose-cert-verifier#f977f11b3a9275fb29430a2d84a8672ded4bc73b"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#9fb3002d82918b85f780f37b5545c4e112e0e772"
 dependencies = [
  "rustls",
  "tokio",
@@ -3364,6 +3402,24 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pccs"
+version = "0.0.1"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#9fb3002d82918b85f780f37b5545c4e112e0e772"
+dependencies = [
+ "anyhow",
+ "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "time",
+ "tokio",
+ "tracing",
+ "x509-parser 0.18.1",
+]
 
 [[package]]
 name = "pem"

@@ -1109,10 +1109,14 @@ async fn build_attested_cert_resolver(
     attestation_generator: AttestationGenerator,
     certificate_name: String,
 ) -> Result<AttestedCertificateResolver, ProxyError> {
-    Ok(
-        AttestedCertificateResolver::new(attestation_generator, None, certificate_name, vec![])
-            .await?,
+    Ok(AttestedCertificateResolver::new(
+        attestation_generator,
+        None,
+        certificate_name,
+        vec![],
+        Duration::from_secs(30 * 60),
     )
+    .await?)
 }
 
 async fn build_inner_server_config(
@@ -1940,6 +1944,7 @@ mod tests {
             pccs_url: None,
             dump_dcap_quotes: false,
             override_azure_outdated_tcb: false,
+            internal_pccs: None,
         };
 
         let proxy_client_result = ProxyClient::new_with_tls_config(
