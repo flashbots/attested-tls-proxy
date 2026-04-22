@@ -193,7 +193,7 @@ impl AttestedTlsServer {
         let remote_attestation_type = remote_attestation_message.attestation_type;
 
         // If we expect an attestaion from the client, verify it and get measurements
-        let measurements = if self.attestation_verifier.has_remote_attestion() {
+        let measurements = if self.attestation_verifier.has_remote_attestation() {
             let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
 
             self.attestation_verifier
@@ -745,7 +745,7 @@ mod tests {
         let attestation_verifier = AttestationVerifier {
             measurement_policy,
             pccs_url: None,
-            log_dcap_quote: false,
+            dump_dcap_quotes: false,
             override_azure_outdated_tcb: false,
         };
 

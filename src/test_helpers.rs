@@ -1,8 +1,7 @@
 //! Helper functions used in tests
 use axum::response::IntoResponse;
 use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::{Arc, Once},
 };
 use tokio::net::TcpListener;
@@ -13,22 +12,31 @@ use tokio_rustls::rustls::{
 };
 use tracing_subscriber::{EnvFilter, fmt};
 
+use crate::MEASUREMENT_HEADER;
+
 static INIT: Once = Once::new();
 
-use crate::{
-    MEASUREMENT_HEADER,
-    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
-};
+pub fn install_crypto_provider() {
+    static CRYPTO_PROVIDER_INIT: Once = Once::new();
 
-/// Helper to generate a self-signed certificate for testing
-pub fn generate_certificate_chain(
-    ip: IpAddr,
+    CRYPTO_PROVIDER_INIT.call_once(|| {
+        let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
+
+/// Helper to generate a self-signed certificate for testing with a DNS subject name
+pub fn generate_certificate_chain_for_host(
+    host: &str,
 ) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
-    let mut params = rcgen::CertificateParams::new(vec![]).unwrap();
-    params.subject_alt_names.push(rcgen::SanType::IpAddress(ip));
+    install_crypto_provider();
+
+    let mut params = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap();
+    params
+        .subject_alt_names
+        .push(rcgen::SanType::DnsName(host.try_into().unwrap()));
     params
         .distinguished_name
-        .push(rcgen::DnType::CommonName, ip.to_string());
+        .push(rcgen::DnType::CommonName, host);
 
     let keypair = rcgen::KeyPair::generate().unwrap();
     let cert = params.self_signed(&keypair).unwrap();
@@ -46,6 +54,8 @@ pub fn generate_tls_config(
     certificate_chain: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
 ) -> (ServerConfig, ClientConfig) {
+    install_crypto_provider();
+
     let server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certificate_chain.clone(), key)
@@ -68,6 +78,8 @@ pub fn generate_tls_config_with_client_auth(
     bob_certificate_chain: Vec<CertificateDer<'static>>,
     bob_key: PrivateKeyDer<'static>,
 ) -> ((ServerConfig, ClientConfig), (ServerConfig, ClientConfig)) {
+    install_crypto_provider();
+
     let (alice_client_verifier, alice_root_store) =
         client_verifier_from_remote_cert(bob_certificate_chain[0].clone());
 
@@ -119,6 +131,8 @@ fn client_verifier_from_remote_cert(
 /// Simple http server used in tests which returns in the response the measurement header from the
 /// request
 pub async fn example_http_service() -> SocketAddr {
+    install_crypto_provider();
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -139,18 +153,9 @@ async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
         .to_string()
 }
 
-/// All-zero measurment values used in some tests
-pub fn mock_dcap_measurements() -> MultiMeasurements {
-    MultiMeasurements::Dcap(HashMap::from([
-        (DcapMeasurementRegister::MRTD, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR0, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR1, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR2, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR3, [0u8; 48]),
-    ]))
-}
-
 pub fn init_tracing() {
+    install_crypto_provider();
+
     INIT.call_once(|| {
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
