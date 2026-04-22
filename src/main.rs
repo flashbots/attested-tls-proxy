@@ -9,8 +9,9 @@ use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
     AttestationGenerator, OuterTlsConfig, OuterTlsMode, ProxyClient, ProxyServer, TlsCertAndKey,
-    attested_get::attested_get, file_server::attested_file_server, get_inner_tls_cert,
-    health_check, normalize_pem::normalize_private_key_pem_to_pkcs8,
+    attested_get::attested_get,
+    file_server::{AttestedFileServerConfig, attested_file_server},
+    get_inner_tls_cert, health_check, normalize_pem::normalize_private_key_pem_to_pkcs8,
 };
 
 const GIT_REV: &str = match option_env!("GIT_REV") {
@@ -413,16 +414,16 @@ async fn main() -> anyhow::Result<()> {
             let attestation_generator =
                 AttestationGenerator::new(server_attestation_type, dev_dummy_dcap)?;
 
-            attested_file_server(
+            attested_file_server(AttestedFileServerConfig {
                 path_to_serve,
-                tls_cert_and_chain,
+                outer_cert_and_key: tls_cert_and_chain,
                 outer_listen_addr,
                 inner_listen_addr,
                 inner_certificate_name,
                 attestation_generator,
                 attestation_verifier,
-                false,
-            )
+                client_auth: false,
+            })
             .await?;
         }
         CliCommand::AttestedGet {
