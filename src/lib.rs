@@ -52,6 +52,9 @@ static X_REAL_IP: HeaderName = HeaderName::from_static("x-real-ip");
 /// The longest time in seconds to wait between reconnection attempts
 const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 
+/// Validity period for generated attested TLS certificates
+const ATTESTED_CERTIFICATE_VALIDITY_SECS: u64 = 30 * 60;
+
 const KEEP_ALIVE_INTERVAL: u64 = 30;
 const KEEP_ALIVE_TIMEOUT: u64 = 10;
 type RequestWithResponseSender = (
@@ -1224,7 +1227,7 @@ async fn build_attested_cert_resolver(
         None,
         certificate_name,
         vec![],
-        Duration::from_secs(30 * 60),
+        Duration::from_secs(ATTESTED_CERTIFICATE_VALIDITY_SECS),
     )
     .await?)
 }
