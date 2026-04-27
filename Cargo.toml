@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "attestation-provider-server", "attested-tls"]
+members = [".", "attestation-provider-server"]
 
 [package]
 name = "attested-tls-proxy"
