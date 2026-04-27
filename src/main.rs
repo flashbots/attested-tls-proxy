@@ -1,24 +1,17 @@
 use anyhow::{anyhow, ensure};
-use attested_tls::attestation::measurements::MultiMeasurements;
+use attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy};
 use clap::{Parser, Subcommand};
-use std::{
-    fs::File,
-    net::{IpAddr, SocketAddr},
-    path::PathBuf,
-};
+use pccs::Pccs;
+use std::{fs::File, net::SocketAddr, path::PathBuf};
 use tokio::io::AsyncWriteExt;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
-    AttestationGenerator, ProxyClient, ProxyServer,
+    AttestationGenerator, OuterTlsConfig, OuterTlsMode, ProxyClient, ProxyServer, TlsCertAndKey,
     attested_get::attested_get,
-    attested_tls::{
-        TlsCertAndKey,
-        attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy},
-    },
-    file_server::attested_file_server,
-    get_tls_cert, health_check,
+    file_server::{AttestedFileServerConfig, attested_file_server},
+    get_inner_tls_cert, health_check,
     normalize_pem::normalize_private_key_pem_to_pkcs8,
 };
 
@@ -38,7 +31,7 @@ struct Cli {
     /// If no measurements file is specified, a single attestion type to allow
     #[arg(long, global = true)]
     allowed_remote_attestation_type: Option<String>,
-    /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
+    /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to an internal PCCS.
     #[arg(long, global = true)]
     pccs_url: Option<String>,
     /// Log debug messages
@@ -62,16 +55,19 @@ enum CliCommand {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
+        /// Connect directly to the server's inner attested TLS listener instead of nested TLS
+        #[arg(long)]
+        inner_session_only: bool,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
         client_attestation_type: Option<String>,
-        /// The path to a PEM encoded private key for client authentication
+        /// The path to a PEM encoded private key for client authentication in nested-TLS mode
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: Option<PathBuf>,
-        /// The path to a PEM encoded certificate chain for client authentication
+        /// The path to a PEM encoded certificate chain for client authentication in nested-TLS mode
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: Option<PathBuf>,
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
@@ -84,25 +80,28 @@ enum CliCommand {
         // Address to listen on for health checks
         #[arg(long)]
         listen_addr_healthcheck: Option<SocketAddr>,
-        /// Enables verification of self-signed TLS certificates
-        #[arg(long)]
-        allow_self_signed: bool,
     },
     /// Run a proxy server
     Server {
-        /// Socket address to listen on
-        #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
-        listen_addr: SocketAddr,
+        /// Socket address to listen on for the outer nested-TLS listener, if enabled
+        #[arg(long)]
+        outer_listen_addr: Option<SocketAddr>,
+        /// Socket address to listen on for the inner-only attested TLS listener
+        #[arg(long)]
+        inner_listen_addr: Option<SocketAddr>,
+        /// DNS name to embed into the inner attested certificate when no outer listener is used
+        #[arg(long)]
+        inner_certificate_name: Option<String>,
         /// The hostname:port or ip:port of the target service to forward traffic to
         target_addr: String,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
-        /// If other than None, a TLS key and certicate must also be given
+        /// This configures the inner attested TLS listener and does not require outer TLS certs.
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
         server_attestation_type: Option<String>,
-        /// The path to a PEM encoded private key
+        /// The path to a PEM encoded private key for the optional outer nested-TLS listener
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
         tls_private_key_path: Option<PathBuf>,
-        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
+        /// PEM certificate chain for the optional outer nested-TLS listener
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
         tls_certificate_path: Option<PathBuf>,
         /// Whether to use client authentication. If the client is running in a CVM this must be
@@ -124,9 +123,6 @@ enum CliCommand {
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
-        /// Enables verification of self-signed TLS certificates
-        #[arg(long)]
-        allow_self_signed: bool,
         /// Filename to write measurements as JSON to
         #[arg(long)]
         out_measurements: Option<PathBuf>,
@@ -135,19 +131,25 @@ enum CliCommand {
     AttestedFileServer {
         /// Filesystem path to statically serve
         path_to_serve: PathBuf,
-        /// Socket address to listen on
-        #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
-        listen_addr: SocketAddr,
+        /// Socket address to listen on for the outer nested-TLS listener, if enabled
+        #[arg(long)]
+        outer_listen_addr: Option<SocketAddr>,
+        /// Socket address to listen on for the inner-only attested TLS listener
+        #[arg(long)]
+        inner_listen_addr: Option<SocketAddr>,
+        /// DNS name to embed into the inner attested certificate when no outer listener is used
+        #[arg(long)]
+        inner_certificate_name: Option<String>,
         /// Type of attestation to present (dafaults to none)
-        /// If other than None, a TLS key and certicate must also be given
+        /// This configures the inner attested TLS listener and does not require outer TLS certs.
         #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
         server_attestation_type: Option<String>,
-        /// The path to a PEM encoded private key
+        /// The path to a PEM encoded private key for the optional outer nested-TLS listener
         #[arg(long, env = "TLS_PRIVATE_KEY_PATH")]
-        tls_private_key_path: PathBuf,
-        /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
+        tls_private_key_path: Option<PathBuf>,
+        /// PEM certificate chain for the optional outer nested-TLS listener
         #[arg(long, env = "TLS_CERTIFICATE_PATH")]
-        tls_certificate_path: PathBuf,
+        tls_certificate_path: Option<PathBuf>,
         /// URL of the remote dummy attestation service. Only use with --server-attestation-type
         /// dummy
         #[arg(long)]
@@ -164,14 +166,13 @@ enum CliCommand {
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
-        /// Enables verification of self-signed TLS certificates
-        #[arg(long)]
-        allow_self_signed: bool,
     },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let cli = Cli::parse();
 
     ensure!(
@@ -227,13 +228,15 @@ async fn main() -> anyhow::Result<()> {
     let attestation_verifier = AttestationVerifier {
         measurement_policy,
         pccs_url: cli.pccs_url,
-        log_dcap_quote: cli.log_dcap_quote,
+        dump_dcap_quotes: cli.log_dcap_quote,
         override_azure_outdated_tcb: cli.override_azure_outdated_tcb,
+        internal_pccs: Some(Pccs::new(None)),
     };
 
     match cli.command {
         CliCommand::Client {
             listen_addr,
+            inner_session_only,
             target_addr,
             client_attestation_type,
             tls_private_key_path,
@@ -241,7 +244,6 @@ async fn main() -> anyhow::Result<()> {
             tls_ca_certificate,
             dev_dummy_dcap,
             listen_addr_healthcheck,
-            allow_self_signed,
         } => {
             let target_addr = target_addr
                 .strip_prefix("https://")
@@ -251,6 +253,13 @@ async fn main() -> anyhow::Result<()> {
             if let Some(listen_addr_healthcheck) = listen_addr_healthcheck {
                 health_check::server(listen_addr_healthcheck).await?;
             }
+
+            validate_client_args(
+                inner_session_only,
+                tls_private_key_path.as_ref(),
+                tls_certificate_path.as_ref(),
+                tls_ca_certificate.as_ref(),
+            )?;
 
             let tls_cert_and_chain = if let Some(private_key) = tls_private_key_path {
                 Some(load_tls_cert_and_key(
@@ -280,16 +289,13 @@ async fn main() -> anyhow::Result<()> {
                 AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
                     .await?;
 
-            let client = if allow_self_signed {
-                let client_tls_config =
-                    attested_tls_proxy::self_signed::client_tls_config_allow_self_signed()?;
-                ProxyClient::new_with_tls_config(
-                    client_tls_config,
+            let client = if inner_session_only {
+                ProxyClient::new_inner_only(
+                    tls_cert_and_chain,
                     listen_addr,
                     target_addr,
                     client_attestation_generator,
                     attestation_verifier,
-                    None,
                 )
                 .await?
             } else {
@@ -311,7 +317,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         CliCommand::Server {
-            listen_addr,
+            outer_listen_addr,
+            inner_listen_addr,
+            inner_certificate_name,
             target_addr,
             tls_private_key_path,
             tls_certificate_path,
@@ -324,10 +332,12 @@ async fn main() -> anyhow::Result<()> {
                 health_check::server(listen_addr_healthcheck).await?;
             }
 
-            let tls_cert_and_chain = load_tls_cert_and_key_server(
-                tls_certificate_path,
-                tls_private_key_path,
-                listen_addr.ip(),
+            let tls_cert_and_chain =
+                load_tls_cert_and_key_server(tls_certificate_path, tls_private_key_path)?;
+            validate_listener_args(
+                inner_listen_addr,
+                outer_listen_addr,
+                tls_cert_and_chain.is_some(),
             )?;
 
             let local_attestation_generator =
@@ -335,8 +345,14 @@ async fn main() -> anyhow::Result<()> {
                     .await?;
 
             let server = ProxyServer::new(
-                tls_cert_and_chain,
-                listen_addr,
+                tls_cert_and_chain
+                    .zip(outer_listen_addr)
+                    .map(|(cert_and_key, listen_addr)| OuterTlsConfig {
+                        listen_addr,
+                        tls: OuterTlsMode::CertAndKey(cert_and_key),
+                    }),
+                inner_listen_addr,
+                inner_certificate_name,
                 target_addr,
                 local_attestation_generator,
                 attestation_verifier,
@@ -353,8 +369,7 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::GetTlsCert {
             server,
             tls_ca_certificate,
-            allow_self_signed,
-            out_measurements,
+            out_measurements: _, // TODO
         } => {
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
@@ -365,36 +380,38 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 None => None,
             };
-            let (cert_chain, measurements) = get_tls_cert(
-                server,
-                attestation_verifier,
-                remote_tls_cert,
-                allow_self_signed,
-            )
-            .await?;
+            let cert_chain =
+                get_inner_tls_cert(server, attestation_verifier, remote_tls_cert).await?;
 
-            // If the user chose to write measurements to a file as JSON
-            if let Some(path_to_write_measurements) = out_measurements {
-                std::fs::write(
-                    path_to_write_measurements,
-                    measurements
-                        .unwrap_or(MultiMeasurements::NoAttestation)
-                        .to_header_format()?
-                        .as_bytes(),
-                )?;
-            }
+            // // If the user chose to write measurements to a file as JSON
+            // if let Some(path_to_write_measurements) = out_measurements {
+            //     std::fs::write(
+            //         path_to_write_measurements,
+            //         measurements
+            //             .unwrap_or(MultiMeasurements::NoAttestation)
+            //             .to_header_format()?
+            //             .as_bytes(),
+            //     )?;
+            // }
             println!("{}", certs_to_pem_string(&cert_chain)?);
         }
         CliCommand::AttestedFileServer {
             path_to_serve,
-            listen_addr,
+            outer_listen_addr,
+            inner_listen_addr,
+            inner_certificate_name,
             server_attestation_type,
             tls_private_key_path,
             tls_certificate_path,
             dev_dummy_dcap,
         } => {
             let tls_cert_and_chain =
-                load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
+                load_tls_cert_and_key_server(tls_certificate_path, tls_private_key_path)?;
+            validate_listener_args(
+                inner_listen_addr,
+                outer_listen_addr,
+                tls_cert_and_chain.is_some(),
+            )?;
 
             let server_attestation_type: AttestationType = serde_json::from_value(
                 serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
@@ -403,21 +420,22 @@ async fn main() -> anyhow::Result<()> {
             let attestation_generator =
                 AttestationGenerator::new(server_attestation_type, dev_dummy_dcap)?;
 
-            attested_file_server(
+            attested_file_server(AttestedFileServerConfig {
                 path_to_serve,
-                tls_cert_and_chain,
-                listen_addr,
+                outer_cert_and_key: tls_cert_and_chain,
+                outer_listen_addr,
+                inner_listen_addr,
+                inner_certificate_name,
                 attestation_generator,
                 attestation_verifier,
-                false,
-            )
+                client_auth: false,
+            })
             .await?;
         }
         CliCommand::AttestedGet {
             target_addr,
             url_path,
             tls_ca_certificate,
-            allow_self_signed,
         } => {
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
@@ -434,7 +452,6 @@ async fn main() -> anyhow::Result<()> {
                 &url_path.unwrap_or_default(),
                 attestation_verifier,
                 remote_tls_cert,
-                allow_self_signed,
             )
             .await?;
 
@@ -455,22 +472,62 @@ async fn main() -> anyhow::Result<()> {
 fn load_tls_cert_and_key_server(
     cert_chain: Option<PathBuf>,
     private_key: Option<PathBuf>,
-    ip: IpAddr,
-) -> anyhow::Result<TlsCertAndKey> {
-    if let Some(private_key) = private_key {
-        load_tls_cert_and_key(
-            cert_chain.ok_or(anyhow!("Private key given but no certificate chain"))?,
-            private_key,
-        )
-    } else {
-        if cert_chain.is_some() {
-            return Err(anyhow!("Certificate chain provided but no private key"));
+) -> anyhow::Result<Option<TlsCertAndKey>> {
+    match (cert_chain, private_key) {
+        (Some(cert_chain), Some(private_key)) => {
+            Ok(Some(load_tls_cert_and_key(cert_chain, private_key)?))
         }
-        tracing::warn!("No TLS ceritifcate provided - generating self-signed");
-        Ok(attested_tls_proxy::self_signed::generate_self_signed_cert(
-            ip,
-        )?)
+        (Some(_), None) => Err(anyhow!("Certificate chain provided but no private key")),
+        (None, Some(_)) => Err(anyhow!("Private key given but no certificate chain")),
+        (None, None) => Ok(None),
     }
+}
+
+fn validate_listener_args(
+    inner_listen_addr: Option<SocketAddr>,
+    outer_listen_addr: Option<SocketAddr>,
+    has_outer_tls: bool,
+) -> anyhow::Result<()> {
+    if inner_listen_addr.is_none() && outer_listen_addr.is_none() {
+        return Err(anyhow!(
+            "At least one of --inner-listen-addr or --outer-listen-addr must be provided"
+        ));
+    }
+
+    if has_outer_tls && outer_listen_addr.is_none() {
+        return Err(anyhow!(
+            "--outer-listen-addr is required when TLS certificate and key are provided"
+        ));
+    }
+
+    if !has_outer_tls && outer_listen_addr.is_some() {
+        return Err(anyhow!(
+            "--outer-listen-addr requires TLS certificate and key"
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_client_args(
+    inner_session_only: bool,
+    tls_private_key_path: Option<&PathBuf>,
+    tls_certificate_path: Option<&PathBuf>,
+    tls_ca_certificate: Option<&PathBuf>,
+) -> anyhow::Result<()> {
+    if inner_session_only && tls_ca_certificate.is_some() {
+        return Err(anyhow!(
+            "--tls-ca-certificate cannot be used with --inner-session-only"
+        ));
+    }
+
+    if inner_session_only && (tls_private_key_path.is_some() || tls_certificate_path.is_some()) {
+        return Err(anyhow!(
+            "--tls-private-key-path and --tls-certificate-path are not supported with --inner-session-only"
+        ));
+    }
+
+    Ok(())
 }
 
 /// Load TLS details from storage
@@ -505,4 +562,28 @@ fn certs_to_pem_string(certs: &[CertificateDer<'_>]) -> Result<String, pem_rfc74
         out.push('\n');
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_rejects_tls_ca_certificate_in_inner_only_mode() {
+        let cert_path = PathBuf::from("ca.pem");
+        let err = validate_client_args(true, None, None, Some(&cert_path))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--tls-ca-certificate"));
+    }
+
+    #[test]
+    fn client_rejects_tls_client_auth_in_inner_only_mode() {
+        let cert_path = PathBuf::from("client.crt");
+        let key_path = PathBuf::from("client.key");
+        let err = validate_client_args(true, Some(&key_path), Some(&cert_path), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--tls-private-key-path"));
+    }
 }

@@ -1,120 +1,124 @@
-
 # `attested-tls-proxy`
 
 This is a reverse HTTP proxy allowing a normal HTTP client to communicate with a normal HTTP server over a remote-attested TLS channel, by tunneling requests through a proxy-client and proxy-server which handle attestation generation and verification.
 
-This is designed to be an alternative to [`cvm-reverse-proxy`](https://github.com/flashbots/cvm-reverse-proxy). Unlike `cvm-reverse-proxy` this uses post-handshake remote-attested TLS, meaning regular CA-signed TLS certificates can be used.
+This is designed to be an alternative to [`cvm-reverse-proxy`](https://github.com/flashbots/cvm-reverse-proxy). Unlike `cvm-reverse-proxy`, this can use a regular PKI certificate on an outer TLS session while carrying attestation on an inner attested TLS session.
 
-Details of the remote-attested TLS protocol are in [attested-tls/README.md](attested-tls/README.md).  This is provided as a separate crate for other uses than HTTP proxying.
+The protocol primitives now live in the external [`flashbots/attested-tls`](https://github.com/flashbots/attested-tls) repository:
 
-The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for all requests from that proxy-client instance.
+- [`attested-tls`](https://github.com/flashbots/attested-tls/tree/main/crates/attested-tls) for attested TLS certificate handling
+- [`nested-tls`](https://github.com/flashbots/attested-tls/tree/main/crates/nested-tls) for the optional outer TLS session
+- [`attestation`](https://github.com/flashbots/attested-tls/tree/main/crates/attestation) for attestation generation, verification, and measurement policies
 
-It has three subcommands:
-- `attested-tls-proxy server` - run a proxy server, which accepts TLS connections from a proxy client, sends an attestation and then forwards traffic to a target CVM service.
-- `attested-tls-proxy client` - run a proxy client, which accepts connections from elsewhere, connects to and verifies the attestation from the proxy server, and then forwards traffic to it over TLS.
-- `attested-tls-proxy get-tls-cert` - connects to a proxy-server, verify the attestation, and if successful write the server's PEM-encoded TLS certificate chain to standard out. This can be used to make subsequent connections to services using this certificate over regular TLS.
+It has four main subcommands:
 
-### How it works
+- `attested-tls-proxy server` - run a proxy server that exposes an inner attested TLS listener and optionally an outer nested-TLS listener, then forwards traffic to a target service.
+- `attested-tls-proxy client` - run a proxy client that accepts local HTTP connections and forwards them to the proxy server over nested TLS or directly to the inner attested TLS listener.
+- `attested-tls-proxy get-tls-cert` - connect to a proxy server, verify the remote attestation, and write the inner PEM-encoded TLS certificate chain to standard output.
+- `attested-tls-proxy attested-get` - perform a single GET request through the attested channel and print the response body.
+
+## How It Works
 
 This works as follows:
-1. The source HTTP client (eg: curl or a web browser) makes an HTTP request to a proxy-client instance running locally.
-2. The proxy-client forwards the request to a proxy-server instance over a remote-attested TLS channel.
-3. The proxy-server forwards the request to the target service over regular HTTP.
-4. The response from the target service is sent back to the source client, via the proxy-server and proxy-client.
 
-One or both of the proxy-client and proxy-server may be running in a confidential environment and provide attestations which will be verified by the remote party. Verification is configured by a measurements file, and attestation generation is configured by specifying an attestation type when starting the proxy client or server.
+1. A source HTTP client such as `curl` or a web browser makes an HTTP request to a local proxy-client instance.
+2. The proxy-client connects to the proxy-server over either:
+   - nested TLS: outer PKI TLS plus inner attested TLS, or
+   - inner-only mode: direct connection to the inner attested TLS listener with `--inner-session-only`.
+3. The proxy server verifies the client attestation when configured to require it, extracts remote attestation from the peer certificate on the inner session, and forwards the HTTP request to the target service.
+4. The target service response is returned through the proxy server and proxy client to the source client.
 
-### Measurements File
+One or both of the proxy client and proxy server may run in a confidential environment and provide attestations which are verified by the remote party. Verification is configured by a measurements file or by allowing a single remote attestation type.
 
-Accepted measurements for the remote party can be specified in a JSON file containing an array of objects, each of which specifies an accepted attestation type and set of measurements.
+## Measurements File
+
+Accepted measurements for the remote party can be specified in a JSON file containing an array of policy entries. Each entry specifies an accepted attestation type and a set of measurements.
 
 This aims to match the formatting used by `cvm-reverse-proxy`.
 
-Details and examples of the measurements file format are [in the attested-tls documentation](attested-tls/README.md#measurements-file).
+The canonical format is documented in the upstream [`attestation` crate README](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#measurements-file). That document is the source of truth for:
 
-If a measurements file is not provided, a single allowed attestation type **must** be specified using the `--allowed-remote-attestation-type` option. This may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
+- current attestation type names
+- preferred measurement field names
+- legacy field names still accepted for compatibility
+- `expected_any` versus legacy `expected`
 
-### Measurement Headers
+If a measurements file is not provided, a single allowed attestation type **must** be specified using `--allowed-remote-attestation-type`. This may be `none` when the remote party is not running in a CVM, but it must be stated explicitly.
 
-When attestation is validated successfully, the following headers are injected into the HTTP request / response making them available to the source client and/or target service.
+## Measurement Headers
+
+When attestation is validated successfully, the following headers are injected into the HTTP request or response, making them available to the source client and target service.
 
 These aim to match the header formatting used by `cvm-reverse-proxy`.
 
 Header name: `X-Flashbots-Measurement`
 
 Header value:
+
 ```json
 {
   "0": "48 byte MRTD value encoded as hex",
   "1": "48 byte RTMR0 value encoded as hex",
   "2": "48 byte RTMR1 value encoded as hex",
   "3": "48 byte RTMR2 value encoded as hex",
-  "4": "48 byte RTMR3 value encoded as hex",
+  "4": "48 byte RTMR3 value encoded as hex"
 }
 ```
 
 Header name: `X-Flashbots-Attestation-Type`
 
-Header value: an attestation type given as a string as described below.
+Header value: an attestation type string such as `none`, `gcp-tdx`, `azure-tdx`, `qemu-tdx`, or `dcap-tdx`.
 
-### Attestation Types
+## Connection Model
 
-These are the attestation type names used in the HTTP headers, and the measurements file, and when specifying a local attestation type with the `--client-attestation-type` or `--server-attestation-type` command line options.
+Proxy-client to proxy-server connections use TLS 1.3. The server can expose two different listeners:
 
-- `auto` - detect attestation type (used only when specifying the local attestation type as a command-line argument)
-- `none` - No attestation provided
-- `gcp-tdx` - DCAP TDX on Google Cloud Platform
-- `azure-tdx` - TDX on Azure, with vTPM attestation 
-- `qemu-tdx` - TDX on Qemu (no cloud platform)
-- `dcap-tdx` - DCAP TDX (platform not specified)
+- `--inner-listen-addr` exposes the inner attested TLS listener.
+- `--outer-listen-addr` exposes an optional outer nested-TLS listener that wraps the inner session with a regular PKI TLS session.
 
-## Protocol Specification
+At least one of these listeners must be configured. If TLS certificate and key files are provided, they apply only to the outer listener, and `--outer-listen-addr` is required.
 
-A proxy-client client will immediately attempt to connect to the given proxy-server.
+When the server runs without an outer listener, the inner attested certificate still needs a DNS identity. In that case, use `--inner-certificate-name` to control the certificate name embedded into the inner attested certificate. If an outer certificate is present, the server derives that identity from the outer certificate instead.
 
-Proxy-client to proxy-server connections use TLS 1.3.
+On the client side:
 
-The protocol name `flashbots-ratls/1` must be given in the TLS configuration for ALPN protocol negotiation during the TLS handshake. Future versions of this protocol will use incrementing version numbers, eg: `flashbots-ratls/2`.
+- default mode connects to the server's outer listener and verifies the outer PKI certificate before entering the inner attested TLS session
+- `--inner-session-only` connects directly to the inner attested TLS listener
 
-Immediately after the TLS handshake, an attestation exchange is made. Details of how this works are in the [attested-tls protocol spepcification](attested-tls/README.md#protocol-specification).
+In both modes, attestation is taken from the peer certificate on the inner TLS session, then enforced against the configured measurement policy.
 
-Following a successful attestation exchange, the client can make HTTP requests, and the server will forward them to the target service.
+## Dependencies and Feature Flags
 
-As described above, the server will inject measurement data into the request headers before forwarding them to the target service, and the client will inject measurement data into the response headers before forwarding them to the source client.
+The `azure` feature for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix by `tpm2-tss`. This dependency is currently not packaged for MacOS, so it is not currently possible to compile or run with the `azure` feature on MacOS.
 
-<!-- TODO describe HTTP version negotiation details -->
+This feature is disabled by default. Without it, verification of Azure attestations is not possible and Azure attestations will be rejected with an error.
 
-## Dependencies and feature flags
+## Trying It Out Locally
 
-The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix `tpm2-tss`. This dependency is currently not packaged for MacOS, meaning currently it is not possible to compile or run with the `azure` feature on MacOS. 
+This example uses nested TLS on the outer session and `none` for attestation on both sides.
 
-This feature is disabled by default. Note that without this feature, verification of azure attestations is not possible and azure attestations will be rejected with an error.
-
-## Trying it out locally (without CVM attestation)
-
-This might help give an understanding of how it works.
-
-1. Run the helper script to generate a mock certifcate authority and a TLS certificate for localhost signed by it.
+1. Generate a local certificate authority and a TLS certificate for `localhost`.
 
 This requires `openssl` to be installed.
 
-```
+```bash
 ./scripts/generate-cert.sh localhost 127.0.0.1
 ```
 
-2. Start a http server to try this out with, on 127.0.01:8000
+2. Start a local HTTP server on `127.0.0.1:8000`.
 
 This requires `python3` to be installed.
 
-```
+```bash
 python3 -m http.server 8000
 ```
 
-3. Start a proxy-server:
+3. Start the proxy server with both an inner and outer listener.
 
-```
+```bash
 cargo run -- server \
-  --listen-addr 127.0.0.1:7000 \
+  --outer-listen-addr 127.0.0.1:7000 \
+  --inner-listen-addr 127.0.0.1:7001 \
   --server-attestation-type none \
   --allowed-remote-attestation-type none \
   --tls-private-key-path server.key \
@@ -122,12 +126,11 @@ cargo run -- server \
   127.0.0.1:8000
 ```
 
-The final positional argument is the target address - in this case the python server we started in step 3.
-Note that you must specify that you accept 'none' as the remote attestation type.
+The final positional argument is the target address, in this case the Python server from step 2.
 
-4. Start a proxy-client:
+4. Start a proxy client that connects through the outer nested-TLS listener.
 
-```
+```bash
 cargo run -- client \
   --listen-addr 127.0.0.1:6000 \
   --client-attestation-type none \
@@ -136,37 +139,60 @@ cargo run -- client \
   localhost:7000
 ```
 
-The final positional argument is the hostname and port of the proxy-server.
-Note that we specified a CA root of trust. If you use a standard certificate authority you do not need this argument.
+The final positional argument is the hostname and port of the proxy server's outer listener. `--tls-ca-certificate` is only used in nested-TLS mode.
 
-5. Make a HTTP request to the proxy-client:
+5. Make an HTTP request to the proxy client.
 
+```bash
+curl http://127.0.0.1:6000/README.md
 ```
-curl 127.0.0.1:6000/README.md
-```
 
-Assuming you started the python http server in the directory of this repository, this should print the contents of this README.
+Assuming you started the Python HTTP server in the repository root, this should print this README.
 
-Since we just wanted to make a single GET request here, we can make this process simpler but using the `attested-get` command:
+For a single request, `attested-get` is simpler:
 
-```
+```bash
 cargo run -- attested-get \
-  --url-path README.md
+  --url-path README.md \
   --tls-ca-certificate ca.crt \
   --allowed-remote-attestation-type none \
   localhost:7000
 ```
 
-This should also print the README file. This should work even if the proxy-client from step 5 is not running.
+This should also print the README file.
 
-## CLI differences from `cvm-reverse-proxy`
+### Inner-Only Example
 
-This aims to have a similar command line interface to `cvm-reverse-proxy` but there are some differences:
+If you want to connect directly to the inner attested TLS listener instead of nested TLS:
+
+```bash
+cargo run -- server \
+  --inner-listen-addr 127.0.0.1:7001 \
+  --inner-certificate-name localhost \
+  --server-attestation-type none \
+  --allowed-remote-attestation-type none \
+  127.0.0.1:8000
+```
+
+```bash
+cargo run -- client \
+  --listen-addr 127.0.0.1:6000 \
+  --inner-session-only \
+  --client-attestation-type none \
+  --allowed-remote-attestation-type none \
+  localhost:7001
+```
+
+In inner-only mode the client does not accept `--tls-ca-certificate`, `--tls-private-key-path`, or `--tls-certificate-path`.
+
+## CLI Differences from `cvm-reverse-proxy`
+
+This aims to have a similar command line interface to `cvm-reverse-proxy`, but there are some differences:
 
 - The measurements file path is specified with `--measurements-file` rather than `--server-measurements` or `--client-measurements`.
 - If no measurements file is specified, `--allowed-remote-attestation-type` must be given.
-- `--log-dcap-quote` logs all attestation data (not only DCAP), but [currently] only remote attestation data, not locally-generated data.
-
+- The server splits listener configuration into `--inner-listen-addr` and optional `--outer-listen-addr`.
+- `--log-dcap-quote` logs remote DCAP quotes into `quotes/`.
 
 ## Docker
 
@@ -175,60 +201,64 @@ This aims to have a similar command line interface to `cvm-reverse-proxy` but th
 ```bash
 docker build -t attested-tls-proxy .
 
-# With custom features (e.g., without azure/TPM):
+# With custom features, for example without Azure/TPM support:
 docker build --build-arg FEATURES="" -t attested-tls-proxy .
 ```
 
-**Note for Apple Silicon (M1-M4) Mac users:** When building on ARM Macs, the Docker build will automatically compile without Azure/TPM features (`--no-default-features`) because the TPM libraries cannot be cross-compiled. For production builds with full Azure support, use an x86_64 system.
+**Note for Apple Silicon (M1-M4) Mac users:** When building on ARM Macs, the Docker build automatically compiles without Azure/TPM features (`--no-default-features`) because the TPM libraries cannot be cross-compiled. For production builds with full Azure support, use an x86_64 system.
 
 ### Running
 
-The same image supports all subcommands (server, client, get-tls-cert, etc.):
+The same image supports all subcommands:
 
 ```bash
 # Show help
 docker run --rm attested-tls-proxy --help
 
-# Run as server
+# Run as server in nested-TLS mode
 docker run --rm attested-tls-proxy server \
-  --listen-addr 0.0.0.0:443 \
-  --target-addr 127.0.0.1:8080 \
+  --outer-listen-addr 0.0.0.0:443 \
+  --inner-listen-addr 0.0.0.0:7443 \
   --tls-private-key-path /path/to/key.pem \
   --tls-certificate-path /path/to/cert.pem \
-  --allowed-remote-attestation-type none
+  --allowed-remote-attestation-type none \
+  127.0.0.1:8080
 
 # Run as client
 docker run --rm attested-tls-proxy client \
   --listen-addr 0.0.0.0:8080 \
-  target-server:443 \
-  --allowed-remote-attestation-type none
+  --allowed-remote-attestation-type none \
+  target-server:443
 ```
 
 ### Testing with Docker Compose
 
-A `docker-compose.yml` is provided to test the full proxy chain:
+A `docker-compose.yml` is provided to test the full proxy chain in nested-TLS mode.
 
-1. **Generate test certificates:**
-   ```bash
-   mkdir -p certs && cd certs
-   ../scripts/generate-cert.sh proxy-server 127.0.0.1
-   # Convert key to PKCS#8 format (required by the proxy)
-   openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in server.key -out server.pkcs8.key
-   mv server.pkcs8.key server.key
-   ```
+1. Generate test certificates:
 
-2. **Start all services:**
-   ```bash
-   docker compose up --build
-   ```
+```bash
+mkdir -p certs && cd certs
+../scripts/generate-cert.sh proxy-server 127.0.0.1
+# Convert key to PKCS#8 format, required by the proxy
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in server.key -out server.pkcs8.key
+mv server.pkcs8.key server.key
+```
 
-3. **Test the proxy:**
-   ```bash
-   # Test via proxy-client (HTTP)
-   curl http://localhost:8080
-   # Should return the nginx welcome page
+2. Start all services:
 
-   # Test TLS directly to proxy-server
-   openssl s_client -connect localhost:8443 -CAfile certs/ca.crt -servername proxy-server
-   # Should show "Verify return code: 0 (ok)"
-   ```
+```bash
+docker compose up --build
+```
+
+3. Test the proxy:
+
+```bash
+# HTTP through proxy-client
+curl http://localhost:8080
+
+# Outer TLS directly to proxy-server
+openssl s_client -connect localhost:8443 -CAfile certs/ca.crt -servername proxy-server
+```
+
+The `openssl s_client` command should show `Verify return code: 0 (ok)`.

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "attestation-provider-server", "attested-tls"]
+members = [".", "attestation-provider-server"]
 
 [package]
 name = "attested-tls-proxy"
@@ -11,9 +11,12 @@ repository = "https://github.com/flashbots/attested-tls-proxy"
 keywords = ["attested-TLS", "CVM", "TDX"]
 
 [dependencies]
-attested-tls = { path = "attested-tls", default-features = false }
-tokio = { version = "1.48.0", features = ["full"] }
-tokio-rustls = { version = "0.26.4", default-features = false }
+attested-tls = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
+nested-tls = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
+attestation = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
+pccs = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
+tokio = { version = "1.50.0", features = ["full"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws_lc_rs"] }
 x509-parser = { version = "0.18.0", features = ["verify"] }
 thiserror = "2.0.17"
 clap = { version = "4.5.51", features = ["derive", "env"] }
@@ -45,14 +48,18 @@ pin-project-lite = "0.2.16"
 [dev-dependencies]
 tempfile = "3.23.0"
 tdx-quote = { version = "0.0.5", features = ["mock"] }
-attested-tls = { path = "attested-tls", features = ["test-helpers", "mock"] }
+attestation = { git = "https://github.com/flashbots/attested-tls", branch = "main", features = ["mock"] }
+tokio = { version = "1.48.0", features = ["full"] }
 jsonrpsee = { version = "0.26.0", features = ["server"] }
 
 [features]
 default = []
 
 # Adds support for Microsoft Azure attestation generation and verification
-azure = ["attested-tls/azure"]
+azure = ["attestation/azure"]
+
+# Adds support for mock attestations for testing. Do not enable in production.
+mock = ["attestation/mock"]
 
 [package.metadata.deb]
 maintainer = "Flashbots Team <devops+ci@flashbots.net>"
