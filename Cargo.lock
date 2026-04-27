@@ -193,7 +193,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#9fb3002d82918b85f780f37b5545c4e112e0e772"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#be7c094f080a1bc36e3daed9e1bbb7278d1cf7c1"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
@@ -242,7 +242,7 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#9fb3002d82918b85f780f37b5545c4e112e0e772"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#be7c094f080a1bc36e3daed9e1bbb7278d1cf7c1"
 dependencies = [
  "anyhow",
  "attestation",
@@ -2354,7 +2354,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#9fb3002d82918b85f780f37b5545c4e112e0e772"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#be7c094f080a1bc36e3daed9e1bbb7278d1cf7c1"
 dependencies = [
  "rustls",
  "tokio",
@@ -2512,9 +2512,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openssl"
-version = "0.10.75"
+version = "0.10.78"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08838db121398ad17ab8531ce9de97b244589089e290a384c900cb9ff7434328"
+checksum = "f38c4372413cdaaf3cc79dd92d29d7d9f5ab09b51b10dded508fb90bb70b9222"
 dependencies = [
  "bitflags 2.10.0",
  "cfg-if",
@@ -2547,9 +2547,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.111"
+version = "0.9.114"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82cab2d520aa75e3c58898289429321eb788c3106963d0dc886ec7a5f4adc321"
+checksum = "13ce1245cd07fcc4cfdb438f7507b0c7e4f3849a69fd84d52374c66d83741bb6"
 dependencies = [
  "cc",
  "libc",
@@ -2661,7 +2661,7 @@ dependencies = [
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#9fb3002d82918b85f780f37b5545c4e112e0e772"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#be7c094f080a1bc36e3daed9e1bbb7278d1cf7c1"
 dependencies = [
  "anyhow",
  "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
