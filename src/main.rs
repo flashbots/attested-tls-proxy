@@ -1,5 +1,8 @@
 use anyhow::{anyhow, ensure};
-use attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy};
+use attestation::{
+    AttestationType, AttestationVerifier,
+    measurements::{MeasurementPolicy, MultiMeasurements},
+};
 use clap::{Parser, Subcommand};
 use pccs::Pccs;
 use std::{fs::File, net::SocketAddr, path::PathBuf};
@@ -28,7 +31,7 @@ struct Cli {
     /// Path to file, or URL, containing JSON measurements to be enforced on the remote party
     #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
     measurements_file: Option<String>,
-    /// If no measurements file is specified, a single attestion type to allow
+    /// If no measurements file is specified, a single attestation type to allow
     #[arg(long, global = true)]
     allowed_remote_attestation_type: Option<String>,
     /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to an internal PCCS.
@@ -167,13 +170,19 @@ enum CliCommand {
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
     },
+    /// Generate an attestation and print measurements to standard output
+    PrintMeasurements,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+
+    if matches!(cli.command, CliCommand::PrintMeasurements) {
+        cli.allowed_remote_attestation_type = Some("none".to_string());
+    }
 
     ensure!(
         cli.allowed_remote_attestation_type.is_some() != cli.measurements_file.is_some(),
@@ -463,6 +472,16 @@ async fn main() -> anyhow::Result<()> {
             }
 
             stdout.flush().await?;
+        }
+        CliCommand::PrintMeasurements => {
+            let attestation_generator = AttestationGenerator::detect().await?;
+            let measurements = attestation_generator
+                .generate_attestation([0; 64])
+                .await?
+                .get_measurements()?
+                .unwrap_or(MultiMeasurements::NoAttestation);
+
+            println!("Measurements: {measurements:?}");
         }
     }
 
