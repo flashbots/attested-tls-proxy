@@ -193,12 +193,11 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fswitch-configfs-tsm-for-tdx-attest#1c53645a5f91115599ec16cbefbc91fa54985192"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
  "base64 0.22.1",
- "configfs-tsm",
  "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
  "hex",
  "http",
@@ -213,6 +212,7 @@ dependencies = [
  "rustls-webpki",
  "serde",
  "serde_json",
+ "tdx-attest",
  "tdx-quote",
  "thiserror 2.0.17",
  "time",
@@ -243,7 +243,7 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fswitch-configfs-tsm-for-tdx-attest#1c53645a5f91115599ec16cbefbc91fa54985192"
 dependencies = [
  "anyhow",
  "attestation",
@@ -771,12 +771,6 @@ name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
-
-[[package]]
-name = "configfs-tsm"
-version = "0.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "187437900921c8172f33316ad51a3267df588e99a2aebfa5ca1a2ed44df9e703"
 
 [[package]]
 name = "console"
@@ -2357,7 +2351,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fswitch-configfs-tsm-for-tdx-attest#1c53645a5f91115599ec16cbefbc91fa54985192"
 dependencies = [
  "rustls",
  "tokio",
@@ -2664,7 +2658,7 @@ dependencies = [
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fswitch-configfs-tsm-for-tdx-attest#1c53645a5f91115599ec16cbefbc91fa54985192"
 dependencies = [
  "anyhow",
  "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
