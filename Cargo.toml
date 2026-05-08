@@ -18,6 +18,7 @@ pccs = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
 tokio = { version = "1.50.0", features = ["full"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws_lc_rs"] }
 x509-parser = { version = "0.18.0", features = ["verify"] }
+x509-parser-016 = { package = "x509-parser", version = "0.16", features = ["verify"] }
 thiserror = "2.0.17"
 clap = { version = "4.5.51", features = ["derive", "env"] }
 rustls-pemfile = "2.2.0"
@@ -33,7 +34,7 @@ serde = "1.0.228"
 reqwest = { version = "0.12.24", default-features = false, features = [
   "rustls-tls-webpki-roots-no-provider",
 ] }
-webpki-roots = "1.0.4"
+webpki-roots = "1.0.7"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 axum = "0.8.6"

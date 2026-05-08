@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
             server_attestation_type,
         } => {
             let attestation_generator =
-                AttestationGenerator::new_with_detection(server_attestation_type, None).await?;
+                AttestationGenerator::new_with_detection(server_attestation_type, None)?;
 
             let listener = TcpListener::bind(listen_addr).await?;
 

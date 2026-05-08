@@ -199,7 +199,7 @@ pub async fn get_inner_tls_cert_with_config(
 
     let domain = server_name_from_host(&server_name)?;
 
-    let attested_cert_verifier = AttestedCertificateVerifier::new(None, attestation_verifier)?;
+    let attested_cert_verifier = AttestedCertificateVerifier::try_default(attestation_verifier)?;
     let inner_client_config =
         ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .dangerous()
@@ -427,8 +427,7 @@ impl ProxyServer {
                 Some(remote_cert_chain) => remote_cert_chain
                     .first()
                     .and_then(|cert| {
-                        match AttestedCertificateVerifier::extract_custom_attestation_from_cert(cert)
-                        {
+                        match extract_custom_attestation_from_cert(cert) {
                             Ok(attestation) => Some(attestation),
                             Err(err) => {
                                 warn!(
@@ -459,7 +458,7 @@ impl ProxyServer {
 
             match server_connection.peer_certificates() {
                 Some(remote_cert_chain) => remote_cert_chain.first().and_then(|cert| {
-                    match AttestedCertificateVerifier::extract_custom_attestation_from_cert(cert) {
+                    match extract_custom_attestation_from_cert(cert) {
                         Ok(attestation) => Some(attestation),
                         Err(err) => {
                             warn!("Failed to extract remote attestation from certificate: {err}");
@@ -700,7 +699,8 @@ impl ProxyClient {
             return Err(ProxyError::ClientAuthMisconfigured);
         }
 
-        let attested_cert_verifier = AttestedCertificateVerifier::new(None, attestation_verifier)?;
+        let attested_cert_verifier =
+            AttestedCertificateVerifier::try_default(attestation_verifier)?;
 
         let mut inner_client_config = if let Some(cert_chain) = cert_chain.as_ref() {
             let inner_cert_resolver = build_attested_cert_resolver(
@@ -761,7 +761,8 @@ impl ProxyClient {
         attestation_verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<Self, ProxyError> {
-        let attested_cert_verifier = AttestedCertificateVerifier::new(None, attestation_verifier)?;
+        let attested_cert_verifier =
+            AttestedCertificateVerifier::try_default(attestation_verifier)?;
 
         let mut inner_client_config = if let Some(cert_chain) = cert_chain.as_ref() {
             let inner_cert_resolver = build_attested_cert_resolver(
@@ -1094,7 +1095,7 @@ impl ProxyClient {
             .peer_certificates()
             .ok_or(ProxyError::NoCertificate)?;
 
-        AttestedCertificateVerifier::extract_custom_attestation_from_cert(
+        extract_custom_attestation_from_cert(
             remote_cert_chain.first().ok_or(ProxyError::NoCertificate)?,
         )
         .map_err(ProxyError::from)
@@ -1218,18 +1219,25 @@ fn certificate_identity_from_chain(
     hostname_from_cert(cert_chain.first().ok_or(ProxyError::NoCertificate)?)
 }
 
+fn extract_custom_attestation_from_cert(
+    cert: &CertificateDer<'_>,
+) -> Result<AttestationExchangeMessage, rustls::Error> {
+    let (_, cert) = x509_parser_016::parse_x509_certificate(cert.as_ref())
+        .map_err(|err| rustls::Error::General(format!("invalid certificate encoding: {err}")))?;
+
+    AttestedCertificateVerifier::extract_custom_attestation_from_cert(&cert)
+}
+
 async fn build_attested_cert_resolver(
     attestation_generator: AttestationGenerator,
     certificate_name: String,
 ) -> Result<AttestedCertificateResolver, ProxyError> {
-    Ok(AttestedCertificateResolver::new(
-        attestation_generator,
-        None,
-        certificate_name,
-        vec![],
-        Duration::from_secs(ATTESTED_CERTIFICATE_VALIDITY_SECS),
+    Ok(
+        AttestedCertificateResolver::build(&certificate_name, attestation_generator)
+            .with_subject_alt_names(vec![])
+            .with_certificate_validity(Duration::from_secs(ATTESTED_CERTIFICATE_VALIDITY_SECS))
+            .finish()?,
     )
-    .await?)
 }
 
 async fn build_inner_server_config(
@@ -1245,7 +1253,8 @@ async fn build_inner_server_config(
     .await?;
 
     let mut inner_server_config = if client_auth {
-        let attested_cert_verifier = AttestedCertificateVerifier::new(None, attestation_verifier)?;
+        let attested_cert_verifier =
+            AttestedCertificateVerifier::try_default(attestation_verifier)?;
         ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_client_cert_verifier(Arc::new(attested_cert_verifier))
             .with_cert_resolver(Arc::new(inner_cert_resolver))
@@ -1501,7 +1510,7 @@ mod tests {
         });
 
         let attested_cert_verifier =
-            AttestedCertificateVerifier::new(None, AttestationVerifier::mock()).unwrap();
+            AttestedCertificateVerifier::try_default(AttestationVerifier::mock()).unwrap();
         let mut client_config =
             ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .dangerous()
@@ -1736,7 +1745,7 @@ mod tests {
         });
 
         let attested_cert_verifier =
-            AttestedCertificateVerifier::new(None, AttestationVerifier::mock()).unwrap();
+            AttestedCertificateVerifier::try_default(AttestationVerifier::mock()).unwrap();
         let mut inner_client_config =
             ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .dangerous()

@@ -193,7 +193,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#be7c094f080a1bc36e3daed9e1bbb7278d1cf7c1"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
@@ -220,6 +220,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "tss-esapi",
+ "ureq",
  "x509-parser 0.18.1",
 ]
 
@@ -242,7 +243,7 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#be7c094f080a1bc36e3daed9e1bbb7278d1cf7c1"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
 dependencies = [
  "anyhow",
  "attestation",
@@ -254,7 +255,8 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
- "x509-parser 0.18.1",
+ "webpki-roots 1.0.7",
+ "x509-parser 0.16.0",
  "yasna 0.5.2",
 ]
 
@@ -294,7 +296,8 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "webpki-roots",
+ "webpki-roots 1.0.7",
+ "x509-parser 0.16.0",
  "x509-parser 0.18.1",
 ]
 
@@ -1828,7 +1831,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -2354,7 +2357,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#be7c094f080a1bc36e3daed9e1bbb7278d1cf7c1"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
 dependencies = [
  "rustls",
  "tokio",
@@ -2661,7 +2664,7 @@ dependencies = [
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#be7c094f080a1bc36e3daed9e1bbb7278d1cf7c1"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
 dependencies = [
  "anyhow",
  "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
@@ -3172,7 +3175,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -3297,6 +3300,7 @@ dependencies = [
  "aws-lc-rs",
  "brotli",
  "brotli-decompressor",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -4211,11 +4215,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
 dependencies = [
  "base64 0.22.1",
+ "flate2",
  "log",
  "once_cell",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "url",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -4399,9 +4407,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.4"
+version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2878ef029c47c6e8cf779119f20fcf52bde7ad42a731b2a304bc221df17571e"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.7",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
 ]

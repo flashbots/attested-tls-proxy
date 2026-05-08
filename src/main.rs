@@ -286,8 +286,7 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let client_attestation_generator =
-                AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
-                    .await?;
+                AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)?;
 
             let client = if inner_session_only {
                 ProxyClient::new_inner_only(
@@ -341,8 +340,7 @@ async fn main() -> anyhow::Result<()> {
             )?;
 
             let local_attestation_generator =
-                AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)
-                    .await?;
+                AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)?;
 
             let server = ProxyServer::new(
                 tls_cert_and_chain
