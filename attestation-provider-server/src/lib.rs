@@ -45,8 +45,7 @@ async fn get_attest(
 
     let attestation = shared_state
         .attestation_generator
-        .generate_attestation(input_data)
-        .await?
+        .generate_attestation(input_data)?
         .encode();
 
     Ok((StatusCode::OK, attestation))

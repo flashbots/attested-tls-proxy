@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
             server_attestation_type,
         } => {
             let attestation_generator =
-                AttestationGenerator::new_with_detection(server_attestation_type, None).await?;
+                AttestationGenerator::new_with_detection(server_attestation_type, None)?;
 
             let listener = TcpListener::bind(listen_addr).await?;
 
@@ -97,8 +97,9 @@ async fn main() -> anyhow::Result<()> {
             let attestation_verifier = AttestationVerifier {
                 measurement_policy,
                 pccs_url: None,
-                log_dcap_quote: cli.log_dcap_quote,
+                dump_dcap_quotes: cli.log_dcap_quote,
                 override_azure_outdated_tcb: false,
+                internal_pccs: None,
             };
 
             let attestation_message =
