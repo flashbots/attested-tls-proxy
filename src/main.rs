@@ -20,6 +20,16 @@ const GIT_REV: &str = match option_env!("GIT_REV") {
     None => "unknown",
 };
 
+/// The crates from which debug messages are logged when the `--log-debug` option is
+/// present
+const DEBUG_LOG_TARGETS: &[&str] = &[
+    "attestation",
+    "attested_tls",
+    "attested_tls_proxy",
+    "nested_tls",
+    "pccs",
+];
+
 #[derive(Parser, Debug, Clone)]
 #[command(version = GIT_REV, about, long_about = None)]
 struct Cli {
@@ -180,14 +190,18 @@ async fn main() -> anyhow::Result<()> {
         "Exactly one of --measurements-file or --allowed-remote-attestation-type must be provided"
     );
 
-    let crate_name = env!("CARGO_CRATE_NAME");
-
+    let log_filter = if cli.log_debug {
+        DEBUG_LOG_TARGETS
+            .iter()
+            .map(|target| format!("{target}=debug"))
+            .collect::<Vec<_>>()
+            .join(",")
+    } else {
+        format!("{}=warn", env!("CARGO_CRATE_NAME"))
+    };
     let env_filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(LevelFilter::WARN.into()) // global default
-        .parse_lossy(format!(
-            "{crate_name}={}",
-            if cli.log_debug { "debug" } else { "warn" }
-        ));
+        .parse_lossy(log_filter);
 
     let subscriber = tracing_subscriber::fmt::Subscriber::builder().with_env_filter(env_filter);
 
