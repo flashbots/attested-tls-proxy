@@ -9,12 +9,14 @@ The protocol primitives now live in the external [`flashbots/attested-tls`](http
 - [`attested-tls`](https://github.com/flashbots/attested-tls/tree/main/crates/attested-tls) for attested TLS certificate handling
 - [`nested-tls`](https://github.com/flashbots/attested-tls/tree/main/crates/nested-tls) for the optional outer TLS session
 - [`attestation`](https://github.com/flashbots/attested-tls/tree/main/crates/attestation) for attestation generation, verification, and measurement policies
+- [`pccs`](https://github.com/flashbots/attested-tls/tree/main/crates/pccs) for local Intel DCAP collateral caching
 
-It has four main subcommands:
+It has five main subcommands:
 
 - `attested-tls-proxy server` - run a proxy server that exposes an inner attested TLS listener and optionally an outer nested-TLS listener, then forwards traffic to a target service.
 - `attested-tls-proxy client` - run a proxy client that accepts local HTTP connections and forwards them to the proxy server over nested TLS or directly to the inner attested TLS listener.
 - `attested-tls-proxy get-tls-cert` - connect to a proxy server, verify the remote attestation, and write the inner PEM-encoded TLS certificate chain to standard output.
+- `attested-tls-proxy attested-file-server` - serve files from a local path over an attested channel.
 - `attested-tls-proxy attested-get` - perform a single GET request through the attested channel and print the response body.
 
 ## How It Works
@@ -92,6 +94,8 @@ In both modes, attestation is taken from the peer certificate on the inner TLS s
 The `azure` feature for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix by `tpm2-tss`. This dependency is currently not packaged for MacOS, so it is not currently possible to compile or run with the `azure` feature on MacOS.
 
 This feature is disabled by default. Without it, verification of Azure attestations is not possible and Azure attestations will be rejected with an error.
+
+Azure deployments that rely on outdated TCB collateral can opt in to the verifier workaround with `--override-azure-outdated-tcb`.
 
 ## Trying It Out Locally
 
@@ -200,12 +204,11 @@ This aims to have a similar command line interface to `cvm-reverse-proxy`, but t
 
 ```bash
 docker build -t attested-tls-proxy .
-
-# With custom features, for example without Azure/TPM support:
-docker build --build-arg FEATURES="" -t attested-tls-proxy .
 ```
 
-**Note for Apple Silicon (M1-M4) Mac users:** When building on ARM Macs, the Docker build automatically compiles without Azure/TPM features (`--no-default-features`) because the TPM libraries cannot be cross-compiled. For production builds with full Azure support, use an x86_64 system.
+On x86_64, Docker builds enable the `azure` feature by default and append any extra space-delimited features passed with `--build-arg FEATURES="..."`. On other architectures, Docker builds omit Azure/TPM support because the TPM libraries cannot be cross-compiled.
+
+**Note for Apple Silicon (M1-M4) Mac users:** When building on ARM Macs, the Docker build automatically compiles without Azure/TPM features because the TPM libraries cannot be cross-compiled. For production builds with full Azure support, use an x86_64 system.
 
 ### Running
 
