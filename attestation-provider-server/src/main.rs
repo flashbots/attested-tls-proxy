@@ -32,8 +32,8 @@ struct Cli {
 enum CliCommand {
     Server {
         /// Network transport to use for the server listener
-        #[arg(long, value_enum, default_value_t = ListenTransport::Tcp)]
-        listen_transport: ListenTransport,
+        #[arg(long, value_enum, default_value_t = NetworkTransport::Tcp)]
+        listen_transport: NetworkTransport,
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
@@ -45,8 +45,18 @@ enum CliCommand {
         server_attestation_type: Option<String>,
     },
     Client {
+        /// Network transport to use for the attestation provider server
+        #[arg(long, value_enum, default_value_t = NetworkTransport::Tcp)]
+        server_transport: NetworkTransport,
         /// Socket address of a attestation provider server
+        #[arg(short, long, default_value = "127.0.0.1:8000", env = "SERVER_ADDR")]
         server_addr: SocketAddr,
+        /// Vsock CID of the attestation provider server when using `--server-transport vsock`
+        #[arg(long, default_value_t = 10, env = "SERVER_CID")]
+        server_cid: u32,
+        /// Vsock port of the attestation provider server when using `--server-transport vsock`
+        #[arg(long, default_value_t = 8000, env = "SERVER_VSOCK_PORT")]
+        server_vsock_port: u32,
         /// Optional path to file containing JSON measurements to be enforced on the remote party
         #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
         measurements_file: Option<PathBuf>,
@@ -54,7 +64,7 @@ enum CliCommand {
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-enum ListenTransport {
+enum NetworkTransport {
     Tcp,
     Vsock,
 }
@@ -96,20 +106,26 @@ async fn main() -> anyhow::Result<()> {
                 AttestationGenerator::new_with_detection(server_attestation_type, None)?;
 
             match listen_transport {
-                ListenTransport::Tcp => {
+                NetworkTransport::Tcp => {
                     let listener = TcpListener::bind(listen_addr).await?;
                     println!("Listening on {}", listener.local_addr()?);
                     attestation_provider_server(listener, attestation_generator).await?;
                 }
-                ListenTransport::Vsock => {
+                NetworkTransport::Vsock => {
                     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, vsock_port))?;
-                    println!("Listening on vsock cid={} port={}", VMADDR_CID_ANY, vsock_port);
+                    println!(
+                        "Listening on vsock cid={} port={}",
+                        VMADDR_CID_ANY, vsock_port
+                    );
                     attestation_provider_server(listener, attestation_generator).await?;
                 }
             }
         }
         CliCommand::Client {
+            server_transport,
             server_addr,
+            server_cid,
+            server_vsock_port,
             measurements_file,
         } => {
             let measurement_policy = match measurements_file {
@@ -125,8 +141,20 @@ async fn main() -> anyhow::Result<()> {
                 internal_pccs: None,
             };
 
+            let server_endpoint = match server_transport {
+                NetworkTransport::Tcp => {
+                    attestation_provider_server::AttestationProviderEndpoint::Tcp(server_addr)
+                }
+                NetworkTransport::Vsock => {
+                    attestation_provider_server::AttestationProviderEndpoint::Vsock {
+                        cid: server_cid,
+                        port: server_vsock_port,
+                    }
+                }
+            };
+
             let attestation_message =
-                attestation_provider_client(server_addr, attestation_verifier).await?;
+                attestation_provider_client(server_endpoint, attestation_verifier).await?;
 
             println!("{attestation_message:?}")
         }

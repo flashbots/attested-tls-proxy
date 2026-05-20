@@ -1,6 +1,9 @@
 [workspace]
 members = [".", "attestation-provider-server"]
 
+[patch.crates-io]
+dcap-qvl = { git = "https://github.com/Phala-Network/dcap-qvl.git", rev = "f1dcc65371e941a7b83e3234833d23a1fb232ab1" }
+
 [package]
 name = "attested-tls-proxy"
 version = "1.1.1"

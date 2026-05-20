@@ -9,7 +9,19 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use bytes::Bytes;
+use http_body_util::BodyExt;
+use hyper::Request;
+use hyper::client::conn::http1;
+use hyper_util::rt::TokioIo;
 use parity_scale_codec::{Decode, Encode};
+use tokio_vsock::{VsockAddr, VsockStream};
+
+#[derive(Debug, Clone, Copy)]
+pub enum AttestationProviderEndpoint {
+    Tcp(SocketAddr),
+    Vsock { cid: u32, port: u32 },
+}
 
 #[derive(Clone)]
 struct SharedState {
@@ -56,17 +68,40 @@ async fn get_attest(
 
 /// A client helper which makes a request to `/attest`
 pub async fn attestation_provider_client(
-    server_addr: SocketAddr,
+    server_endpoint: AttestationProviderEndpoint,
     attestation_verifier: AttestationVerifier,
 ) -> anyhow::Result<AttestationExchangeMessage> {
     let input_data = [0; 64];
-    let response = reqwest::get(format!(
-        "http://{server_addr}/attest/{}",
-        hex::encode(input_data)
-    ))
-    .await?
-    .bytes()
-    .await?;
+    let response = match server_endpoint {
+        AttestationProviderEndpoint::Tcp(server_addr) => reqwest::get(format!(
+            "http://{server_addr}/attest/{}",
+            hex::encode(input_data)
+        ))
+        .await?
+        .bytes()
+        .await?
+        .to_vec(),
+        AttestationProviderEndpoint::Vsock { cid, port } => {
+            let stream = VsockStream::connect(VsockAddr::new(cid, port)).await?;
+            let io = TokioIo::new(stream);
+            let (mut sender, connection) = http1::handshake(io).await?;
+
+            tokio::spawn(async move {
+                if let Err(err) = connection.await {
+                    eprintln!("vsock HTTP connection error: {err}");
+                }
+            });
+
+            let request = Request::builder()
+                .method(http::Method::GET)
+                .uri(format!("/attest/{}", hex::encode(input_data)))
+                .header(http::header::HOST, format!("{cid}:{port}"))
+                .body(http_body_util::Empty::<Bytes>::new())?;
+
+            let response = sender.send_request(request).await?;
+            response.into_body().collect().await?.to_bytes().to_vec()
+        }
+    };
 
     let remote_attestation_message = AttestationExchangeMessage::decode(&mut &response[..])?;
     let remote_attestation_type = remote_attestation_message.attestation_type;
@@ -115,8 +150,11 @@ mod tests {
                 .await
                 .unwrap();
         });
-        attestation_provider_client(server_addr, AttestationVerifier::expect_none())
-            .await
-            .unwrap();
+        attestation_provider_client(
+            AttestationProviderEndpoint::Tcp(server_addr),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap();
     }
 }
