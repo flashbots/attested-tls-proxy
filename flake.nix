@@ -61,6 +61,8 @@
               "vsock"
               "--vsock-port"
               "8000"
+              "--server-attestation-type"
+              "aws-nitro"
             ];
           };
         };
