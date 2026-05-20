@@ -3,13 +3,13 @@ use std::net::SocketAddr;
 
 use anyhow::anyhow;
 use attested_tls_proxy::attestation::{AttestationExchangeMessage, AttestationVerifier};
+use axum::serve::Listener;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use parity_scale_codec::{Decode, Encode};
-use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct SharedState {
@@ -17,10 +17,14 @@ struct SharedState {
 }
 
 /// An HTTP server which provides attestations
-pub async fn attestation_provider_server(
-    listener: TcpListener,
+pub async fn attestation_provider_server<L>(
+    listener: L,
     attestation_generator: AttestationGenerator,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    L: Listener,
+    L::Addr: std::fmt::Debug,
+{
     let app = axum::Router::new()
         .route("/attest/{input_data}", axum::routing::get(get_attest))
         .with_state(SharedState {
@@ -97,6 +101,7 @@ impl IntoResponse for ServerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_attestation_provider_server() {
