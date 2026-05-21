@@ -164,7 +164,9 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
-        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default()).await.unwrap();
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
         let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
