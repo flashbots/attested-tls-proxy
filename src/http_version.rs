@@ -8,8 +8,8 @@ pub const ALPN_H2: &[u8] = b"h2";
 pub const ALPN_HTTP11: &[u8] = b"http/1.1";
 
 type ProxyClientTlsStream =
-    tokio_rustls::client::TlsStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
-type ProxyClientInnerOnlyTlsStream = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
+    tokio_rustls::client::TlsStream<tokio_rustls::client::TlsStream<crate::TransportStream>>;
+type ProxyClientInnerOnlyTlsStream = tokio_rustls::client::TlsStream<crate::TransportStream>;
 
 /// Supported HTTP versions
 #[derive(Debug)]

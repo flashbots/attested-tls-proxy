@@ -22,9 +22,17 @@ use hyper_util::rt::TokioIo;
 use nested_tls::{
     client::NestingTlsConnector, server::NestingTlsAcceptor, server::NestingTlsStream,
 };
-use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    net::SocketAddr,
+    num::TryFromIntError,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 use thiserror::Error;
-use tokio::io::{self, AsyncWriteExt};
+use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
@@ -33,6 +41,7 @@ use tokio_rustls::rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_vsock::{VsockAddr, VsockListener, VsockStream};
 use tracing::{debug, error, warn};
 
 use crate::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
@@ -62,8 +71,271 @@ type RequestWithResponseSender = (
     oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
 );
 
-type OuterProxySession = (Arc<TcpListener>, NestingTlsAcceptor);
-type InnerProxySession = (Arc<TcpListener>, TlsAcceptor);
+type OuterProxySession = (Arc<ProxyListener>, NestingTlsAcceptor);
+type InnerProxySession = (Arc<ProxyListener>, TlsAcceptor);
+
+/// Address to bind for an incoming proxy listener.
+#[derive(Debug, Clone, Copy)]
+pub enum ProxyListenAddr<A = SocketAddr> {
+    /// Bind a TCP listener.
+    Tcp(A),
+    /// Bind an AF_VSOCK listener.
+    Vsock {
+        /// Local CID to bind. Use `tokio_vsock::VMADDR_CID_ANY` for the usual Nitro listener case.
+        cid: u32,
+        /// Local VSOCK port to bind.
+        port: u32,
+    },
+}
+
+impl<A> ProxyListenAddr<A> {
+    pub fn tcp(addr: A) -> Self {
+        Self::Tcp(addr)
+    }
+
+    pub fn vsock(cid: u32, port: u32) -> Self {
+        Self::Vsock { cid, port }
+    }
+}
+
+/// Remote proxy endpoint for the proxy client to connect to.
+#[derive(Debug, Clone)]
+pub enum ProxyConnectTarget<A = String> {
+    /// Connect to a TCP host:port endpoint.
+    Tcp(A),
+    /// Connect to a VSOCK endpoint and use `server_name` for TLS certificate verification.
+    Vsock {
+        /// Remote VSOCK CID.
+        cid: u32,
+        /// Remote VSOCK port.
+        port: u32,
+        /// TLS server name to verify.
+        server_name: String,
+    },
+}
+
+impl<A> ProxyConnectTarget<A> {
+    pub fn tcp(addr: A) -> Self {
+        Self::Tcp(addr)
+    }
+
+    pub fn vsock(cid: u32, port: u32, server_name: impl Into<String>) -> Self {
+        Self::Vsock {
+            cid,
+            port,
+            server_name: server_name.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyAddr {
+    Tcp(SocketAddr),
+    Vsock { cid: u32, port: u32 },
+}
+
+impl ProxyAddr {
+    fn as_tcp(self) -> io::Result<SocketAddr> {
+        match self {
+            Self::Tcp(addr) => Ok(addr),
+            Self::Vsock { .. } => Err(io::Error::other("listener is not a TCP listener")),
+        }
+    }
+}
+
+impl fmt::Display for ProxyAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tcp(addr) => write!(f, "{addr}"),
+            Self::Vsock { cid, port } => write!(f, "vsock:{cid}:{port}"),
+        }
+    }
+}
+
+impl From<SocketAddr> for ProxyAddr {
+    fn from(addr: SocketAddr) -> Self {
+        Self::Tcp(addr)
+    }
+}
+
+impl From<VsockAddr> for ProxyAddr {
+    fn from(addr: VsockAddr) -> Self {
+        Self::Vsock {
+            cid: addr.cid(),
+            port: addr.port(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PeerAddr {
+    Tcp(SocketAddr),
+    Vsock,
+}
+
+impl PeerAddr {
+    fn forwarded_ip(self) -> Option<String> {
+        match self {
+            Self::Tcp(addr) => Some(addr.ip().to_string()),
+            Self::Vsock => None,
+        }
+    }
+}
+
+impl From<SocketAddr> for PeerAddr {
+    fn from(addr: SocketAddr) -> Self {
+        Self::Tcp(addr)
+    }
+}
+
+impl From<VsockAddr> for PeerAddr {
+    fn from(_addr: VsockAddr) -> Self {
+        Self::Vsock
+    }
+}
+
+#[derive(Debug)]
+enum ProxyListener {
+    Tcp(TcpListener),
+    Vsock(VsockListener),
+}
+
+impl ProxyListener {
+    async fn bind<A>(addr: ProxyListenAddr<A>) -> io::Result<Self>
+    where
+        A: ToSocketAddrs,
+    {
+        match addr {
+            ProxyListenAddr::Tcp(addr) => TcpListener::bind(addr).await.map(Self::Tcp),
+            ProxyListenAddr::Vsock { cid, port } => {
+                VsockListener::bind(VsockAddr::new(cid, port)).map(Self::Vsock)
+            }
+        }
+    }
+
+    async fn accept(&self) -> io::Result<(TransportStream, PeerAddr)> {
+        match self {
+            Self::Tcp(listener) => {
+                let (stream, addr) = listener.accept().await?;
+                Ok((TransportStream::Tcp { inner: stream }, addr.into()))
+            }
+            Self::Vsock(listener) => {
+                let (stream, addr) = listener.accept().await?;
+                Ok((TransportStream::Vsock { inner: stream }, addr.into()))
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<ProxyAddr> {
+        match self {
+            Self::Tcp(listener) => listener.local_addr().map(ProxyAddr::from),
+            Self::Vsock(listener) => listener.local_addr().map(ProxyAddr::from),
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[project = TransportStreamProj]
+    #[derive(Debug)]
+    pub(crate) enum TransportStream {
+        Tcp { #[pin] inner: TcpStream },
+        Vsock { #[pin] inner: VsockStream },
+    }
+}
+
+impl TransportStream {
+    async fn connect(target: &ProxyConnectAddr) -> io::Result<Self> {
+        match target {
+            ProxyConnectAddr::Tcp(target) => TcpStream::connect(target)
+                .await
+                .map(|inner| Self::Tcp { inner }),
+            ProxyConnectAddr::Vsock { cid, port, .. } => {
+                VsockStream::connect(VsockAddr::new(*cid, *port))
+                    .await
+                    .map(|inner| Self::Vsock { inner })
+            }
+        }
+    }
+}
+
+impl AsyncRead for TransportStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.project() {
+            TransportStreamProj::Tcp { inner } => inner.poll_read(cx, buf),
+            TransportStreamProj::Vsock { inner } => inner.poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for TransportStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        match self.project() {
+            TransportStreamProj::Tcp { inner } => inner.poll_write(cx, buf),
+            TransportStreamProj::Vsock { inner } => inner.poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        match self.project() {
+            TransportStreamProj::Tcp { inner } => inner.poll_flush(cx),
+            TransportStreamProj::Vsock { inner } => inner.poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        match self.project() {
+            TransportStreamProj::Tcp { inner } => inner.poll_shutdown(cx),
+            TransportStreamProj::Vsock { inner } => inner.poll_shutdown(cx),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ProxyConnectAddr {
+    Tcp(String),
+    Vsock {
+        cid: u32,
+        port: u32,
+        server_name: String,
+    },
+}
+
+impl ProxyConnectAddr {
+    fn from_target<A>(target: ProxyConnectTarget<A>) -> Self
+    where
+        A: ToString,
+    {
+        match target {
+            ProxyConnectTarget::Tcp(target) => {
+                Self::Tcp(host_to_host_with_port(&target.to_string()))
+            }
+            ProxyConnectTarget::Vsock {
+                cid,
+                port,
+                server_name,
+            } => Self::Vsock {
+                cid,
+                port,
+                server_name: host_to_host_with_port(&server_name),
+            },
+        }
+    }
+
+    fn server_name(&self) -> &str {
+        match self {
+            Self::Tcp(target) => target,
+            Self::Vsock { server_name, .. } => server_name,
+        }
+    }
+}
 
 #[derive(Clone)]
 enum ProxyTlsConnector {
@@ -102,10 +374,7 @@ pub enum OuterTlsMode {
     },
 }
 
-impl<A> OuterTlsConfig<A>
-where
-    A: ToSocketAddrs,
-{
+impl<A> OuterTlsConfig<A> {
     fn certificate_name(&self) -> Result<String, ProxyError> {
         match &self.tls {
             OuterTlsMode::CertAndKey(cert_and_key) => {
@@ -117,11 +386,23 @@ where
         }
     }
 
+    fn map_listen_addr<B>(self, map: impl FnOnce(A) -> B) -> OuterTlsConfig<B> {
+        OuterTlsConfig {
+            listen_addr: map(self.listen_addr),
+            tls: self.tls,
+        }
+    }
+}
+
+impl<A> OuterTlsConfig<ProxyListenAddr<A>>
+where
+    A: ToSocketAddrs,
+{
     async fn into_listener_and_acceptor(
         self,
         inner_server_config: Arc<ServerConfig>,
         client_auth: bool,
-    ) -> Result<(Arc<TcpListener>, NestingTlsAcceptor), ProxyError> {
+    ) -> Result<(Arc<ProxyListener>, NestingTlsAcceptor), ProxyError> {
         let listen_addr = self.listen_addr;
         let outer_server_config = match self.tls {
             OuterTlsMode::CertAndKey(cert_and_key) => {
@@ -148,7 +429,7 @@ where
             OuterTlsMode::Preconfigured { server_config, .. } => server_config,
         };
 
-        let outer_listener = Arc::new(TcpListener::bind(listen_addr).await?);
+        let outer_listener = Arc::new(ProxyListener::bind(listen_addr).await?);
         let outer_tls_acceptor =
             NestingTlsAcceptor::new(Arc::new(outer_server_config), inner_server_config);
 
@@ -249,6 +530,32 @@ impl ProxyServer {
         O: ToSocketAddrs,
         I: ToSocketAddrs,
     {
+        Self::new_with_listeners(
+            outer_session.map(|outer_session| outer_session.map_listen_addr(ProxyListenAddr::Tcp)),
+            inner_local.map(ProxyListenAddr::Tcp),
+            inner_certificate_name,
+            target,
+            attestation_generator,
+            attestation_verifier,
+            client_auth,
+        )
+        .await
+    }
+
+    /// Start with dual listeners, each of which can be TCP or VSOCK.
+    pub async fn new_with_listeners<O, I>(
+        outer_session: Option<OuterTlsConfig<ProxyListenAddr<O>>>,
+        inner_local: Option<ProxyListenAddr<I>>,
+        inner_certificate_name: Option<String>,
+        target: String,
+        attestation_generator: AttestationGenerator,
+        attestation_verifier: AttestationVerifier,
+        client_auth: bool,
+    ) -> Result<Self, ProxyError>
+    where
+        O: ToSocketAddrs,
+        I: ToSocketAddrs,
+    {
         if outer_session.is_none() && inner_local.is_none() {
             return Err(ProxyError::NoListenersConfigured);
         }
@@ -269,7 +576,7 @@ impl ProxyServer {
         );
         let inner = match inner_local {
             Some(inner_local) => {
-                let inner_listener = Arc::new(TcpListener::bind(inner_local).await?);
+                let inner_listener = Arc::new(ProxyListener::bind(inner_local).await?);
                 let inner_tls_acceptor = TlsAcceptor::from(inner_server_config.clone());
                 Some((inner_listener, inner_tls_acceptor))
             }
@@ -383,8 +690,8 @@ impl ProxyServer {
         Ok(join_handle)
     }
 
-    /// Helper to get the socket address of either underlying TCP listener
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+    /// Helper to get the transport address of either underlying listener
+    pub fn local_proxy_addr(&self) -> std::io::Result<ProxyAddr> {
         match &self.outer {
             Some((listener, _)) => listener.local_addr(),
             None => self
@@ -396,9 +703,31 @@ impl ProxyServer {
         }
     }
 
+    /// Helper to get the TCP socket address of either underlying TCP listener.
+    ///
+    /// Returns an error when the selected listener is VSOCK.
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.local_proxy_addr()?.as_tcp()
+    }
+
+    /// Helper to get the transport address of the underlying outer listener if present
+    pub fn outer_local_proxy_addr(&self) -> std::io::Result<Option<ProxyAddr>> {
+        self.outer
+            .as_ref()
+            .map(|(listener, _)| listener.local_addr())
+            .transpose()
+    }
+
     /// Helper to get the socket address of the underlying outer TCP listener if present
     pub fn outer_local_addr(&self) -> std::io::Result<Option<SocketAddr>> {
-        self.outer
+        self.outer_local_proxy_addr()?
+            .map(ProxyAddr::as_tcp)
+            .transpose()
+    }
+
+    /// Helper to get the transport address of the underlying inner listener if present
+    pub fn inner_local_proxy_addr(&self) -> std::io::Result<Option<ProxyAddr>> {
+        self.inner
             .as_ref()
             .map(|(listener, _)| listener.local_addr())
             .transpose()
@@ -406,16 +735,15 @@ impl ProxyServer {
 
     /// Helper to get the socket address of the underlying inner TCP listener if present
     pub fn inner_local_addr(&self) -> std::io::Result<Option<SocketAddr>> {
-        self.inner
-            .as_ref()
-            .map(|(listener, _)| listener.local_addr())
+        self.inner_local_proxy_addr()?
+            .map(ProxyAddr::as_tcp)
             .transpose()
     }
 
     async fn handle_outer_connection(
-        tls_stream: NestingTlsStream<tokio::net::TcpStream>,
+        tls_stream: NestingTlsStream<TransportStream>,
         target: String,
-        client_addr: SocketAddr,
+        client_addr: PeerAddr,
     ) -> Result<(), ProxyError> {
         debug!("[proxy-server] accepted connection");
 
@@ -446,9 +774,9 @@ impl ProxyServer {
     }
 
     async fn handle_inner_connection(
-        tls_stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+        tls_stream: tokio_rustls::server::TlsStream<TransportStream>,
         target: String,
-        client_addr: SocketAddr,
+        client_addr: PeerAddr,
     ) -> Result<(), ProxyError> {
         debug!("[proxy-server] accepted inner-only connection");
 
@@ -478,7 +806,7 @@ impl ProxyServer {
         tls_stream: IO,
         http_version: HttpVersion,
         target: String,
-        client_addr: SocketAddr,
+        client_addr: PeerAddr,
         attestation: Option<AttestationExchangeMessage>,
     ) -> Result<(), ProxyError>
     where
@@ -507,20 +835,21 @@ impl ProxyServer {
             let old_value = update_header(headers, &http::header::HOST, &target);
             debug!("Updating Host header - old value: {old_value:?} new value: {target}",);
 
-            // Add the x-real-ip header
-            let client_ip = client_addr.ip().to_string();
-            update_header(headers, &X_REAL_IP, &client_ip);
+            if let Some(client_ip) = client_addr.forwarded_ip() {
+                // Add the x-real-ip header
+                update_header(headers, &X_REAL_IP, &client_ip);
 
-            // Add or update the x-forwarded-for header
-            let new_x_forwarded_for =
-                match headers.get(&X_FORWARDED_FOR).and_then(|v| v.to_str().ok()) {
-                    Some(existing) if !existing.trim().is_empty() => {
-                        format!("{}, {}", existing.trim(), client_ip)
-                    }
-                    _ => client_ip.clone(),
-                };
+                // Add or update the x-forwarded-for header
+                let new_x_forwarded_for =
+                    match headers.get(&X_FORWARDED_FOR).and_then(|v| v.to_str().ok()) {
+                        Some(existing) if !existing.trim().is_empty() => {
+                            format!("{}, {}", existing.trim(), client_ip)
+                        }
+                        _ => client_ip.clone(),
+                    };
 
-            update_header(headers, &X_FORWARDED_FOR, &new_x_forwarded_for);
+                update_header(headers, &X_FORWARDED_FOR, &new_x_forwarded_for);
+            }
 
             // Strip any caller-provided attestation metadata before injecting authenticated values.
             headers.remove(ATTESTATION_TYPE_HEADER);
@@ -634,8 +963,8 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
 /// A proxy client which forwards http traffic to a proxy-server
 #[derive(Debug)]
 pub struct ProxyClient {
-    /// The underlying TCP listener
-    listener: TcpListener,
+    /// The underlying local listener.
+    listener: ProxyListener,
     /// A channel for sending requests to the connection to the proxy-server
     requests_tx: mpsc::Sender<RequestWithResponseSender>,
 }
@@ -650,6 +979,30 @@ impl ProxyClient {
         attestation_verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
     ) -> Result<Self, ProxyError> {
+        Self::new_with_transport(
+            cert_and_key,
+            ProxyListenAddr::Tcp(address),
+            ProxyConnectTarget::Tcp(server_name),
+            attestation_generator,
+            attestation_verifier,
+            remote_certificate,
+        )
+        .await
+    }
+
+    /// Start with optional TLS client auth and TCP or VSOCK transports.
+    pub async fn new_with_transport<L, T>(
+        cert_and_key: Option<TlsCertAndKey>,
+        listen_addr: ProxyListenAddr<L>,
+        target: ProxyConnectTarget<T>,
+        attestation_generator: AttestationGenerator,
+        attestation_verifier: AttestationVerifier,
+        remote_certificate: Option<CertificateDer<'static>>,
+    ) -> Result<Self, ProxyError>
+    where
+        L: ToSocketAddrs,
+        T: ToString,
+    {
         let root_store = match remote_certificate.as_ref() {
             Some(remote_certificate) => {
                 let mut root_store = RootCertStore::empty();
@@ -672,10 +1025,10 @@ impl ProxyClient {
                 .with_no_client_auth()
         };
 
-        Self::new_with_tls_config(
+        Self::new_with_transport_tls_config(
             outer_client_config,
-            address,
-            server_name,
+            listen_addr,
+            target,
             attestation_generator,
             attestation_verifier,
             cert_and_key.map(|cert_and_key| cert_and_key.cert_chain),
@@ -723,10 +1076,62 @@ impl ProxyClient {
         let nesting_tls_connector =
             NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
 
-        Self::new_with_connector(
-            address,
+        Self::new_with_transport_connector(
+            ProxyListenAddr::Tcp(address),
+            ProxyConnectTarget::Tcp(target_name),
             ProxyTlsConnector::Nested(nesting_tls_connector),
-            &target_name,
+        )
+        .await
+    }
+
+    /// Create a new proxy client with given TLS configuration and TCP or VSOCK transports.
+    pub async fn new_with_transport_tls_config<L, T>(
+        outer_client_config: ClientConfig,
+        listen_addr: ProxyListenAddr<L>,
+        target: ProxyConnectTarget<T>,
+        attestation_generator: AttestationGenerator,
+        attestation_verifier: AttestationVerifier,
+        cert_chain: Option<Vec<CertificateDer<'static>>>,
+    ) -> Result<Self, ProxyError>
+    where
+        L: ToSocketAddrs,
+        T: ToString,
+    {
+        let outer_has_client_auth = outer_client_config.client_auth_cert_resolver.has_certs();
+        let inner_has_client_auth = cert_chain.is_some();
+
+        if outer_has_client_auth != inner_has_client_auth {
+            return Err(ProxyError::ClientAuthMisconfigured);
+        }
+
+        let attested_cert_verifier =
+            AttestedCertificateVerifier::try_default(attestation_verifier)?;
+
+        let mut inner_client_config = if let Some(cert_chain) = cert_chain.as_ref() {
+            let inner_cert_resolver = build_attested_cert_resolver(
+                attestation_generator,
+                certificate_identity_from_chain(cert_chain)?,
+            )
+            .await?;
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
+                .with_client_cert_resolver(Arc::new(inner_cert_resolver))
+        } else {
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
+                .with_no_client_auth()
+        };
+        ensure_proxy_alpn_protocols(&mut inner_client_config.alpn_protocols);
+
+        let nesting_tls_connector =
+            NestingTlsConnector::new(Arc::new(outer_client_config), Arc::new(inner_client_config));
+
+        Self::new_with_transport_connector(
+            listen_addr,
+            target,
+            ProxyTlsConnector::Nested(nesting_tls_connector),
         )
         .await
     }
@@ -782,24 +1187,69 @@ impl ProxyClient {
         };
         ensure_proxy_alpn_protocols(&mut inner_client_config.alpn_protocols);
 
-        Self::new_with_connector(
-            address,
+        Self::new_with_transport_connector(
+            ProxyListenAddr::Tcp(address),
+            ProxyConnectTarget::Tcp(target_name),
             ProxyTlsConnector::InnerOnly(TlsConnector::from(Arc::new(inner_client_config))),
-            &target_name,
+        )
+        .await
+    }
+
+    /// Create a new inner-only proxy client with TCP or VSOCK transports.
+    pub async fn new_inner_only_with_transport_tls_config<L, T>(
+        listen_addr: ProxyListenAddr<L>,
+        target: ProxyConnectTarget<T>,
+        attestation_generator: AttestationGenerator,
+        attestation_verifier: AttestationVerifier,
+        cert_chain: Option<Vec<CertificateDer<'static>>>,
+    ) -> Result<Self, ProxyError>
+    where
+        L: ToSocketAddrs,
+        T: ToString,
+    {
+        let attested_cert_verifier =
+            AttestedCertificateVerifier::try_default(attestation_verifier)?;
+
+        let mut inner_client_config = if let Some(cert_chain) = cert_chain.as_ref() {
+            let inner_cert_resolver = build_attested_cert_resolver(
+                attestation_generator,
+                certificate_identity_from_chain(cert_chain)?,
+            )
+            .await?;
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
+                .with_client_cert_resolver(Arc::new(inner_cert_resolver))
+        } else {
+            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(attested_cert_verifier))
+                .with_no_client_auth()
+        };
+        ensure_proxy_alpn_protocols(&mut inner_client_config.alpn_protocols);
+
+        Self::new_with_transport_connector(
+            listen_addr,
+            target,
+            ProxyTlsConnector::InnerOnly(TlsConnector::from(Arc::new(inner_client_config))),
         )
         .await
     }
 
     /// Create a new proxy client with a configured TLS connector.
-    async fn new_with_connector(
-        address: impl ToSocketAddrs,
+    async fn new_with_transport_connector<L, T>(
+        listen_addr: ProxyListenAddr<L>,
+        target: ProxyConnectTarget<T>,
         tls_connector: ProxyTlsConnector,
-        target_name: &str,
-    ) -> Result<Self, ProxyError> {
-        let listener = TcpListener::bind(address).await?;
+    ) -> Result<Self, ProxyError>
+    where
+        L: ToSocketAddrs,
+        T: ToString,
+    {
+        let listener = ProxyListener::bind(listen_addr).await?;
 
         // Process the hostname / port provided by the user
-        let target = host_to_host_with_port(target_name);
+        let target = ProxyConnectAddr::from_target(target);
 
         // Channel for getting incoming requests from the source client
         let (requests_tx, mut requests_rx) = mpsc::channel::<(
@@ -932,9 +1382,16 @@ impl ProxyClient {
         }
     }
 
-    /// Helper to return the local socket address from the underlying TCP listener
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+    /// Helper to return the local transport address from the underlying listener.
+    pub fn local_proxy_addr(&self) -> std::io::Result<ProxyAddr> {
         self.listener.local_addr()
+    }
+
+    /// Helper to return the local socket address from the underlying TCP listener.
+    ///
+    /// Returns an error when the local listener is VSOCK.
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.local_proxy_addr()?.as_tcp()
     }
 
     /// Accept an incoming connection and handle it in a separate task
@@ -954,7 +1411,7 @@ impl ProxyClient {
 
     /// Handle an incoming connection from the source client
     async fn handle_connection(
-        inbound: TcpStream,
+        inbound: TransportStream,
         requests_tx: mpsc::Sender<RequestWithResponseSender>,
     ) -> Result<(), ProxyError> {
         tracing::debug!("proxy-client accepted connection");
@@ -987,7 +1444,7 @@ impl ProxyClient {
     // Attempt connection and handshake with the proxy-server
     // If it fails retry with a backoff (indefinately)
     async fn setup_connection_with_backoff(
-        target: &str,
+        target: &ProxyConnectAddr,
         tls_connector: &ProxyTlsConnector,
         should_bail: bool,
     ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
@@ -1018,11 +1475,11 @@ impl ProxyClient {
     /// Connect to the proxy-server, do TLS handshake and remote attestation
     async fn setup_connection(
         tls_connector: &ProxyTlsConnector,
-        target: &str,
+        target: &ProxyConnectAddr,
     ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
-        let outbound_stream = tokio::net::TcpStream::connect(target).await?;
+        let outbound_stream = TransportStream::connect(target).await?;
 
-        let domain = server_name_from_host(target)?;
+        let domain = server_name_from_host(target.server_name())?;
         match tls_connector {
             ProxyTlsConnector::Nested(connector) => {
                 let tls_stream = connector.connect(domain, outbound_stream).await?;
@@ -1787,7 +2244,10 @@ mod tests {
 
         let (sender, conn, _attestation) = ProxyClient::setup_connection(
             &ProxyTlsConnector::Nested(nesting_tls_connector),
-            &format!("localhost:{}", proxy_addr.port()),
+            &ProxyConnectAddr::from_target(ProxyConnectTarget::Tcp(format!(
+                "localhost:{}",
+                proxy_addr.port()
+            ))),
         )
         .await
         .unwrap();

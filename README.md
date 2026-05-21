@@ -78,7 +78,13 @@ Proxy-client to proxy-server connections use TLS 1.3. The server can expose two 
 - `--inner-listen-addr` exposes the inner attested TLS listener.
 - `--outer-listen-addr` exposes an optional outer nested-TLS listener that wraps the inner session with a regular PKI TLS session.
 
-At least one of these listeners must be configured. If TLS certificate and key files are provided, they apply only to the outer listener, and `--outer-listen-addr` is required.
+The same listeners can be exposed over AWS Nitro VSOCK instead of TCP:
+
+- `--inner-vsock-port` exposes the inner listener over VSOCK.
+- `--outer-vsock-port` exposes the outer listener over VSOCK.
+- `--inner-vsock-cid` and `--outer-vsock-cid` default to `VMADDR_CID_ANY`.
+
+At least one of these listeners must be configured. If TLS certificate and key files are provided, they apply only to the outer listener, and an outer TCP or VSOCK listener is required.
 
 When the server runs without an outer listener, the inner attested certificate still needs a DNS identity. In that case, use `--inner-certificate-name` to control the certificate name embedded into the inner attested certificate. If an outer certificate is present, the server derives that identity from the outer certificate instead.
 
@@ -86,6 +92,8 @@ On the client side:
 
 - default mode connects to the server's outer listener and verifies the outer PKI certificate before entering the inner attested TLS session
 - `--inner-session-only` connects directly to the inner attested TLS listener
+- `--listen-transport vsock --listen-vsock-port <port>` makes the local client ingress listener use VSOCK instead of TCP
+- `--target-transport vsock --target-vsock-cid <cid> --target-vsock-port <port>` makes the client connect to the proxy server over VSOCK; the positional target remains the TLS server name
 
 In both modes, attestation is taken from the peer certificate on the inner TLS session, then enforced against the configured measurement policy.
 
@@ -187,7 +195,50 @@ cargo run -- client \
   localhost:7001
 ```
 
-In inner-only mode the client does not accept `--tls-ca-certificate`, `--tls-private-key-path`, or `--tls-certificate-path`.
+In inner-only mode the client does not accept `--tls-ca-certificate`. `--tls-certificate-path` and `--tls-private-key-path` may be supplied when the server requires client authentication; the certificate identity is used for the generated inner attested client certificate.
+
+### Nitro VSOCK Examples
+
+Expose a server inner listener over VSOCK:
+
+```bash
+cargo run -- server \
+  --inner-vsock-port 7001 \
+  --inner-certificate-name localhost \
+  --server-attestation-type none \
+  --allowed-remote-attestation-type none \
+  127.0.0.1:8000
+```
+
+Connect a client to that VSOCK inner listener:
+
+```bash
+cargo run -- client \
+  --listen-addr 127.0.0.1:6000 \
+  --target-transport vsock \
+  --target-vsock-cid <server-cid> \
+  --target-vsock-port 7001 \
+  --inner-session-only \
+  --client-attestation-type none \
+  --allowed-remote-attestation-type none \
+  localhost
+```
+
+Run the proxy client itself with VSOCK ingress, useful when the client runs inside a Nitro enclave and receives requests from the parent instance:
+
+```bash
+cargo run -- client \
+  --listen-transport vsock \
+  --listen-vsock-port 6000 \
+  --target-transport vsock \
+  --target-vsock-cid <server-cid> \
+  --target-vsock-port 7001 \
+  --inner-session-only \
+  --tls-private-key-path client.key \
+  --tls-certificate-path client.crt \
+  --allowed-remote-attestation-type none \
+  localhost
+```
 
 ## CLI Differences from `cvm-reverse-proxy`
 
@@ -195,7 +246,7 @@ This aims to have a similar command line interface to `cvm-reverse-proxy`, but t
 
 - The measurements file path is specified with `--measurements-file` rather than `--server-measurements` or `--client-measurements`.
 - If no measurements file is specified, `--allowed-remote-attestation-type` must be given.
-- The server splits listener configuration into `--inner-listen-addr` and optional `--outer-listen-addr`.
+- The server splits listener configuration into inner and outer listeners, each using either TCP `--*-listen-addr` or VSOCK `--*-vsock-port`.
 - `--log-dcap-quote` logs remote DCAP quotes into `quotes/`.
 
 ## Docker

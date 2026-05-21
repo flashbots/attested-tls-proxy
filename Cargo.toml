@@ -19,6 +19,7 @@ nested-tls = { git = "https://github.com/flashbots/attested-tls", branch = "peg/
 attestation = { git = "https://github.com/flashbots/attested-tls", branch = "peg/nitro" }
 pccs = { git = "https://github.com/flashbots/attested-tls", branch = "peg/nitro" }
 tokio = { version = "1.50.0", features = ["full"] }
+tokio-vsock = "0.7.2"
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws_lc_rs"] }
 x509-parser = { version = "0.18.0", features = ["verify"] }
 x509-parser-016 = { package = "x509-parser", version = "0.16", features = ["verify"] }
