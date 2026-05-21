@@ -1307,6 +1307,10 @@ where
 #[cfg(test)]
 mod tests {
     use attestation::{AttestationType, measurements::MeasurementPolicy};
+    use mock_tdx::{
+        MOCK_MRTD, MOCK_RTMR0, MOCK_RTMR1, MOCK_RTMR2, MOCK_RTMR3, MockPcsConfig,
+        spawn_mock_pcs_server,
+    };
     use std::collections::HashMap;
     use std::sync::{
         Arc,
@@ -1321,13 +1325,16 @@ mod tests {
     };
 
     fn expected_mock_measurements() -> HashMap<String, String> {
-        let zero_measurement = "0".repeat(96);
+        fn to_hex(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        }
+
         HashMap::from([
-            ("0".to_string(), zero_measurement.clone()),
-            ("1".to_string(), zero_measurement.clone()),
-            ("2".to_string(), zero_measurement.clone()),
-            ("3".to_string(), zero_measurement.clone()),
-            ("4".to_string(), zero_measurement),
+            ("0".to_string(), to_hex(&MOCK_MRTD)),
+            ("1".to_string(), to_hex(&MOCK_RTMR0)),
+            ("2".to_string(), to_hex(&MOCK_RTMR1)),
+            ("3".to_string(), to_hex(&MOCK_RTMR2)),
+            ("4".to_string(), to_hex(&MOCK_RTMR3)),
         ])
     }
 
@@ -1509,8 +1516,13 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
-        let attested_cert_verifier =
-            AttestedCertificateVerifier::try_default(AttestationVerifier::mock()).unwrap();
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let attested_cert_verifier = AttestedCertificateVerifier::try_default(
+            AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone()),
+        )
+        .unwrap();
         let mut client_config =
             ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .dangerous()
@@ -1556,11 +1568,15 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_inner_only_with_tls_config(
             "127.0.0.1:0",
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             None,
         )
         .await
@@ -1607,13 +1623,17 @@ mod tests {
         let (client_cert_chain, _client_private_key) =
             generate_certificate_chain_for_host("localhost");
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
             Some("127.0.0.1:0"),
             None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             true,
         )
         .await
@@ -1697,12 +1717,16 @@ mod tests {
         let (cert_chain, private_key) = generate_certificate_chain_for_host("localhost");
         let (_server_config, client_config) = generate_tls_config(cert_chain, private_key);
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let err = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0",
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             None,
         )
         .await
@@ -1744,8 +1768,13 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
-        let attested_cert_verifier =
-            AttestedCertificateVerifier::try_default(AttestationVerifier::mock()).unwrap();
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let attested_cert_verifier = AttestedCertificateVerifier::try_default(
+            AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone()),
+        )
+        .unwrap();
         let mut inner_client_config =
             ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
                 .dangerous()
@@ -1800,12 +1829,16 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             None,
         )
         .await
@@ -1848,6 +1881,10 @@ mod tests {
             server_private_key,
         );
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_server = ProxyServer::new(
             Some(OuterTlsConfig {
                 listen_addr: "127.0.0.1:0",
@@ -1860,7 +1897,7 @@ mod tests {
             None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             true,
         )
         .await
@@ -1910,6 +1947,10 @@ mod tests {
         let (server_config, client_config) =
             generate_tls_config(server_cert_chain.clone(), server_private_key);
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_server = ProxyServer::new(
             Some(OuterTlsConfig {
                 listen_addr: "127.0.0.1:0",
@@ -1922,7 +1963,7 @@ mod tests {
             None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             false,
         )
         .await
@@ -1974,6 +2015,10 @@ mod tests {
         let (server_config, client_config) =
             generate_tls_config(server_cert_chain.clone(), server_private_key);
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_server = ProxyServer::new(
             Some(OuterTlsConfig {
                 listen_addr: "127.0.0.1:0",
@@ -1986,7 +2031,7 @@ mod tests {
             None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             false,
         )
         .await
@@ -2049,6 +2094,10 @@ mod tests {
             server_private_key,
         );
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_server = ProxyServer::new(
             Some(OuterTlsConfig {
                 listen_addr: "127.0.0.1:0",
@@ -2061,7 +2110,7 @@ mod tests {
             None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
-            AttestationVerifier::mock(),
+            verifier,
             true,
         )
         .await
@@ -2073,12 +2122,16 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_with_tls_config(
             client_tls_client_config,
             "127.0.0.1:0",
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
-            AttestationVerifier::mock(),
+            verifier,
             Some(client_cert_chain),
         )
         .await
@@ -2138,9 +2191,13 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let retrieved_chain = get_inner_tls_cert_with_config(
             format!("localhost:{}", proxy_server_addr.port()),
-            AttestationVerifier::mock(),
+            verifier,
             client_config,
         )
         .await
@@ -2187,12 +2244,16 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client_result = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             None,
         )
         .await;
@@ -2320,12 +2381,16 @@ mod tests {
             let _ = reconnected_tx.send(());
         });
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             None,
         )
         .await
@@ -2435,12 +2500,16 @@ mod tests {
             let _ = reconnected_tx.send(());
         });
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             None,
         )
         .await
@@ -2577,12 +2646,16 @@ mod tests {
             proxy_server.accept().await.unwrap();
         });
 
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default())
+            .await
+            .unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             None,
         )
         .await

@@ -9,6 +9,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.3.4",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -30,6 +43,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94fb8275041c72129eb51b7d0322c29b8387a0386127718b096429201a5d6ece"
 dependencies = [
  "alloc-no-stdlib",
+]
+
+[[package]]
+name = "annotate-snippets"
+version = "0.12.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c86cd1c51b95d71dde52bca69ed225008f6ff4c8cc825b08042aa1ef823e1980"
+dependencies = [
+ "anstyle",
+ "memchr",
+ "unicode-width",
 ]
 
 [[package]]
@@ -87,6 +111,12 @@ name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+
+[[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
 name = "arrayref"
@@ -193,15 +223,15 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
  "base64 0.22.1",
- "configfs-tsm",
  "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
  "hex",
  "http",
+ "mock-tdx",
  "num-bigint",
  "once_cell",
  "openssl",
@@ -213,7 +243,7 @@ dependencies = [
  "rustls-webpki",
  "serde",
  "serde_json",
- "tdx-quote",
+ "tdx-attest 0.5.8",
  "thiserror 2.0.17",
  "time",
  "tokio",
@@ -243,7 +273,7 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
 dependencies = [
  "anyhow",
  "attestation",
@@ -275,6 +305,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jsonrpsee",
+ "mock-tdx",
  "nested-tls",
  "p256",
  "pccs",
@@ -314,6 +345,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ec6fb3fe69024a75fa7e1bfb48aa6cf59706a101658ea01bfd33b2b248a038f"
 dependencies = [
  "aws-lc-sys",
+ "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -331,9 +363,9 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.8.6"
+version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a18ed336352031311f4e0b4dd2ff392d4fbb370777c9d18d7fc9d7359f73871"
+checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "bytes",
@@ -690,6 +722,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc-eventlog"
+version = "0.5.11"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=07d2cf6bd376a3c56f855aa47c8de003bb427e48#07d2cf6bd376a3c56f855aa47c8de003bb427e48"
+dependencies = [
+ "anyhow",
+ "digest",
+ "ez-hash",
+ "fs-err",
+ "hex",
+ "parity-scale-codec",
+ "serde",
+ "serde-human-bytes",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -771,12 +820,6 @@ name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
-
-[[package]]
-name = "configfs-tsm"
-version = "0.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "187437900921c8172f33316ad51a3267df588e99a2aebfa5ca1a2ed44df9e703"
 
 [[package]]
 name = "console"
@@ -1055,7 +1098,7 @@ dependencies = [
  "rustls-pki-types",
  "sha2",
  "signature",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -1208,11 +1251,11 @@ dependencies = [
 
 [[package]]
 name = "dstack-attest"
-version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+version = "0.5.11"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=07d2cf6bd376a3c56f855aa47c8de003bb427e48#07d2cf6bd376a3c56f855aa47c8de003bb427e48"
 dependencies = [
  "anyhow",
- "cc-eventlog",
+ "cc-eventlog 0.5.11",
  "dcap-qvl 0.3.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "dstack-types",
  "errify",
@@ -1223,19 +1266,20 @@ dependencies = [
  "insta",
  "or-panic",
  "parity-scale-codec",
+ "rmp-serde",
  "serde",
  "serde-human-bytes",
  "serde_json",
  "sha2",
  "sha3",
- "tdx-attest",
+ "tdx-attest 0.5.11",
  "tracing",
 ]
 
 [[package]]
 name = "dstack-types"
-version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+version = "0.5.11"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=07d2cf6bd376a3c56f855aa47c8de003bb427e48#07d2cf6bd376a3c56f855aa47c8de003bb427e48"
 dependencies = [
  "parity-scale-codec",
  "serde",
@@ -1310,6 +1354,24 @@ name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
+name = "encoding_rs_io"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cc3c5651fb62ab8aa3103998dade57efdd028544bd300516baa31840c252a83"
+dependencies = [
+ "encoding_rs",
+]
 
 [[package]]
 name = "enum-as-inner"
@@ -2337,6 +2399,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "mock-tdx"
+version = "0.0.1"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
+dependencies = [
+ "axum",
+ "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
+ "hex",
+ "p256",
+ "parity-scale-codec",
+ "rcgen 0.14.7",
+ "serde",
+ "serde-saphyr",
+ "serde_bytes",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "urlencoding",
+ "x509-parser 0.18.1",
+ "yasna 0.5.2",
+]
+
+[[package]]
 name = "moka"
 version = "0.12.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2357,7 +2442,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
 dependencies = [
  "rustls",
  "tokio",
@@ -2377,6 +2462,12 @@ dependencies = [
  "libc",
  "memoffset",
 ]
+
+[[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nom"
@@ -2515,15 +2606,14 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openssl"
-version = "0.10.78"
+version = "0.10.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f38c4372413cdaaf3cc79dd92d29d7d9f5ab09b51b10dded508fb90bb70b9222"
+checksum = "a45fa2aa886c42762255da344f0a0d313e254066c46aad76f300c3d3da62d967"
 dependencies = [
  "bitflags 2.10.0",
  "cfg-if",
  "foreign-types",
  "libc",
- "once_cell",
  "openssl-macros",
  "openssl-sys",
 ]
@@ -2550,9 +2640,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.114"
+version = "0.9.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13ce1245cd07fcc4cfdb438f7507b0c7e4f3849a69fd84d52374c66d83741bb6"
+checksum = "f28a22dc7140cda5f096e5e7724a6962ca81a7f8bfd2979f9b18c11af56318c4"
 dependencies = [
  "cc",
  "libc",
@@ -2664,7 +2754,7 @@ dependencies = [
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#dab9db727b1436c0b9f066562ff625535f9c2234"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
 dependencies = [
  "anyhow",
  "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
@@ -2950,12 +3040,12 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "ra-tls"
-version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+version = "0.5.11"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=07d2cf6bd376a3c56f855aa47c8de003bb427e48#07d2cf6bd376a3c56f855aa47c8de003bb427e48"
 dependencies = [
  "anyhow",
  "bon",
- "cc-eventlog",
+ "cc-eventlog 0.5.11",
  "dcap-qvl 0.3.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "dstack-attest",
  "dstack-types",
@@ -3070,6 +3160,7 @@ version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10b99e0098aa4082912d4c649628623db6aba77335e4f4569ff5083a6448b32e"
 dependencies = [
+ "aws-lc-rs",
  "pem",
  "ring",
  "rustls-pki-types",
@@ -3204,7 +3295,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.16",
  "libc",
- "untrusted",
+ "untrusted 0.9.0",
  "windows-sys 0.52.0",
 ]
 
@@ -3337,7 +3428,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -3351,6 +3442,17 @@ name = "ryu"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
+
+[[package]]
+name = "saphyr-parser-bw"
+version = "0.0.610"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d643f5e972f17219245b82f038c22cd3c74320bb17c6e8f7e8537de268b1bc6"
+dependencies = [
+ "arraydeque",
+ "smallvec",
+ "thiserror 2.0.17",
+]
 
 [[package]]
 name = "scale-info"
@@ -3431,6 +3533,26 @@ dependencies = [
  "base64 0.13.1",
  "hex",
  "serde",
+]
+
+[[package]]
+name = "serde-saphyr"
+version = "0.0.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "546b4da4f679832602a8f8ab8ddc10b6b1d2e1a13b4f9dddcaee499436fa06ad"
+dependencies = [
+ "ahash",
+ "annotate-snippets",
+ "base64 0.22.1",
+ "encoding_rs_io",
+ "getrandom 0.3.4",
+ "nohash-hasher",
+ "num-traits",
+ "regex",
+ "saphyr-parser-bw",
+ "serde",
+ "smallvec",
+ "zmij",
 ]
 
 [[package]]
@@ -3606,8 +3728,8 @@ checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "size-parser"
-version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+version = "0.5.11"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=07d2cf6bd376a3c56f855aa47c8de003bb427e48#07d2cf6bd376a3c56f855aa47c8de003bb427e48"
 dependencies = [
  "anyhow",
  "serde",
@@ -3757,7 +3879,26 @@ version = "0.5.8"
 source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
 dependencies = [
  "anyhow",
- "cc-eventlog",
+ "cc-eventlog 0.5.8",
+ "fs-err",
+ "hex",
+ "libc",
+ "parity-scale-codec",
+ "serde",
+ "serde-human-bytes",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.17",
+ "vsock",
+]
+
+[[package]]
+name = "tdx-attest"
+version = "0.5.11"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=07d2cf6bd376a3c56f855aa47c8de003bb427e48#07d2cf6bd376a3c56f855aa47c8de003bb427e48"
+dependencies = [
+ "anyhow",
+ "cc-eventlog 0.5.11",
  "fs-err",
  "hex",
  "libc",
@@ -4191,10 +4332,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
 
 [[package]]
+name = "unicode-width"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+
+[[package]]
 name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "untrusted"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "untrusted"
@@ -4754,6 +4907,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
 dependencies = [
  "asn1-rs 0.7.1",
+ "aws-lc-rs",
  "data-encoding",
  "der-parser 10.0.0",
  "lazy_static",

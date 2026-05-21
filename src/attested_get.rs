@@ -60,6 +60,7 @@ mod tests {
         file_server::static_file_server,
         test_helpers::{generate_certificate_chain_for_host, generate_tls_config},
     };
+    use mock_tdx::{MockPcsConfig, spawn_mock_pcs_server};
     use tempfile::tempdir;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -103,12 +104,14 @@ mod tests {
         });
 
         // Setup a proxy client
+        let mock_pcs_server = spawn_mock_pcs_server(MockPcsConfig::default()).await.unwrap();
+        let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
             format!("localhost:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
-            AttestationVerifier::mock(),
+            verifier,
             None,
         )
         .await

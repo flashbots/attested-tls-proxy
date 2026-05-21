@@ -10,7 +10,7 @@ repository = "https://github.com/flashbots/attested-tls-proxy"
 [dependencies]
 attested-tls-proxy = { path = ".." }
 tokio = { version = "1.48.0", features = ["full"] }
-axum = "0.8.6"
+axum = "0.8.8"
 clap = { version = "4.5.51", features = ["derive", "env"] }
 anyhow = "1.0.100"
 hex = "0.4.3"
