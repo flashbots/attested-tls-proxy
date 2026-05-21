@@ -47,9 +47,9 @@ dependencies = [
 
 [[package]]
 name = "annotate-snippets"
-version = "0.12.15"
+version = "0.12.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92570a3f9c98e7e84df84b71d0965ac99b1871fcd75a3773a3bd1bad13f64cf7"
+checksum = "c86cd1c51b95d71dde52bca69ed225008f6ff4c8cc825b08042aa1ef823e1980"
 dependencies = [
  "anstyle",
  "memchr",
@@ -223,7 +223,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#6fb445686cfae4242080e76085e2b7bbbb22a678"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#5ad5ff6d42e94ad42f5c1a5c996d033107e2338a"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
@@ -231,7 +231,7 @@ dependencies = [
  "dcap-qvl",
  "hex",
  "http",
- "mock-tdx",
+ "mock-tdx 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro)",
  "nsm-nitro-enclave-utils",
  "nsm-nitro-enclave-utils-keygen",
  "num-bigint",
@@ -281,7 +281,7 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#6fb445686cfae4242080e76085e2b7bbbb22a678"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#5ad5ff6d42e94ad42f5c1a5c996d033107e2338a"
 dependencies = [
  "anyhow",
  "attestation",
@@ -313,6 +313,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jsonrpsee",
+ "mock-tdx 0.0.1 (git+https://github.com/flashbots/attested-tls?branch=main)",
  "nested-tls",
  "p256",
  "pccs",
@@ -1262,7 +1263,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1468,7 +1469,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2387,9 +2388,9 @@ dependencies = [
 
 [[package]]
 name = "memchr"
-version = "2.8.0"
+version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
+checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
 name = "memoffset"
@@ -2455,7 +2456,30 @@ dependencies = [
 [[package]]
 name = "mock-tdx"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#6fb445686cfae4242080e76085e2b7bbbb22a678"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
+dependencies = [
+ "axum",
+ "dcap-qvl",
+ "hex",
+ "p256",
+ "parity-scale-codec",
+ "rcgen 0.14.7",
+ "serde",
+ "serde-saphyr",
+ "serde_bytes",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "urlencoding",
+ "x509-parser 0.18.1",
+ "yasna 0.5.2",
+]
+
+[[package]]
+name = "mock-tdx"
+version = "0.0.1"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#5ad5ff6d42e94ad42f5c1a5c996d033107e2338a"
 dependencies = [
  "axum",
  "dcap-qvl",
@@ -2496,7 +2520,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#6fb445686cfae4242080e76085e2b7bbbb22a678"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#5ad5ff6d42e94ad42f5c1a5c996d033107e2338a"
 dependencies = [
  "rustls",
  "tokio",
@@ -2592,7 +2616,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2713,9 +2737,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openssl"
-version = "0.10.79"
+version = "0.10.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf0b434746ee2832f4f0baf10137e1cabb18cbe6912c69e2e33263c45250f542"
+checksum = "a45fa2aa886c42762255da344f0a0d313e254066c46aad76f300c3d3da62d967"
 dependencies = [
  "bitflags 2.10.0",
  "cfg-if",
@@ -2747,9 +2771,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.115"
+version = "0.9.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "158fe5b292746440aa6e7a7e690e55aeb72d41505e2804c23c6973ad0e9c9781"
+checksum = "f28a22dc7140cda5f096e5e7724a6962ca81a7f8bfd2979f9b18c11af56318c4"
 dependencies = [
  "cc",
  "libc",
@@ -2861,7 +2885,7 @@ dependencies = [
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#6fb445686cfae4242080e76085e2b7bbbb22a678"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fnitro#5ad5ff6d42e94ad42f5c1a5c996d033107e2338a"
 dependencies = [
  "anyhow",
  "dcap-qvl",
@@ -3127,7 +3151,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.1",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3486,7 +3510,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3661,7 +3685,7 @@ checksum = "546b4da4f679832602a8f8ab8ddc10b6b1d2e1a13b4f9dddcaee499436fa06ad"
 dependencies = [
  "ahash",
  "annotate-snippets",
- "base64 0.21.7",
+ "base64 0.22.1",
  "encoding_rs_io",
  "getrandom 0.3.4",
  "nohash-hasher",
@@ -4063,7 +4087,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
