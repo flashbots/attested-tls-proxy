@@ -182,9 +182,21 @@ enum CliCommand {
         /// Socket address to listen on for the outer nested-TLS listener, if enabled
         #[arg(long)]
         outer_listen_addr: Option<SocketAddr>,
+        /// VSOCK CID to bind for the outer nested-TLS listener
+        #[arg(long, default_value_t = VMADDR_CID_ANY, env = "OUTER_VSOCK_CID")]
+        outer_vsock_cid: u32,
+        /// VSOCK port to bind for the outer nested-TLS listener, if enabled
+        #[arg(long, env = "OUTER_VSOCK_PORT")]
+        outer_vsock_port: Option<u32>,
         /// Socket address to listen on for the inner-only attested TLS listener
         #[arg(long)]
         inner_listen_addr: Option<SocketAddr>,
+        /// VSOCK CID to bind for the inner-only attested TLS listener
+        #[arg(long, default_value_t = VMADDR_CID_ANY, env = "INNER_VSOCK_CID")]
+        inner_vsock_cid: u32,
+        /// VSOCK port to bind for the inner-only attested TLS listener, if enabled
+        #[arg(long, env = "INNER_VSOCK_PORT")]
+        inner_vsock_port: Option<u32>,
         /// DNS name to embed into the inner attested certificate when no outer listener is used
         #[arg(long)]
         inner_certificate_name: Option<String>,
@@ -482,7 +494,11 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::AttestedFileServer {
             path_to_serve,
             outer_listen_addr,
+            outer_vsock_cid,
+            outer_vsock_port,
             inner_listen_addr,
+            inner_vsock_cid,
+            inner_vsock_port,
             inner_certificate_name,
             server_attestation_type,
             tls_private_key_path,
@@ -491,9 +507,13 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let tls_cert_and_chain =
                 load_tls_cert_and_key_server(tls_certificate_path, tls_private_key_path)?;
+            let outer_listen =
+                optional_listen_endpoint("outer", outer_listen_addr, outer_vsock_cid, outer_vsock_port)?;
+            let inner_listen =
+                optional_listen_endpoint("inner", inner_listen_addr, inner_vsock_cid, inner_vsock_port)?;
             validate_listener_args(
-                inner_listen_addr.is_some(),
-                outer_listen_addr.is_some(),
+                inner_listen.is_some(),
+                outer_listen.is_some(),
                 tls_cert_and_chain.is_some(),
             )?;
 
@@ -507,8 +527,8 @@ async fn main() -> anyhow::Result<()> {
             attested_file_server(AttestedFileServerConfig {
                 path_to_serve,
                 outer_cert_and_key: tls_cert_and_chain,
-                outer_listen_addr,
-                inner_listen_addr,
+                outer_listen_addr: outer_listen,
+                inner_listen_addr: inner_listen,
                 inner_certificate_name,
                 attestation_generator,
                 attestation_verifier,

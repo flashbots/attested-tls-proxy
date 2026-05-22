@@ -1,7 +1,7 @@
 //! Static HTTP file server provided by an attested TLS proxy server
 use crate::{
     AttestationGenerator, AttestationVerifier, OuterTlsConfig, OuterTlsMode, ProxyError,
-    ProxyServer, TlsCertAndKey,
+    ProxyListenAddr, ProxyServer, TlsCertAndKey,
 };
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
@@ -13,10 +13,10 @@ pub struct AttestedFileServerConfig<A> {
     pub path_to_serve: PathBuf,
     /// TLS certificate and key for the optional outer listener
     pub outer_cert_and_key: Option<TlsCertAndKey>,
-    /// Bind address for the optional outer nested-TLS listener
-    pub outer_listen_addr: Option<A>,
-    /// Bind address for the optional inner attested-TLS listener
-    pub inner_listen_addr: Option<A>,
+    /// Bind address (TCP or vsock) for the optional outer nested-TLS listener
+    pub outer_listen_addr: Option<ProxyListenAddr<A>>,
+    /// Bind address (TCP or vsock) for the optional inner attested-TLS listener
+    pub inner_listen_addr: Option<ProxyListenAddr<A>>,
     /// Certificate name to embed in the inner attested certificate
     pub inner_certificate_name: Option<String>,
     /// Attestation generator used by the proxy server
@@ -55,7 +55,7 @@ where
         (None, None) => None,
     };
 
-    let server = ProxyServer::new(
+    let server = ProxyServer::new_with_listeners(
         outer_session,
         inner_listen_addr,
         inner_certificate_name,
