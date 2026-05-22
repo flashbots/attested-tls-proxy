@@ -507,10 +507,18 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let tls_cert_and_chain =
                 load_tls_cert_and_key_server(tls_certificate_path, tls_private_key_path)?;
-            let outer_listen =
-                optional_listen_endpoint("outer", outer_listen_addr, outer_vsock_cid, outer_vsock_port)?;
-            let inner_listen =
-                optional_listen_endpoint("inner", inner_listen_addr, inner_vsock_cid, inner_vsock_port)?;
+            let outer_listen = optional_listen_endpoint(
+                "outer",
+                outer_listen_addr,
+                outer_vsock_cid,
+                outer_vsock_port,
+            )?;
+            let inner_listen = optional_listen_endpoint(
+                "inner",
+                inner_listen_addr,
+                inner_vsock_cid,
+                inner_vsock_port,
+            )?;
             validate_listener_args(
                 inner_listen.is_some(),
                 outer_listen.is_some(),
