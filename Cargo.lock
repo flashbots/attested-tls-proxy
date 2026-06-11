@@ -536,23 +536,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "attestation-provider-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "attested-tls-proxy",
- "axum",
- "clap",
- "hex",
- "parity-scale-codec",
- "reqwest",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "attested-tls"
 version = "0.0.1"
 dependencies = [
