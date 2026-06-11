@@ -7,6 +7,10 @@ use std::task::{Context, Poll};
 pub const ALPN_H2: &[u8] = b"h2";
 pub const ALPN_HTTP11: &[u8] = b"http/1.1";
 
+type ProxyClientTlsStream =
+    tokio_rustls::client::TlsStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
+type ProxyClientInnerOnlyTlsStream = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
+
 /// Supported HTTP versions
 #[derive(Debug)]
 pub enum HttpVersion {
@@ -55,13 +59,20 @@ impl HttpVersion {
 type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
 type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
 
-type Http1Connection = hyper::client::conn::http1::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+type Http1Connection =
+    hyper::client::conn::http1::Connection<TokioIo<ProxyClientTlsStream>, hyper::body::Incoming>;
+type Http1InnerOnlyConnection = hyper::client::conn::http1::Connection<
+    TokioIo<ProxyClientInnerOnlyTlsStream>,
     hyper::body::Incoming,
 >;
 
 type Http2Connection = hyper::client::conn::http2::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+    TokioIo<ProxyClientTlsStream>,
+    hyper::body::Incoming,
+    crate::TokioExecutor,
+>;
+type Http2InnerOnlyConnection = hyper::client::conn::http2::Connection<
+    TokioIo<ProxyClientInnerOnlyTlsStream>,
     hyper::body::Incoming,
     crate::TokioExecutor,
 >;
@@ -101,7 +112,9 @@ pin_project_lite::pin_project! {
     #[project = HttpConnectionProj]
     pub enum HttpConnection {
         Http1 { #[pin] inner: Http1Connection },
+        Http1InnerOnly { #[pin] inner: Http1InnerOnlyConnection },
         Http2 { #[pin] inner: Http2Connection },
+        Http2InnerOnly { #[pin] inner: Http2InnerOnlyConnection },
     }
 }
 
@@ -117,13 +130,27 @@ impl From<Http2Connection> for HttpConnection {
     }
 }
 
+impl From<Http1InnerOnlyConnection> for HttpConnection {
+    fn from(inner: Http1InnerOnlyConnection) -> Self {
+        Self::Http1InnerOnly { inner }
+    }
+}
+
+impl From<Http2InnerOnlyConnection> for HttpConnection {
+    fn from(inner: Http2InnerOnlyConnection) -> Self {
+        Self::Http2InnerOnly { inner }
+    }
+}
+
 impl Future for HttpConnection {
     type Output = Result<(), hyper::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.project() {
             HttpConnectionProj::Http1 { inner } => inner.poll(cx),
+            HttpConnectionProj::Http1InnerOnly { inner } => inner.poll(cx),
             HttpConnectionProj::Http2 { inner } => inner.poll(cx),
+            HttpConnectionProj::Http2InnerOnly { inner } => inner.poll(cx),
         }
     }
 }
