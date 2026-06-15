@@ -9,16 +9,32 @@ pub async fn attested_get(
     url_path: &str,
     attestation_verifier: AttestationVerifier,
     remote_certificate: Option<CertificateDer<'static>>,
+    inner_session_only: bool,
 ) -> Result<reqwest::Response, ProxyError> {
-    let proxy_client = ProxyClient::new(
-        None,
-        "127.0.0.1:0".to_string(),
-        target_addr,
-        AttestationGenerator::with_no_attestation(),
-        attestation_verifier,
-        remote_certificate,
-    )
-    .await?;
+    let proxy_client = if inner_session_only {
+        if remote_certificate.is_some() {
+            return Err(ProxyError::InnerOnlyClientAuthUnsupported);
+        }
+
+        ProxyClient::new_inner_only(
+            None,
+            "127.0.0.1:0".to_string(),
+            target_addr,
+            AttestationGenerator::with_no_attestation(),
+            attestation_verifier,
+        )
+        .await?
+    } else {
+        ProxyClient::new(
+            None,
+            "127.0.0.1:0".to_string(),
+            target_addr,
+            AttestationGenerator::with_no_attestation(),
+            attestation_verifier,
+            remote_certificate,
+        )
+        .await?
+    };
 
     attested_get_with_client(proxy_client, url_path).await
 }
@@ -125,6 +141,54 @@ mod tests {
             .unwrap();
 
         // Check the response
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap()
+            .to_string();
+
+        let body = response.bytes().await.unwrap();
+        assert_eq!(content_type, "text/plain");
+        assert_eq!(&body.to_vec(), b"bar");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_attested_get_inner_only() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("foo.txt");
+        tokio::fs::write(file_path, b"bar").await.unwrap();
+
+        let target_addr = static_file_server(dir.path().to_path_buf()).await.unwrap();
+
+        let proxy_server = ProxyServer::new(
+            None::<OuterTlsConfig<&str>>,
+            Some("127.0.0.1:0"),
+            None,
+            target_addr.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let proxy_addr = proxy_server.inner_local_addr().unwrap().unwrap();
+
+        tokio::spawn(async move {
+            proxy_server.accept().await.unwrap();
+        });
+
+        let response = attested_get(
+            format!("{}:{}", proxy_addr.ip(), proxy_addr.port()),
+            "foo.txt",
+            AttestationVerifier::expect_none(),
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)

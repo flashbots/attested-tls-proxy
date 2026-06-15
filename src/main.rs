@@ -171,6 +171,9 @@ enum CliCommand {
     AttestedGet {
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
+        /// Connect directly to the server's inner attested TLS listener instead of nested TLS
+        #[arg(long)]
+        inner_session_only: bool,
         #[arg(long)]
         /// path to GET (defaults to '/')
         url_path: Option<String>,
@@ -447,9 +450,12 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::AttestedGet {
             target_addr,
+            inner_session_only,
             url_path,
             tls_ca_certificate,
         } => {
+            validate_client_args(inner_session_only, None, None, tls_ca_certificate.as_ref())?;
+
             let remote_tls_cert = match tls_ca_certificate {
                 Some(remote_cert_filename) => Some(
                     load_certs_pem(remote_cert_filename)?
@@ -465,6 +471,7 @@ async fn main() -> anyhow::Result<()> {
                 &url_path.unwrap_or_default(),
                 attestation_verifier,
                 remote_tls_cert,
+                inner_session_only,
             )
             .await?;
 
