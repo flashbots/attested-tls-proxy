@@ -223,7 +223,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#05a79a3f16a6d074bc10ce7aa29a3cd804fdc613"
 dependencies = [
  "anyhow",
  "az-tdx-vtpm",
@@ -257,7 +257,7 @@ dependencies = [
 [[package]]
 name = "attested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#05a79a3f16a6d074bc10ce7aa29a3cd804fdc613"
 dependencies = [
  "anyhow",
  "attestation",
@@ -2385,7 +2385,7 @@ dependencies = [
 [[package]]
 name = "mock-tdx"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#05a79a3f16a6d074bc10ce7aa29a3cd804fdc613"
 dependencies = [
  "axum",
  "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
@@ -2426,7 +2426,7 @@ dependencies = [
 [[package]]
 name = "nested-tls"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#05a79a3f16a6d074bc10ce7aa29a3cd804fdc613"
 dependencies = [
  "rustls",
  "tokio",
@@ -2738,7 +2738,7 @@ dependencies = [
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#eaa10f0528c8c561273717913596de65cff807b3"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#05a79a3f16a6d074bc10ce7aa29a3cd804fdc613"
 dependencies = [
  "anyhow",
  "dcap-qvl 0.3.12 (git+https://github.com/Phala-Network/dcap-qvl.git?rev=f1dcc65371e941a7b83e3234833d23a1fb232ab1)",
