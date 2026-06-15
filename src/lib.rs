@@ -258,6 +258,15 @@ impl ProxyServer {
             .map(OuterTlsConfig::certificate_name)
             .transpose()?
             .or(inner_certificate_name);
+
+        let certificate_name = match (certificate_name, inner_local.as_ref()) {
+            (Some(certificate_name), _) => Some(certificate_name),
+            (None, Some(inner_local)) => {
+                Some(inner_listen_addr_certificate_name(inner_local).await?)
+            }
+            (None, None) => None,
+        };
+
         let inner_server_config = Arc::new(
             build_inner_server_config(
                 attestation_generator,
@@ -622,6 +631,19 @@ impl ProxyServer {
             }
         }
     }
+}
+
+/// Derive the default certificate name from the first resolved inner listen address.
+async fn inner_listen_addr_certificate_name<I>(inner_local: &I) -> Result<String, ProxyError>
+where
+    I: ToSocketAddrs + ?Sized,
+{
+    let mut socket_addrs = tokio::net::lookup_host(inner_local).await?;
+    let socket_addr = socket_addrs.next().ok_or_else(|| {
+        std::io::Error::other("inner listen address resolved to no socket addresses")
+    })?;
+
+    Ok(socket_addr.ip().to_string())
 }
 
 /// Helper to create a binary http body
@@ -1532,7 +1554,7 @@ mod tests {
 
         let tls_connector = TlsConnector::from(Arc::new(client_config));
         let outbound_stream = TcpStream::connect(inner_addr).await.unwrap();
-        let domain = ServerName::try_from("localhost".to_string()).unwrap();
+        let domain = ServerName::try_from(inner_addr.ip().to_string()).unwrap();
         let mut tls_stream = tls_connector
             .connect(domain, outbound_stream)
             .await
@@ -1574,7 +1596,7 @@ mod tests {
         let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_inner_only_with_tls_config(
             "127.0.0.1:0",
-            format!("localhost:{}", proxy_addr.port()),
+            format!("{}:{}", proxy_addr.ip(), proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
             verifier,
             None,
@@ -1647,7 +1669,7 @@ mod tests {
 
         let proxy_client = ProxyClient::new_inner_only_with_tls_config(
             "127.0.0.1:0",
-            format!("localhost:{}", proxy_addr.port()),
+            format!("{}:{}", proxy_addr.ip(), proxy_addr.port()),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             Some(client_cert_chain),

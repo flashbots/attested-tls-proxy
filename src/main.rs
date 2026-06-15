@@ -99,7 +99,8 @@ enum CliCommand {
         /// Socket address to listen on for the inner-only attested TLS listener
         #[arg(long)]
         inner_listen_addr: Option<SocketAddr>,
-        /// DNS name to embed into the inner attested certificate when no outer listener is used
+        /// DNS name to embed into the inner attested certificate.
+        /// Defaults to the inner listen address IP when omitted.
         #[arg(long)]
         inner_certificate_name: Option<String>,
         /// The hostname:port or ip:port of the target service to forward traffic to
