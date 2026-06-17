@@ -18,7 +18,7 @@ pub struct AttestedFileServerConfig<A> {
     /// Bind address for the optional inner attested-TLS listener
     pub inner_listen_addr: Option<A>,
     /// Certificate name to embed in the inner attested certificate.
-    /// Defaults to the inner listen address IP when omitted.
+    /// Defaults to the inner listen address IP when omitted, or `localhost` for wildcard binds.
     pub inner_certificate_name: Option<String>,
     /// Attestation generator used by the proxy server
     pub attestation_generator: AttestationGenerator,

@@ -163,7 +163,7 @@ mod tests {
 
         let proxy_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
-            Some("127.0.0.1:0"),
+            Some("0.0.0.0:0"),
             None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
@@ -180,7 +180,7 @@ mod tests {
         });
 
         let response = attested_get(
-            format!("{}:{}", proxy_addr.ip(), proxy_addr.port()),
+            format!("127.0.0.1:{}", proxy_addr.port()),
             "foo.txt",
             AttestationVerifier::expect_none(),
             None,

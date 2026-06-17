@@ -643,6 +643,10 @@ where
         std::io::Error::other("inner listen address resolved to no socket addresses")
     })?;
 
+    if socket_addr.ip().is_unspecified() {
+        return Ok("localhost".to_string());
+    }
+
     Ok(socket_addr.ip().to_string())
 }
 
@@ -1044,7 +1048,10 @@ impl ProxyClient {
     ) -> Result<(HttpSender, HttpConnection, AttestationExchangeMessage), ProxyError> {
         let outbound_stream = tokio::net::TcpStream::connect(target).await?;
 
-        let domain = server_name_from_host(target)?;
+        let domain = match tls_connector {
+            ProxyTlsConnector::InnerOnly(_) => ServerName::try_from("localhost".to_string())?,
+            ProxyTlsConnector::Nested(_) => server_name_from_host(target)?,
+        };
         match tls_connector {
             ProxyTlsConnector::Nested(connector) => {
                 let tls_stream = connector.connect(domain, outbound_stream).await?;
@@ -1522,7 +1529,7 @@ mod tests {
 
         let proxy_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
-            Some("127.0.0.1:0"),
+            Some("0.0.0.0:0"),
             None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
@@ -1553,8 +1560,10 @@ mod tests {
         ensure_proxy_alpn_protocols(&mut client_config.alpn_protocols);
 
         let tls_connector = TlsConnector::from(Arc::new(client_config));
-        let outbound_stream = TcpStream::connect(inner_addr).await.unwrap();
-        let domain = ServerName::try_from(inner_addr.ip().to_string()).unwrap();
+        let outbound_stream = TcpStream::connect(format!("127.0.0.1:{}", inner_addr.port()))
+            .await
+            .unwrap();
+        let domain = ServerName::try_from("localhost".to_string()).unwrap();
         let mut tls_stream = tls_connector
             .connect(domain, outbound_stream)
             .await
@@ -1574,7 +1583,7 @@ mod tests {
 
         let proxy_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
-            Some("127.0.0.1:0"),
+            Some("0.0.0.0:0"),
             None,
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
@@ -1596,7 +1605,7 @@ mod tests {
         let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_client = ProxyClient::new_inner_only_with_tls_config(
             "127.0.0.1:0",
-            format!("{}:{}", proxy_addr.ip(), proxy_addr.port()),
+            format!("127.0.0.1:{}", proxy_addr.port()),
             AttestationGenerator::with_no_attestation(),
             verifier,
             None,
@@ -1651,7 +1660,7 @@ mod tests {
         let verifier = AttestationVerifier::mock_with_pccs(mock_pcs_server.base_url.clone());
         let proxy_server = ProxyServer::new(
             None::<OuterTlsConfig<&str>>,
-            Some("127.0.0.1:0"),
+            Some("0.0.0.0:0"),
             None,
             target_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
@@ -1669,7 +1678,7 @@ mod tests {
 
         let proxy_client = ProxyClient::new_inner_only_with_tls_config(
             "127.0.0.1:0",
-            format!("{}:{}", proxy_addr.ip(), proxy_addr.port()),
+            format!("127.0.0.1:{}", proxy_addr.port()),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
             Some(client_cert_chain),
@@ -1712,6 +1721,15 @@ mod tests {
             hostname_from_cert(cert_chain.first().unwrap()).unwrap(),
             "custom.inner.name"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inner_only_server_defaults_to_localhost_for_unspecified_bind_address() {
+        let name = inner_listen_addr_certificate_name(&"0.0.0.0:0")
+            .await
+            .unwrap();
+
+        assert_eq!(name, "localhost");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -65,7 +65,8 @@ enum CliCommand {
         /// Socket address to listen on
         #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
         listen_addr: SocketAddr,
-        /// Connect directly to the server's inner attested TLS listener instead of nested TLS
+        /// Connect directly to the server's inner attested TLS listener instead of nested TLS.
+        /// Assumes the server certificate name is `localhost`.
         #[arg(long)]
         inner_session_only: bool,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
@@ -100,7 +101,7 @@ enum CliCommand {
         #[arg(long)]
         inner_listen_addr: Option<SocketAddr>,
         /// DNS name to embed into the inner attested certificate.
-        /// Defaults to the inner listen address IP when omitted.
+        /// Defaults to the inner listen address IP when omitted, or `localhost` for wildcard binds.
         #[arg(long)]
         inner_certificate_name: Option<String>,
         /// The hostname:port or ip:port of the target service to forward traffic to
@@ -171,7 +172,8 @@ enum CliCommand {
     AttestedGet {
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
-        /// Connect directly to the server's inner attested TLS listener instead of nested TLS
+        /// Connect directly to the server's inner attested TLS listener instead of nested TLS.
+        /// Assumes the server certificate name is `localhost`.
         #[arg(long)]
         inner_session_only: bool,
         #[arg(long)]
