@@ -623,6 +623,7 @@ dependencies = [
  "hyper-util",
  "jsonrpsee",
  "p256",
+ "pccs",
  "pem-rfc7468",
  "pin-project-lite",
  "pkcs1",

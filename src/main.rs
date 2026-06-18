@@ -226,10 +226,10 @@ async fn main() -> anyhow::Result<()> {
 
     let attestation_verifier = AttestationVerifier {
         measurement_policy,
-        pccs_url: cli.pccs_url,
+        pccs_url: cli.pccs_url.clone(),
         dump_dcap_quotes: cli.log_dcap_quote,
         override_azure_outdated_tcb: cli.override_azure_outdated_tcb,
-        internal_pccs: None, // TODO
+        internal_pccs: Some(pccs::Pccs::new_without_prewarm(cli.pccs_url)),
     };
 
     match cli.command {
