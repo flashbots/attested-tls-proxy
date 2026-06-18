@@ -174,10 +174,10 @@ impl AttestedTlsServer {
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
         // If we are in a CVM, generate an attestation
+        // TODO put in spawn_blocking
         let attestation = self
             .attestation_generator
-            .generate_attestation(input_data)
-            .await?
+            .generate_attestation(input_data)?
             .encode();
 
         // Write our attestation to the channel, with length prefix
@@ -193,7 +193,7 @@ impl AttestedTlsServer {
         let remote_attestation_type = remote_attestation_message.attestation_type;
 
         // If we expect an attestaion from the client, verify it and get measurements
-        let measurements = if self.attestation_verifier.has_remote_attestion() {
+        let measurements = if self.attestation_verifier.has_remote_attestation() {
             let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
 
             self.attestation_verifier
@@ -382,9 +382,9 @@ impl AttestedTlsClient {
         // If we are in a CVM, provide an attestation
         let attestation = if self.attestation_generator.attestation_type != AttestationType::None {
             let local_input_data = compute_report_input(self.cert_chain.as_deref(), exporter)?;
+            // TODO put in spawn_blocking
             self.attestation_generator
-                .generate_attestation(local_input_data)
-                .await?
+                .generate_attestation(local_input_data)?
                 .encode()
         } else {
             AttestationExchangeMessage::without_attestation().encode()
@@ -745,8 +745,9 @@ mod tests {
         let attestation_verifier = AttestationVerifier {
             measurement_policy,
             pccs_url: None,
-            log_dcap_quote: false,
+            dump_dcap_quotes: false,
             override_azure_outdated_tcb: false,
+            internal_pccs: None,
         };
 
         let client = AttestedTlsClient::new_with_tls_config(
