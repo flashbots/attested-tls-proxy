@@ -177,10 +177,12 @@ impl AttestedTlsServer {
         // If we are in a CVM, generate an attestation off the async runtime thread.
         let attestation = {
             let attestation_generator = self.attestation_generator.clone();
-            tokio::task::spawn_blocking(move || attestation_generator.generate_attestation(input_data))
-                .await
-                .map_err(AttestedTlsError::from)??
-                .encode()
+            tokio::task::spawn_blocking(move || {
+                attestation_generator.generate_attestation(input_data)
+            })
+            .await
+            .map_err(AttestedTlsError::from)??
+            .encode()
         };
 
         // Write our attestation to the channel, with length prefix
@@ -386,10 +388,12 @@ impl AttestedTlsClient {
         let attestation = if self.attestation_generator.attestation_type != AttestationType::None {
             let local_input_data = compute_report_input(self.cert_chain.as_deref(), exporter)?;
             let attestation_generator = self.attestation_generator.clone();
-            tokio::task::spawn_blocking(move || attestation_generator.generate_attestation(local_input_data))
-                .await
-                .map_err(AttestedTlsError::from)??
-                .encode()
+            tokio::task::spawn_blocking(move || {
+                attestation_generator.generate_attestation(local_input_data)
+            })
+            .await
+            .map_err(AttestedTlsError::from)??
+            .encode()
         } else {
             AttestationExchangeMessage::without_attestation().encode()
         };
