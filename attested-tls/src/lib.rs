@@ -26,6 +26,7 @@ use x509_parser::parse_x509_certificate;
 use std::num::TryFromIntError;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::task::JoinError;
 use tokio_rustls::rustls::RootCertStore;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio_rustls::{
@@ -173,12 +174,14 @@ impl AttestedTlsServer {
         // Get the TLS certficate chain of the client, if there is one
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
-        // If we are in a CVM, generate an attestation
-        // TODO put in spawn_blocking
-        let attestation = self
-            .attestation_generator
-            .generate_attestation(input_data)?
-            .encode();
+        // If we are in a CVM, generate an attestation off the async runtime thread.
+        let attestation = {
+            let attestation_generator = self.attestation_generator.clone();
+            tokio::task::spawn_blocking(move || attestation_generator.generate_attestation(input_data))
+                .await
+                .map_err(AttestedTlsError::from)??
+                .encode()
+        };
 
         // Write our attestation to the channel, with length prefix
         let attestation_length_prefix = checked_length_prefix(&attestation)?;
@@ -382,9 +385,10 @@ impl AttestedTlsClient {
         // If we are in a CVM, provide an attestation
         let attestation = if self.attestation_generator.attestation_type != AttestationType::None {
             let local_input_data = compute_report_input(self.cert_chain.as_deref(), exporter)?;
-            // TODO put in spawn_blocking
-            self.attestation_generator
-                .generate_attestation(local_input_data)?
+            let attestation_generator = self.attestation_generator.clone();
+            tokio::task::spawn_blocking(move || attestation_generator.generate_attestation(local_input_data))
+                .await
+                .map_err(AttestedTlsError::from)??
                 .encode()
         } else {
             AttestationExchangeMessage::without_attestation().encode()
@@ -529,6 +533,8 @@ pub enum AttestedTlsError {
     NotTls13,
     #[error("Attestation length {length} exceeds maximum {max}")]
     AttestationTooLarge { length: usize, max: usize },
+    #[error("Blocking task failed: {0}")]
+    Join(#[from] JoinError),
 }
 
 /// Given a byte array, encode its length as a 4 byte big endian u32
