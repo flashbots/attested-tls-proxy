@@ -2,6 +2,25 @@
 use crate::{AttestationGenerator, AttestationVerifier, ProxyClient, ProxyError};
 use tokio_rustls::rustls::pki_types::CertificateDer;
 
+/// Split an `attested-get` target into a proxy target and an optional request path.
+///
+/// This lets users write `127.0.0.1:3000/some/path` and still keep the proxy
+/// connection target separate from the HTTP request path.
+pub fn split_target_and_path(target: &str) -> (String, Option<String>) {
+    let Some((target_addr, url_path)) = target.split_once('/') else {
+        return (target.to_string(), None);
+    };
+
+    let url_path = url_path.trim_start_matches('/').to_string();
+    let url_path = if url_path.is_empty() {
+        None
+    } else {
+        Some(url_path)
+    };
+
+    (target_addr.to_string(), url_path)
+}
+
 /// Start a proxy-client, send a single HTTP GET request to the given path and return the
 /// [reqwest::Response]
 pub async fn attested_get(
@@ -137,5 +156,19 @@ mod tests {
         let body = response.bytes().await.unwrap();
         assert_eq!(content_type, "text/plain");
         assert_eq!(&body.to_vec(), b"bar");
+    }
+
+    #[test]
+    fn split_target_and_path_handles_embedded_path() {
+        let (target, path) = split_target_and_path("127.0.0.1:3000/some/path");
+        assert_eq!(target, "127.0.0.1:3000");
+        assert_eq!(path.as_deref(), Some("some/path"));
+    }
+
+    #[test]
+    fn split_target_and_path_leaves_bare_target_alone() {
+        let (target, path) = split_target_and_path("127.0.0.1:3000");
+        assert_eq!(target, "127.0.0.1:3000");
+        assert_eq!(path, None);
     }
 }
