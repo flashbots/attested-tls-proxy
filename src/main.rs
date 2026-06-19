@@ -226,9 +226,10 @@ async fn main() -> anyhow::Result<()> {
 
     let attestation_verifier = AttestationVerifier {
         measurement_policy,
-        pccs_url: cli.pccs_url,
-        log_dcap_quote: cli.log_dcap_quote,
+        pccs_url: None,
+        dump_dcap_quotes: cli.log_dcap_quote,
         override_azure_outdated_tcb: cli.override_azure_outdated_tcb,
+        internal_pccs: Some(pccs::Pccs::new_without_prewarm(cli.pccs_url)),
     };
 
     match cli.command {
@@ -277,8 +278,7 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let client_attestation_generator =
-                AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)
-                    .await?;
+                AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)?;
 
             let client = if allow_self_signed {
                 let client_tls_config =
@@ -331,8 +331,7 @@ async fn main() -> anyhow::Result<()> {
             )?;
 
             let local_attestation_generator =
-                AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)
-                    .await?;
+                AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)?;
 
             let server = ProxyServer::new(
                 tls_cert_and_chain,
