@@ -1,7 +1,6 @@
 //! Helper functions used in tests
 use axum::response::IntoResponse;
 use std::{
-    collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Once},
 };
@@ -15,10 +14,9 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 static INIT: Once = Once::new();
 
-use crate::{
-    MEASUREMENT_HEADER,
-    attestation::measurements::{DcapMeasurementRegister, MultiMeasurements},
-};
+use crate::MEASUREMENT_HEADER;
+
+pub use attested_tls::attestation::measurements::mock_dcap_measurements;
 
 /// Helper to generate a self-signed certificate for testing
 pub fn generate_certificate_chain(
@@ -137,17 +135,6 @@ async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("No measurements")
         .to_string()
-}
-
-/// All-zero measurment values used in some tests
-pub fn mock_dcap_measurements() -> MultiMeasurements {
-    MultiMeasurements::Dcap(HashMap::from([
-        (DcapMeasurementRegister::MRTD, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR0, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR1, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR2, [0u8; 48]),
-        (DcapMeasurementRegister::RTMR3, [0u8; 48]),
-    ]))
 }
 
 pub fn init_tracing() {
