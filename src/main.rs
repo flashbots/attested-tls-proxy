@@ -12,7 +12,7 @@ use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
     AttestationGenerator, ProxyClient, ProxyServer,
-    attested_get::attested_get,
+    attested_get::{attested_get, split_target_and_path},
     attested_tls::{
         TlsCertAndKey,
         attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy},
@@ -156,17 +156,19 @@ enum CliCommand {
     /// Start a proxy-client, send a single HTTP GET request to the given path and print the
     /// response to standard output
     AttestedGet {
-        /// The hostname:port or ip:port of the proxy server (port defaults to 443)
+        /// The hostname:port or ip:port of the proxy server (port defaults to 443) together
+        /// with the URL path to GET from the target service, eg: 127.0.0.1:3000/foobar
         target_addr: String,
-        #[arg(long)]
-        /// path to GET (defaults to '/')
-        url_path: Option<String>,
         /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
         #[arg(long)]
         tls_ca_certificate: Option<PathBuf>,
         /// Enables verification of self-signed TLS certificates
         #[arg(long)]
         allow_self_signed: bool,
+        /// Optional path to GET (defaults to '/') - this takes precedence over giving the path
+        /// as part of the target address.
+        #[arg(long)]
+        url_path: Option<String>,
     },
 }
 
@@ -428,9 +430,12 @@ async fn main() -> anyhow::Result<()> {
                 None => None,
             };
 
+            let (target_addr, embedded_url_path) = split_target_and_path(&target_addr);
+            let url_path = url_path.or(embedded_url_path);
+
             let mut response = attested_get(
                 target_addr,
-                &url_path.unwrap_or_default(),
+                url_path.as_deref().unwrap_or("/"),
                 attestation_verifier,
                 remote_tls_cert,
                 allow_self_signed,
