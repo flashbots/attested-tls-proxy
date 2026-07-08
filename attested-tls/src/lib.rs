@@ -752,13 +752,8 @@ mod tests {
         )
         .unwrap();
 
-        let attestation_verifier = AttestationVerifier {
-            measurement_policy,
-            pccs_url: None,
-            dump_dcap_quotes: false,
-            override_azure_outdated_tcb: false,
-            internal_pccs: None,
-        };
+        let mut attestation_verifier = AttestationVerifier::mock();
+        attestation_verifier.measurement_policy = measurement_policy;
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config,
