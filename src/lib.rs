@@ -873,7 +873,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
         let measurements =
@@ -939,7 +939,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
         let measurements =
@@ -1176,7 +1176,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
 
         let res_body = res.text().await.unwrap();
 
@@ -1203,7 +1203,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
 
         let res_body = res.text().await.unwrap();
 
@@ -1338,13 +1338,8 @@ mod tests {
         )
         .unwrap();
 
-        let attestation_verifier = AttestationVerifier {
-            measurement_policy,
-            pccs_url: None,
-            dump_dcap_quotes: false,
-            override_azure_outdated_tcb: false,
-            internal_pccs: None,
-        };
+        let mut attestation_verifier = AttestationVerifier::mock();
+        attestation_verifier.measurement_policy = measurement_policy;
 
         let proxy_client_result = ProxyClient::new_with_tls_config(
             client_config,
@@ -1438,7 +1433,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
         let measurements =
@@ -1511,7 +1506,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
         let measurements =
