@@ -591,7 +591,7 @@ dependencies = [
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fcrypto-provider-agnostic#24e5ece3cb641651bab34453cbabb52d4a6e2418"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fcrypto-provider-agnostic#35c86ef6fcd4d3d74ea0d9b62214e0a8b9eff9bb"
 dependencies = [
  "anyhow",
  "attest-measure",
@@ -2971,7 +2971,7 @@ dependencies = [
 [[package]]
 name = "mock-tdx"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fcrypto-provider-agnostic#24e5ece3cb641651bab34453cbabb52d4a6e2418"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fcrypto-provider-agnostic#35c86ef6fcd4d3d74ea0d9b62214e0a8b9eff9bb"
 dependencies = [
  "axum",
  "dcap-qvl",
@@ -3377,7 +3377,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fcrypto-provider-agnostic#24e5ece3cb641651bab34453cbabb52d4a6e2418"
+source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fcrypto-provider-agnostic#35c86ef6fcd4d3d74ea0d9b62214e0a8b9eff9bb"
 dependencies = [
  "anyhow",
  "dcap-qvl",

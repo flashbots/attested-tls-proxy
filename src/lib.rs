@@ -873,7 +873,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
         let measurements =
@@ -939,7 +939,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
         let measurements =
@@ -1176,7 +1176,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let res_body = res.text().await.unwrap();
 
@@ -1203,7 +1203,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let res_body = res.text().await.unwrap();
 
@@ -1433,7 +1433,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
         let measurements =
@@ -1506,7 +1506,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(attestation_type, AttestationType::QemuTdx.as_str());
+        assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
         let measurements =
