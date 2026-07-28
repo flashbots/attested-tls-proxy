@@ -30,7 +30,7 @@ Accepted measurements for the remote party can be specified in a JSON file conta
 
 This aims to be compatible with the formatting used by `cvm-reverse-proxy`.
 
-Details and examples of the measurements file format are [in the attestation crate documentation](https://github.com/flashbots/attested-tls-proxy/blob/main/attested-tls/README.md#measurements-file).
+Details and examples of the measurements file format are [in the `attestation` crate documentation](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#measurements-file).
 
 If a measurements file is not provided, a single allowed attestation type **must** be specified using the `--allowed-remote-attestation-type` option. This may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
 
