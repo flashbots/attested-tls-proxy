@@ -42,104 +42,10 @@ In the case of attestation types `dcap-tdx`, `gcp-tdx`, and `qemu-tdx`, a standa
 
 When verifying DCAP attestations, the Intel PCS is used to retrieve collateral unless a PCCS url is provided via a command line argument. If expired TCB collateral is provided, the quote will fail to verify.
 
-### Attestation Types
+### Accepted Measurement Policies
 
-These are the attestation type names used in the measurements file.
+These are specified in the `attestation` crate documentation:
 
-- `none` - No attestation provided
-- `gcp-tdx` - DCAP TDX on Google Cloud Platform
-- `azure-tdx` - TDX on Azure, with vTPM attestation 
-- `qemu-tdx` - TDX on Qemu (no cloud platform)
-- `dcap-tdx` - DCAP TDX (platform not specified)
-
-Local attestation types can be automatically detected.
-
-## Measurements File
-
-Accepted measurements for the remote party can be specified in a JSON file containing an array of objects, each of which specifies an accepted attestation type and set of measurements.
-
-This aims to match the formatting used by `cvm-reverse-proxy`.
-
-These objects have the following fields:
-- `measurement_id` - a name used to describe the entry. For example the name and version of the CVM OS image that these measurements correspond to.
-- `attestation_type` - a string containing one of the attestation types (confidential computing platforms) described below.
-- `measurements` - an object with fields referring to the five measurement registers. Field names are the same as for the measurement headers (see below).
-
-Each measurement register entry supports two mutually exclusive fields:
-- `expected_any` - **(recommended)** an array of hex-encoded measurement values. The attestation is accepted if the actual measurement matches **any** value in the list (OR semantics).
-- `expected` - **(deprecated)** a single hex-encoded measurement value. Retained for backwards compatibility but `expected_any` should be preferred.
-
-Example using `expected_any` (recommended):
-
-```JSON
-[
-    {
-        "measurement_id": "dcap-tdx-example",
-        "attestation_type": "dcap-tdx",
-        "measurements": {
-            "0": {
-                "expected_any": [
-                    "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323"
-                ]
-            },
-            "1": {
-                "expected_any": [
-                    "da6e07866635cb34a9ffcdc26ec6622f289e625c42c39b320f29cdf1dc84390b4f89dd0b073be52ac38ca7b0a0f375bb"
-                ]
-            },
-            "2": {
-                "expected_any": [
-                    "a7157e7c5f932e9babac9209d4527ec9ed837b8e335a931517677fa746db51ee56062e3324e266e3f39ec26a516f4f71"
-                ]
-            },
-            "3": {
-                "expected_any": [
-                    "e63560e50830e22fbc9b06cdce8afe784bf111e4251256cf104050f1347cd4ad9f30da408475066575145da0b098a124"
-                ]
-            },
-            "4": {
-                "expected_any": [
-                    "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-                ]
-            }
-        }
-    }
-]
-```
-
-The `expected_any` field is useful when multiple measurement values should be accepted for a register (e.g., for different versions of the firmware):
-
-```JSON
-{
-    "0": {
-        "expected_any": [
-            "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323",
-            "abc123def456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
-        ]
-    }
-}
-```
-
-<details>
-<summary>Legacy format using deprecated <code>expected</code> field</summary>
-
-The `expected` field is deprecated but still supported for backwards compatibility:
-
-```JSON
-[
-    {
-        "measurement_id": "dcap-tdx-example",
-        "attestation_type": "dcap-tdx",
-        "measurements": {
-            "0": {
-                "expected": "47a1cc074b914df8596bad0ed13d50d561ad1effc7f7cc530ab86da7ea49ffc03e57e7da829f8cba9c629c3970505323"
-            }
-        }
-    }
-]
-```
-
-</details>
-
-The only mandatory field is `attestation_type`. If an attestation type is specified, but no measurements, *any* measurements will be accepted for this attestation type. The measurements can still be checked up-stream by the source client or target service using header injection described below. But it is then up to these external programs to reject unacceptable measurements.
-
+- [Attestation types](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#attestation-types)
+- [Measuremets file format](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#measurements-file)
+- [Portable measurement policies](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#portable-measurement-policies)

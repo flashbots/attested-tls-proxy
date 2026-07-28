@@ -26,13 +26,15 @@ One or both of the proxy-client and proxy-server may be running in a confidentia
 
 ### Measurements File
 
-Accepted measurements for the remote party can be specified in a JSON file containing an array of objects, each of which specifies an accepted attestation type and set of measurements.
+Accepted measurements for the remote party can be specified in a JSON file containing an array of objects, each of which specifies an accepted attestation type and set of measurement values or OS image hashes.
 
-This aims to match the formatting used by `cvm-reverse-proxy`.
+This aims to be compatible with the formatting used by `cvm-reverse-proxy`.
 
-Details and examples of the measurements file format are [in the attested-tls documentation](attested-tls/README.md#measurements-file).
+Details and examples of the measurements file format are [in the attestation crate documentation](https://github.com/flashbots/attested-tls-proxy/blob/main/attested-tls/README.md#measurements-file).
 
 If a measurements file is not provided, a single allowed attestation type **must** be specified using the `--allowed-remote-attestation-type` option. This may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
+
+As an alternative to specifying measurement values, OS image hashes can be specified. See [portable measurement policies](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#portable-measurement-policies) for details.
 
 ### Measurement Headers
 
@@ -64,8 +66,7 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `auto` - detect attestation type (used only when specifying the local attestation type as a command-line argument)
 - `none` - No attestation provided
 - `gcp-tdx` - DCAP TDX on Google Cloud Platform
-- `azure-tdx` - TDX on Azure, with vTPM attestation 
-- `qemu-tdx` - TDX on Qemu (no cloud platform)
+- `azure-tdx` - TDX on Azure, with vTPM attestation
 - `dcap-tdx` - DCAP TDX (platform not specified)
 
 ## Protocol Specification
