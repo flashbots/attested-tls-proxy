@@ -7,7 +7,7 @@ This is designed to be an alternative to [`cvm-reverse-proxy`](https://github.co
 
 Details of the remote-attested TLS protocol are in [attested-tls/README.md](attested-tls/README.md).  This is provided as a separate crate for other uses than HTTP proxying.
 
-The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for all requests from that proxy-client instance.
+The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for requests from that proxy-client instance. If the channel is lost, the client reconnects automatically and repeats the attestation exchange before forwarding subsequent requests.
 
 It has five subcommands:
 
@@ -29,13 +29,13 @@ One or both of the proxy-client and proxy-server may be running in a confidentia
 
 ### Measurements File
 
-Accepted measurements for the remote party can be specified in a JSON file containing an array of objects, each of which specifies an accepted attestation type and set of measurement values or OS image hashes.
+Accepted measurements for the remote party can be specified in a JSON document loaded from a local file or URL. It contains an array of objects, each of which specifies an accepted attestation type and set of measurement values or OS image hashes.
 
 This aims to be compatible with the formatting used by `cvm-reverse-proxy`.
 
 Details and examples of the measurements file format are [in the `attestation` crate documentation](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#measurements-file).
 
-If a measurements file is not provided, a single allowed attestation type **must** be specified using the `--allowed-remote-attestation-type` option. This may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
+Exactly one verification policy must be provided: either `--measurements-file` or `--allowed-remote-attestation-type`. The latter may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
 
 As an alternative to specifying measurement values, OS image hashes can be specified. See [portable measurement policies](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#portable-measurement-policies) for details.
 
@@ -72,9 +72,17 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `azure-tdx` - TDX on Azure, with vTPM attestation
 - `dcap-tdx` - DCAP TDX (platform not specified)
 
+### Other CLI Options
+
+- `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.
+- `client`, `get-tls-cert`, and `attested-get` accept `--allow-self-signed` to permit a self-signed remote TLS certificate.
+- `client` and `server` accept `--listen-addr-healthcheck` to start a separate HTTP health-check listener.
+- `get-tls-cert --out-measurements <PATH>` writes the verified remote measurements as JSON in addition to writing the certificate chain to standard output.
+- If `server` is started without `--tls-private-key-path` and `--tls-certificate-path`, it generates a self-signed certificate for its listening IP address.
+
 ## Protocol Specification
 
-A proxy-client client will immediately attempt to connect to the given proxy-server.
+A proxy-client will immediately attempt to connect to the given proxy-server.
 
 Proxy-client to proxy-server connections use TLS 1.3.
 
@@ -86,11 +94,11 @@ Following a successful attestation exchange, the client can make HTTP requests, 
 
 As described above, the server will inject measurement data into the request headers before forwarding them to the target service, and the client will inject measurement data into the response headers before forwarding them to the source client.
 
-<!-- TODO describe HTTP version negotiation details -->
+The proxy client and proxy server support HTTP/2 and HTTP/1.1 over their attested-TLS channel, with HTTP/2 preferred. The HTTP protocol is combined with the attested-TLS protocol version in ALPN, producing `flashbots-ratls/1+h2` or `flashbots-ratls/1+http/1.1`. A negotiated `flashbots-ratls/1` value without an HTTP suffix falls back to HTTP/1.1.
 
 ## Dependencies and feature flags
 
-The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix `tpm2-tss`. This dependency is currently not packaged for MacOS, meaning currently it is not possible to compile or run with the `azure` feature on MacOS. 
+The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix `tpm2-tss`. This dependency is currently not packaged for MacOS, meaning currently it is not possible to compile or run with the `azure` feature on MacOS.
 
 This feature is disabled by default. Note that without this feature, verification of azure attestations is not possible and azure attestations will be rejected with an error.
 
@@ -98,7 +106,7 @@ This feature is disabled by default. Note that without this feature, verificatio
 
 This might help give an understanding of how it works.
 
-1. Run the helper script to generate a mock certifcate authority and a TLS certificate for localhost signed by it.
+1. Run the helper script to generate a mock certificate authority and a TLS certificate for localhost signed by it.
 
 This requires `openssl` to be installed.
 
@@ -106,7 +114,7 @@ This requires `openssl` to be installed.
 ./scripts/generate-cert.sh localhost 127.0.0.1
 ```
 
-2. Start a http server to try this out with, on 127.0.01:8000
+2. Start an HTTP server to try this out with, on 127.0.0.1:8000.
 
 This requires `python3` to be installed.
 
@@ -126,7 +134,7 @@ cargo run -- server \
   127.0.0.1:8000
 ```
 
-The final positional argument is the target address - in this case the python server we started in step 3.
+The final positional argument is the target address - in this case the Python server we started in step 2.
 Note that you must specify that you accept 'none' as the remote attestation type.
 
 4. Start a proxy-client:
