@@ -210,6 +210,8 @@ mod tests {
 
     #[tokio::test]
     async fn self_signed_server_attestation() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         let cert_and_key = generate_self_signed_cert("127.0.0.1".parse().unwrap()).unwrap();
 
         let server_config = rustls::ServerConfig::builder()
