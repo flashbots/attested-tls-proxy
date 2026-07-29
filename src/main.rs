@@ -174,6 +174,10 @@ enum CliCommand {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .map_err(|_| anyhow!("Failed to install the default rustls crypto provider"))?;
+
     let cli = Cli::parse();
 
     ensure!(
