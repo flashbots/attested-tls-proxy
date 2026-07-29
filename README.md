@@ -9,10 +9,13 @@ Details of the remote-attested TLS protocol are in [attested-tls/README.md](atte
 
 The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for all requests from that proxy-client instance.
 
-It has three subcommands:
+It has five subcommands:
+
 - `attested-tls-proxy server` - run a proxy server, which accepts TLS connections from a proxy client, sends an attestation and then forwards traffic to a target CVM service.
 - `attested-tls-proxy client` - run a proxy client, which accepts connections from elsewhere, connects to and verifies the attestation from the proxy server, and then forwards traffic to it over TLS.
-- `attested-tls-proxy get-tls-cert` - connects to a proxy-server, verify the attestation, and if successful write the server's PEM-encoded TLS certificate chain to standard out. This can be used to make subsequent connections to services using this certificate over regular TLS.
+- `attested-tls-proxy get-tls-cert` - connect to a proxy server, verify its attestation, and, if successful, write its PEM-encoded TLS certificate chain to standard output. This can be used to make subsequent connections to services using this certificate over regular TLS.
+- `attested-tls-proxy attested-file-server` - serve files from a local filesystem path over an attested TLS channel.
+- `attested-tls-proxy attested-get` - connect to a proxy server, verify its attestation, make a single HTTP GET request, and write the response body to standard output.
 
 ### How it works
 
@@ -51,7 +54,7 @@ Header value:
   "1": "48 byte RTMR0 value encoded as hex",
   "2": "48 byte RTMR1 value encoded as hex",
   "3": "48 byte RTMR2 value encoded as hex",
-  "4": "48 byte RTMR3 value encoded as hex",
+  "4": "48 byte RTMR3 value encoded as hex"
 }
 ```
 
@@ -77,7 +80,7 @@ Proxy-client to proxy-server connections use TLS 1.3.
 
 The protocol name `flashbots-ratls/1` must be given in the TLS configuration for ALPN protocol negotiation during the TLS handshake. Future versions of this protocol will use incrementing version numbers, eg: `flashbots-ratls/2`.
 
-Immediately after the TLS handshake, an attestation exchange is made. Details of how this works are in the [attested-tls protocol spepcification](attested-tls/README.md#protocol-specification).
+Immediately after the TLS handshake, an attestation exchange is made. Details of how this works are in the [attested-tls protocol specification](attested-tls/README.md#protocol-specification).
 
 Following a successful attestation exchange, the client can make HTTP requests, and the server will forward them to the target service.
 
@@ -148,17 +151,17 @@ curl 127.0.0.1:6000/README.md
 
 Assuming you started the python http server in the directory of this repository, this should print the contents of this README.
 
-Since we just wanted to make a single GET request here, we can make this process simpler but using the `attested-get` command:
+Since we just wanted to make a single GET request here, we can make this process simpler by using the `attested-get` command:
 
 ```
 cargo run -- attested-get \
-  --url-path README.md
+  --url-path README.md \
   --tls-ca-certificate ca.crt \
   --allowed-remote-attestation-type none \
   localhost:7000
 ```
 
-This should also print the README file. This should work even if the proxy-client from step 5 is not running.
+This should also print the README file. This works even if the proxy-client from step 4 is not running.
 
 ## CLI differences from `cvm-reverse-proxy`
 
@@ -176,11 +179,18 @@ This aims to have a similar command line interface to `cvm-reverse-proxy` but th
 ```bash
 docker build -t attested-tls-proxy .
 
-# With custom features (e.g., without azure/TPM):
+# Without the Azure feature:
 docker build --build-arg FEATURES="" -t attested-tls-proxy .
+
+# With an explicit space-delimited feature list:
+docker build --build-arg FEATURES="azure" -t attested-tls-proxy .
 ```
 
-**Note for Apple Silicon (M1-M4) Mac users:** When building on ARM Macs, the Docker build will automatically compile without Azure/TPM features (`--no-default-features`) because the TPM libraries cannot be cross-compiled. For production builds with full Azure support, use an x86_64 system.
+`FEATURES` specifies the complete Cargo feature list; it does not add to a separate implicit list.
+When omitted, it defaults to `auto`, which enables `azure` on amd64 and disables it on other
+architectures. In particular, Docker builds on ARM Macs automatically compile without Azure/TPM
+support because the TPM libraries cannot be cross-compiled. For production builds with full Azure
+support, use an x86_64 system.
 
 ### Running
 
@@ -190,13 +200,18 @@ The same image supports all subcommands (server, client, get-tls-cert, etc.):
 # Show help
 docker run --rm attested-tls-proxy --help
 
-# Run as server
-docker run --rm attested-tls-proxy server \
+# Run as server, forwarding to a service on port 8080 of the Docker host
+docker run --rm \
+  --mount type=bind,source=/path/to/certs,target=/certs,readonly \
+  --add-host host.docker.internal:host-gateway \
+  -p 8443:443 \
+  attested-tls-proxy server \
   --listen-addr 0.0.0.0:443 \
-  --target-addr 127.0.0.1:8080 \
-  --tls-private-key-path /path/to/key.pem \
-  --tls-certificate-path /path/to/cert.pem \
-  --allowed-remote-attestation-type none
+  --tls-private-key-path /certs/server.key \
+  --tls-certificate-path /certs/server.crt \
+  --server-attestation-type none \
+  --allowed-remote-attestation-type none \
+  host.docker.internal:8080
 
 # Run as client
 docker run --rm attested-tls-proxy client \
@@ -205,17 +220,18 @@ docker run --rm attested-tls-proxy client \
   --allowed-remote-attestation-type none
 ```
 
+Replace `/path/to/certs` with the host directory containing `server.key` and `server.crt`.
+When the target service is another container, attach both containers to the same Docker network and
+use the target container's name instead of `host.docker.internal`.
+
 ### Testing with Docker Compose
 
 A `docker-compose.yml` is provided to test the full proxy chain:
 
 1. **Generate test certificates:**
    ```bash
-   mkdir -p certs && cd certs
-   ../scripts/generate-cert.sh proxy-server 127.0.0.1
-   # Convert key to PKCS#8 format (required by the proxy)
-   openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in server.key -out server.pkcs8.key
-   mv server.pkcs8.key server.key
+   mkdir -p certs
+   (cd certs && ../scripts/generate-cert.sh proxy-server 127.0.0.1)
    ```
 
 2. **Start all services:**
