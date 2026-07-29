@@ -14,6 +14,8 @@ pub use attestation::measurements::mock_dcap_measurements;
 pub fn generate_certificate_chain(
     ip: IpAddr,
 ) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let mut params = rcgen::CertificateParams::new(vec![]).unwrap();
     params.subject_alt_names.push(rcgen::SanType::IpAddress(ip));
     params
