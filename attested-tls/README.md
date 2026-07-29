@@ -38,7 +38,7 @@ The first 32 bytes are the SHA256 hash of the encoded public key from the TLS le
 
 The remaining 32 bytes are exported key material ([RFC5705](https://www.rfc-editor.org/rfc/rfc5705)) from the TLS session. This must have the exporter label `EXPORTER-Channel-Binding` and no context data.
 
-In the case of attestation types `dcap-tdx`, `gcp-tdx`, and `qemu-tdx`, a standard DCAP attestation is generated using the `configfs-tsm` linux filesystem interface. This means that this binary must be run with access to `/sys/kernel/config/tsm/report` which on many systems requires sudo.
+In the case of attestation types `dcap-tdx` and `gcp-tdx`, a standard DCAP attestation is generated using the `configfs-tsm` Linux filesystem interface. This means that this binary must be run with access to `/sys/kernel/config/tsm/report`, which on many systems requires elevated privileges.
 
 When verifying DCAP attestations, the Intel PCS is used to retrieve collateral unless a PCCS url is provided via a command line argument. If expired TCB collateral is provided, the quote will fail to verify.
 
@@ -47,5 +47,5 @@ When verifying DCAP attestations, the Intel PCS is used to retrieve collateral u
 These are specified in the `attestation` crate documentation:
 
 - [Attestation types](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#attestation-types)
-- [Measuremets file format](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#measurements-file)
+- [Measurements file format](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#measurements-file)
 - [Portable measurement policies](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#portable-measurement-policies)

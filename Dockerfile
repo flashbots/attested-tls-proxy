@@ -1,9 +1,9 @@
 # Build stage
 FROM rust:1.88.0-slim-bookworm AS builder
 
-# Build arguments for optional feature control
-# Pass extra space-delimited features via FEATURES (e.g. "redact-sensitive")
-ARG FEATURES=
+# Space-delimited Cargo feature list. `auto` enables Azure support on amd64 and
+# disables it on other architectures.
+ARG FEATURES=auto
 
 RUN apt-get update && apt-get install -y \
     pkg-config clang libclang-dev \
@@ -14,13 +14,21 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 COPY . .
 
-# On x86_64: build with requested features
-# On ARM: build without azure/TPM features (cross-compilation not supported for TPM libs)
-RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-        cargo build --release --features "azure${FEATURES:+ }${FEATURES}"; \
+# Resolve the architecture-dependent default, then build with exactly the
+# requested features. An explicitly empty FEATURES value enables no features.
+RUN build_features="$FEATURES"; \
+    if [ "$build_features" = "auto" ]; then \
+        if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+            build_features="azure"; \
+        else \
+            build_features=""; \
+            echo "WARNING: Building on ARM without Azure/TPM features (cross-compilation not supported)"; \
+        fi; \
+    fi; \
+    if [ -n "$build_features" ]; then \
+        cargo build --release --no-default-features --features "$build_features"; \
     else \
-        echo "WARNING: Building on ARM without Azure/TPM features (cross-compilation not supported)" && \
-        cargo build --release; \
+        cargo build --release --no-default-features; \
     fi
 
 # Runtime stage
