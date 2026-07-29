@@ -195,7 +195,7 @@ impl AttestedTlsServer {
         let buf = read_length_prefixed_attestation(&mut tls_stream).await?;
 
         let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
-        let remote_attestation_type = remote_attestation_message.attestation_type;
+        let remote_attestation_type = remote_attestation_message.attestation_type();
 
         // If we expect an attestaion from the client, verify it and get measurements
         let measurements = if self.attestation_verifier.has_remote_attestation() {
@@ -376,7 +376,7 @@ impl AttestedTlsClient {
         let buf = read_length_prefixed_attestation(&mut tls_stream).await?;
 
         let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
-        let remote_attestation_type = remote_attestation_message.attestation_type;
+        let remote_attestation_type = remote_attestation_message.attestation_type();
 
         // Verify the remote attestation against our accepted measurements
         let measurements = self
@@ -752,13 +752,8 @@ mod tests {
         )
         .unwrap();
 
-        let attestation_verifier = AttestationVerifier {
-            measurement_policy,
-            pccs_url: None,
-            dump_dcap_quotes: false,
-            override_azure_outdated_tcb: false,
-            internal_pccs: None,
-        };
+        let mut attestation_verifier = AttestationVerifier::mock();
+        attestation_verifier.measurement_policy = measurement_policy;
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config,
