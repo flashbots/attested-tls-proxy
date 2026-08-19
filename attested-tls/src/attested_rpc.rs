@@ -1,6 +1,7 @@
 //! Provides an attested JSON RPC client based on [alloy_rpc_client::RpcClient]
 use alloy_rpc_client::RpcClient;
 use alloy_transport_http::{Http, HyperClient};
+use attestation::measurements::ExpectedMeasurements;
 use hyper::{Request, Response, client::conn};
 use hyper_util::rt::TokioIo;
 use std::{
@@ -12,10 +13,7 @@ use std::{
 use thiserror::Error;
 use tower_service::Service;
 
-use crate::{
-    AttestedTlsClient, AttestedTlsError,
-    attestation::{AttestationType, measurements::MultiMeasurements},
-};
+use crate::{AttestedTlsClient, AttestedTlsError, attestation::AttestationType};
 
 /// Supported HTTP versions for RPC connection bootstrapping
 pub enum HttpVersion {
@@ -54,7 +52,7 @@ impl AttestedRpcClient {
         &self,
         server: &str,
         is_local: bool,
-    ) -> Result<(RpcClient, Option<MultiMeasurements>, AttestationType), AttestedRpcError> {
+    ) -> Result<(RpcClient, ExpectedMeasurements, AttestationType), AttestedRpcError> {
         let (stream, measurements, attestation_type) = self.inner.connect_tcp(server).await?;
         let io = TokioIo::new(stream);
 

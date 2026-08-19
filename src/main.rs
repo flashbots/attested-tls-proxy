@@ -1,5 +1,4 @@
 use anyhow::{anyhow, ensure};
-use attested_tls::attestation::measurements::MultiMeasurements;
 use clap::{Parser, Subcommand};
 use std::{
     fs::File,
@@ -230,13 +229,19 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let mut attestation_verifier = AttestationVerifier::new(
-        measurement_policy,
-        None,
-        cli.log_dcap_quote,
-        cli.override_azure_outdated_tcb,
-    );
-    attestation_verifier.internal_pccs = Some(pccs::Pccs::new_without_prewarm(cli.pccs_url));
+    let mut attestation_verifier_builder =
+        AttestationVerifier::builder(measurement_policy).with_pccs_not_prewarmed();
+    if let Some(pccs_url) = cli.pccs_url {
+        attestation_verifier_builder = attestation_verifier_builder.pccs_url(pccs_url);
+    }
+    if cli.log_dcap_quote {
+        attestation_verifier_builder = attestation_verifier_builder.dump_dcap_quotes();
+    }
+    #[cfg(feature = "azure")]
+    if cli.override_azure_outdated_tcb {
+        attestation_verifier_builder = attestation_verifier_builder.override_azure_outdated_tcb();
+    }
+    let attestation_verifier = attestation_verifier_builder.build();
 
     match cli.command {
         CliCommand::Client {
@@ -382,10 +387,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(path_to_write_measurements) = out_measurements {
                 std::fs::write(
                     path_to_write_measurements,
-                    measurements
-                        .unwrap_or(MultiMeasurements::NoAttestation)
-                        .to_header_format()?
-                        .as_bytes(),
+                    measurements.to_header_format()?.as_bytes(),
                 )?;
             }
             println!("{}", certs_to_pem_string(&cert_chain)?);

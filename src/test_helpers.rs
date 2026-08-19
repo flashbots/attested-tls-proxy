@@ -16,7 +16,17 @@ static INIT: Once = Once::new();
 
 use crate::MEASUREMENT_HEADER;
 
-pub use attested_tls::attestation::measurements::mock_dcap_measurements;
+use attested_tls::attestation::measurements::{ExpectedMeasurements, MeasurementPolicy};
+
+/// The policy values matched by [`attestation::AttestationVerifier::mock`].
+pub fn mock_expected_measurements() -> ExpectedMeasurements {
+    MeasurementPolicy::mock()
+        .check_measurement(
+            &attested_tls::attestation::measurements::mock_dcap_measurements(),
+            None,
+        )
+        .unwrap()
+}
 
 /// Helper to generate a self-signed certificate for testing
 pub fn generate_certificate_chain(

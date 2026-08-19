@@ -12,7 +12,7 @@ pub use attestation;
 
 use attestation::{
     AttestationError, AttestationExchangeMessage, AttestationGenerator, AttestationType,
-    AttestationVerifier, measurements::MultiMeasurements,
+    AttestationVerifier, measurements::ExpectedMeasurements,
 };
 use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
@@ -137,7 +137,7 @@ impl AttestedTlsServer {
     ) -> Result<
         (
             tokio_rustls::server::TlsStream<IO>,
-            Option<MultiMeasurements>,
+            ExpectedMeasurements,
             AttestationType,
         ),
         AttestedTlsError,
@@ -197,7 +197,7 @@ impl AttestedTlsServer {
         let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
         let remote_attestation_type = remote_attestation_message.attestation_type();
 
-        // If we expect an attestaion from the client, verify it and get measurements
+        // If we expect an attestation from the client, verify it and get measurements
         let measurements = if self.attestation_verifier.has_remote_attestation() {
             let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
 
@@ -205,7 +205,7 @@ impl AttestedTlsServer {
                 .verify_attestation(remote_attestation_message, remote_input_data)
                 .await?
         } else {
-            None
+            ExpectedMeasurements::NoAttestation
         };
 
         Ok((tls_stream, measurements, remote_attestation_type))
@@ -330,7 +330,7 @@ impl AttestedTlsClient {
     ) -> Result<
         (
             tokio_rustls::client::TlsStream<IO>,
-            Option<MultiMeasurements>,
+            ExpectedMeasurements,
             AttestationType,
         ),
         AttestedTlsError,
@@ -414,7 +414,7 @@ impl AttestedTlsClient {
     ) -> Result<
         (
             tokio_rustls::client::TlsStream<tokio::net::TcpStream>,
-            Option<MultiMeasurements>,
+            ExpectedMeasurements,
             AttestationType,
         ),
         AttestedTlsError,
@@ -427,7 +427,7 @@ impl AttestedTlsClient {
     pub async fn get_tls_cert(
         &self,
         server_name: &str,
-    ) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
+    ) -> Result<(Vec<CertificateDer<'static>>, ExpectedMeasurements), AttestedTlsError> {
         let (mut tls_stream, measurements, _attestation_type) =
             self.connect_tcp(server_name).await?;
 
@@ -449,7 +449,7 @@ pub async fn get_tls_cert(
     server_name: String,
     attestation_verifier: AttestationVerifier,
     remote_certificate: Option<CertificateDer<'static>>,
-) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
+) -> Result<(Vec<CertificateDer<'static>>, ExpectedMeasurements), AttestedTlsError> {
     tracing::debug!("Getting remote TLS cert");
     let attested_tls_client = AttestedTlsClient::new(
         None,
@@ -467,7 +467,7 @@ pub async fn get_tls_cert_with_config(
     server_name: &str,
     attestation_verifier: AttestationVerifier,
     client_config: ClientConfig,
-) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
+) -> Result<(Vec<CertificateDer<'static>>, ExpectedMeasurements), AttestedTlsError> {
     let attested_tls_client = AttestedTlsClient::new_with_tls_config(
         client_config,
         AttestationGenerator::with_no_attestation(),
@@ -752,8 +752,9 @@ mod tests {
         )
         .unwrap();
 
-        let mut attestation_verifier = AttestationVerifier::mock();
-        attestation_verifier.measurement_policy = measurement_policy;
+        let attestation_verifier = AttestationVerifier::builder(measurement_policy)
+            .with_no_internal_pccs()
+            .build();
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config,
