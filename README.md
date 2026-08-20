@@ -43,22 +43,58 @@ As an alternative to specifying measurement values, OS image hashes can be speci
 
 ### Measurement Headers
 
-When attestation is validated successfully, the following headers are injected into the HTTP request / response making them available to the source client and/or target service.
-
-These aim to match the header formatting used by `cvm-reverse-proxy`.
+When the remote party satisfies the configured measurement policy, the following headers are injected into the HTTP request / response, making the matched policy values available to the source client and/or target service.
 
 Header name: `X-Flashbots-Measurement`
 
-Header value:
+The value is compact, self-describing JSON containing the expected measurements from the matching policy record, rather than the measurements reported by the remote party. Hashes are lowercase hexadecimal strings. DCAP and Azure register values are arrays because a policy can accept multiple values for each register.
+
+For DCAP measurements, keys `"0"` through `"4"` represent MRTD and RTMR0 through RTMR3 respectively:
+
 ```json
 {
-  "0": "48 byte MRTD value encoded as hex",
-  "1": "48 byte RTMR0 value encoded as hex",
-  "2": "48 byte RTMR1 value encoded as hex",
-  "3": "48 byte RTMR2 value encoded as hex",
-  "4": "48 byte RTMR3 value encoded as hex"
+  "type": "dcap",
+  "measurements": {
+    "0": ["<96 hex characters>"],
+    "3": ["<96 hex characters>", "<96 hex characters>"]
+  }
 }
 ```
+
+For Azure measurements, each key is a PCR index:
+
+```json
+{
+  "type": "azure",
+  "measurements": {
+    "4": ["<64 hex characters>"],
+    "11": ["<64 hex characters>"]
+  }
+}
+```
+
+Portable image-hash policies produce:
+
+```json
+{
+  "type": "image",
+  "measurements": {
+    "uki_authenticode": "<96 hex characters>",
+    "kernel_authenticode": "<96 hex characters>",
+    "cmdline_hash": "<96 hex characters>",
+    "initrd_hash": "<96 hex characters>",
+    "gpt_disk_guid_hash": "<96 hex characters>"
+  }
+}
+```
+
+When the matching policy permits no attestation, the value is:
+
+```json
+{"type":"no_attestation"}
+```
+
+The actual HTTP header value is serialized as compact JSON on one line.
 
 Header name: `X-Flashbots-Attestation-Type`
 
@@ -79,7 +115,7 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.
 - `client`, `get-tls-cert`, and `attested-get` accept `--allow-self-signed` to permit a self-signed remote TLS certificate.
 - `client` and `server` accept `--listen-addr-healthcheck` to start a separate HTTP health-check listener.
-- `get-tls-cert --out-measurements <PATH>` writes the verified remote measurements as JSON in addition to writing the certificate chain to standard output.
+- `get-tls-cert --out-measurements <PATH>` writes the matched expected measurements as JSON in addition to writing the certificate chain to standard output.
 - If `server` is started without `--tls-private-key-path` and `--tls-certificate-path`, it generates a self-signed certificate for its listening IP address.
 
 ## Protocol Specification
@@ -94,7 +130,7 @@ Immediately after the TLS handshake, an attestation exchange is made. Details of
 
 Following a successful attestation exchange, the client can make HTTP requests, and the server will forward them to the target service.
 
-As described above, the server will inject measurement data into the request headers before forwarding them to the target service, and the client will inject measurement data into the response headers before forwarding them to the source client.
+As described above, the server will inject matched expected measurement data into the request headers before forwarding them to the target service, and the client will inject the same kind of data into the response headers before forwarding them to the source client.
 
 The proxy client and proxy server support HTTP/2 and HTTP/1.1 over their attested-TLS channel, with HTTP/2 preferred. The HTTP protocol is combined with the attested-TLS protocol version in ALPN, producing `flashbots-ratls/1+h2` or `flashbots-ratls/1+http/1.1`. A negotiated `flashbots-ratls/1` value without an HTTP suffix falls back to HTTP/1.1.
 
