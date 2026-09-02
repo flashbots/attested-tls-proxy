@@ -572,7 +572,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attest-measure"
 version = "0.0.1"
-source = "git+https://github.com/easy-tee/attest.git?rev=8206cd19d9dcb1978d85a3d8dece06a3ee7a1206#8206cd19d9dcb1978d85a3d8dece06a3ee7a1206"
+source = "git+https://github.com/easy-tee/attest.git?rev=12f1e29f6ea63ecc2f80f39c2c1f1172720bcf24#12f1e29f6ea63ecc2f80f39c2c1f1172720bcf24"
 dependencies = [
  "attest-types",
  "authenticode",
@@ -597,7 +597,7 @@ dependencies = [
 [[package]]
 name = "attest-types"
 version = "0.0.1"
-source = "git+https://github.com/easy-tee/attest.git?rev=8206cd19d9dcb1978d85a3d8dece06a3ee7a1206#8206cd19d9dcb1978d85a3d8dece06a3ee7a1206"
+source = "git+https://github.com/easy-tee/attest.git?rev=12f1e29f6ea63ecc2f80f39c2c1f1172720bcf24#12f1e29f6ea63ecc2f80f39c2c1f1172720bcf24"
 dependencies = [
  "parity-scale-codec",
  "serde",
@@ -608,11 +608,12 @@ dependencies = [
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#bf8b99507d09d6ab79d675346bc604989b491ef9"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
 dependencies = [
  "anyhow",
  "attest-measure",
  "attest-types",
+ "az-cvm-vtpm",
  "az-tdx-vtpm",
  "base64 0.22.1",
  "dcap-qvl",
@@ -3070,7 +3071,7 @@ dependencies = [
 [[package]]
 name = "mock-tdx"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#bf8b99507d09d6ab79d675346bc604989b491ef9"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
 dependencies = [
  "axum",
  "dcap-qvl",
@@ -3482,7 +3483,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#bf8b99507d09d6ab79d675346bc604989b491ef9"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
 dependencies = [
  "anyhow",
  "dcap-qvl",
@@ -3764,7 +3765,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.108",
