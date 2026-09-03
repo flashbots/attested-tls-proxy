@@ -204,6 +204,12 @@ impl AttestedTlsServer {
             self.attestation_verifier
                 .verify_attestation(remote_attestation_message, remote_input_data)
                 .await?
+                .map(|verified| {
+                    verified
+                        .expected_measurements
+                        .expect("verified attestations include their matched measurements")
+                })
+                .unwrap_or(ExpectedMeasurements::NoAttestation)
         } else {
             ExpectedMeasurements::NoAttestation
         };
@@ -382,7 +388,13 @@ impl AttestedTlsClient {
         let measurements = self
             .attestation_verifier
             .verify_attestation(remote_attestation_message, remote_input_data)
-            .await?;
+            .await?
+            .map(|verified| {
+                verified
+                    .expected_measurements
+                    .expect("verified attestations include their matched measurements")
+            })
+            .unwrap_or(ExpectedMeasurements::NoAttestation);
 
         // If we are in a CVM, provide an attestation
         let attestation = if self.attestation_generator.attestation_type != AttestationType::None {
@@ -633,7 +645,7 @@ mod tests {
     use super::*;
 
     use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
-    use attestation::measurements::MeasurementPolicy;
+    use attestation::{PccsMode, measurements::MeasurementPolicy};
     use tokio::net::TcpListener;
 
     #[tokio::test]
@@ -753,7 +765,7 @@ mod tests {
         .unwrap();
 
         let attestation_verifier = AttestationVerifier::builder(measurement_policy)
-            .with_no_internal_pccs()
+            .with_pccs_mode(PccsMode::None)
             .build();
 
         let client = AttestedTlsClient::new_with_tls_config(

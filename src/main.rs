@@ -14,7 +14,9 @@ use attested_tls_proxy::{
     attested_get::{attested_get, split_target_and_path},
     attested_tls::{
         TlsCertAndKey,
-        attestation::{AttestationType, AttestationVerifier, measurements::MeasurementPolicy},
+        attestation::{
+            AttestationType, AttestationVerifier, PccsMode, measurements::MeasurementPolicy,
+        },
     },
     file_server::attested_file_server,
     get_tls_cert, health_check,
@@ -242,21 +244,16 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let mut attestation_verifier_builder =
-        AttestationVerifier::builder(measurement_policy).with_pccs_not_prewarmed();
+    let mut attestation_verifier_builder = AttestationVerifier::builder(measurement_policy)
+        .with_pccs_mode(PccsMode::Lazy)
+        .with_dump_dcap_quotes(cli.log_dcap_quote)
+        .with_override_azure_outdated_tcb(cli.override_azure_outdated_tcb);
     if let Some(file_or_url) = dynamic_measurements_file_or_url {
         attestation_verifier_builder =
             attestation_verifier_builder.with_dynamic_measurements_file_or_url(file_or_url);
     }
     if let Some(pccs_url) = cli.pccs_url {
-        attestation_verifier_builder = attestation_verifier_builder.pccs_url(pccs_url);
-    }
-    if cli.log_dcap_quote {
-        attestation_verifier_builder = attestation_verifier_builder.dump_dcap_quotes();
-    }
-    #[cfg(feature = "azure")]
-    if cli.override_azure_outdated_tcb {
-        attestation_verifier_builder = attestation_verifier_builder.override_azure_outdated_tcb();
+        attestation_verifier_builder = attestation_verifier_builder.with_pccs_url(pccs_url);
     }
     let attestation_verifier = attestation_verifier_builder.build();
 

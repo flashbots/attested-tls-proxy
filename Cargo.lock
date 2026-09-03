@@ -572,12 +572,13 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attest-measure"
 version = "0.0.1"
-source = "git+https://github.com/easy-tee/attest.git?rev=a64f147362b8948e2288015e476c40d04b11b661#a64f147362b8948e2288015e476c40d04b11b661"
+source = "git+https://github.com/easy-tee/attest.git?rev=12f1e29f6ea63ecc2f80f39c2c1f1172720bcf24#12f1e29f6ea63ecc2f80f39c2c1f1172720bcf24"
 dependencies = [
- "anyhow",
  "attest-types",
  "authenticode",
  "crc32fast",
+ "fatfs",
+ "flate2",
  "hex",
  "hex-literal",
  "object",
@@ -587,6 +588,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2",
+ "tar",
  "thiserror 2.0.17",
  "ureq 3.3.0",
  "x509-parser",
@@ -595,7 +597,7 @@ dependencies = [
 [[package]]
 name = "attest-types"
 version = "0.0.1"
-source = "git+https://github.com/easy-tee/attest.git?rev=a64f147362b8948e2288015e476c40d04b11b661#a64f147362b8948e2288015e476c40d04b11b661"
+source = "git+https://github.com/easy-tee/attest.git?rev=12f1e29f6ea63ecc2f80f39c2c1f1172720bcf24#12f1e29f6ea63ecc2f80f39c2c1f1172720bcf24"
 dependencies = [
  "parity-scale-codec",
  "serde",
@@ -606,11 +608,12 @@ dependencies = [
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fverifier-returns-expected-measurements#2eb731ae6b9a2a2c2326d2420fd4516451c5b180"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#6cfa7bd7da4225032257610bf50d4a150d918eec"
 dependencies = [
  "anyhow",
  "attest-measure",
  "attest-types",
+ "az-cvm-vtpm",
  "az-tdx-vtpm",
  "base64 0.22.1",
  "dcap-qvl",
@@ -1896,6 +1899,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fatfs"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05669f8e7e2d7badc545c513710f0eba09c2fbef683eb859fd79c46c355048e0"
+dependencies = [
+ "bitflags 1.3.2",
+ "byteorder",
+ "log",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1910,6 +1924,16 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -3046,7 +3070,7 @@ dependencies = [
 [[package]]
 name = "mock-tdx"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fverifier-returns-expected-measurements#2eb731ae6b9a2a2c2326d2420fd4516451c5b180"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#6cfa7bd7da4225032257610bf50d4a150d918eec"
 dependencies = [
  "axum",
  "dcap-qvl",
@@ -3458,7 +3482,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=peg%2Fverifier-returns-expected-measurements#2eb731ae6b9a2a2c2326d2420fd4516451c5b180"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#6cfa7bd7da4225032257610bf50d4a150d918eec"
 dependencies = [
  "anyhow",
  "dcap-qvl",
@@ -4967,6 +4991,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "target-lexicon"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6249,6 +6284,16 @@ dependencies = [
  "spki",
  "x509-cert",
  "x509-ocsp",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]

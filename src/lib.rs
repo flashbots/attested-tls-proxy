@@ -788,7 +788,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        attestation::measurements::MeasurementPolicy, attested_tls::get_tls_cert_with_config,
+        attestation::{PccsMode, measurements::MeasurementPolicy},
+        attested_tls::get_tls_cert_with_config,
     };
 
     use super::*;
@@ -1329,7 +1330,7 @@ mod tests {
         .unwrap();
 
         let attestation_verifier = AttestationVerifier::builder(measurement_policy)
-            .with_no_internal_pccs()
+            .with_pccs_mode(PccsMode::None)
             .build();
 
         let proxy_client_result = ProxyClient::new_with_tls_config(
