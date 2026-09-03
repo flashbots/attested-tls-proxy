@@ -37,7 +37,7 @@ Details and examples of the measurements file format are [in the `attestation` c
 
 Exactly one verification policy must be provided: either `--measurements-file` or `--allowed-remote-attestation-type`. The latter may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
 
-When `--dynamic-measurement-policy` is enabled, the policy is reloaded from the path or URL supplied via `--measurements-file` after a measurement mismatch. This option requires `--measurements-file`.
+When `--dynamic-measurement-policy` is enabled, the policy is reloaded from the path or URL supplied via `--measurements-file` after a measurement mismatch and periodically every 12 hours. This option requires `--measurements-file`.
 
 As an alternative to specifying measurement values, OS image hashes can be specified. See [portable measurement policies](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#portable-measurement-policies) for details.
 
