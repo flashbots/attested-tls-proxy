@@ -608,7 +608,7 @@ dependencies = [
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#6cfa7bd7da4225032257610bf50d4a150d918eec"
 dependencies = [
  "anyhow",
  "attest-measure",
@@ -686,7 +686,6 @@ dependencies = [
  "hyper-util",
  "jsonrpsee",
  "p256",
- "pccs",
  "pem-rfc7468",
  "pin-project-lite",
  "pkcs1",
@@ -3071,7 +3070,7 @@ dependencies = [
 [[package]]
 name = "mock-tdx"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#6cfa7bd7da4225032257610bf50d4a150d918eec"
 dependencies = [
  "axum",
  "dcap-qvl",
@@ -3483,7 +3482,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#6cfa7bd7da4225032257610bf50d4a150d918eec"
 dependencies = [
  "anyhow",
  "dcap-qvl",
@@ -3765,7 +3764,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.108",

@@ -14,6 +14,7 @@ mod http_version;
 #[cfg(test)]
 mod test_helpers;
 
+use attested_tls::attestation::measurements::ExpectedMeasurements;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{BodyExt, combinators::BoxBody};
@@ -33,9 +34,7 @@ use tracing::{debug, error, warn};
 use crate::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
 use attested_tls::{
     AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey,
-    attestation::{
-        AttestationError, AttestationType, AttestationVerifier, measurements::MultiMeasurements,
-    },
+    attestation::{AttestationError, AttestationType, AttestationVerifier},
 };
 
 /// The header name for giving attestation type
@@ -78,7 +77,7 @@ pub async fn get_tls_cert(
     attestation_verifier: AttestationVerifier,
     remote_certificate: Option<CertificateDer<'static>>,
     allow_self_signed: bool,
-) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
+) -> Result<(Vec<CertificateDer<'static>>, ExpectedMeasurements), AttestedTlsError> {
     let (cert, measurements) = if allow_self_signed {
         let client_tls_config = self_signed::client_tls_config_allow_self_signed()?;
         attested_tls::get_tls_cert_with_config(
@@ -218,7 +217,7 @@ impl ProxyServer {
     /// Handle an incoming connection from a proxy-client
     async fn handle_connection(
         tls_stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
-        measurements: Option<MultiMeasurements>,
+        measurements: ExpectedMeasurements,
         remote_attestation_type: AttestationType,
         target: String,
         client_addr: SocketAddr,
@@ -251,18 +250,16 @@ impl ProxyServer {
 
             update_header(headers, &X_FORWARDED_FOR, &new_x_forwarded_for);
 
-            // If we have measurements, from the remote peer, add them to the request header
+            // Add the expected measurements matched for the remote peer to the request header.
             let measurements = measurements.clone();
-            if let Some(measurements) = measurements {
-                match measurements.to_header_format() {
-                    Ok(header_value) => {
-                        headers.insert(MEASUREMENT_HEADER, header_value);
-                    }
-                    Err(e) => {
-                        // This error is highly unlikely - that the measurement values fail to
-                        // encode to JSON or fit in an HTTP header
-                        error!("Failed to encode measurement values: {e}");
-                    }
+            match measurements.to_header_format() {
+                Ok(header_value) => {
+                    headers.insert(MEASUREMENT_HEADER, header_value);
+                }
+                Err(e) => {
+                    // This error is highly unlikely - that the measurement values fail to
+                    // encode to JSON or fit in an HTTP header
+                    error!("Failed to encode measurement values: {e}");
                 }
             }
 
@@ -496,19 +493,17 @@ impl ProxyClient {
                                 let (response, should_reconnect) = match sender.send_request(req).await {
                                     Ok(mut resp) => {
                                         debug!("[proxy-client] Read response from proxy-server: {resp:?}");
-                                        // If we have measurements from the proxy-server, inject them into the
-                                        // response header
+                                        // Add the expected measurements matched for the proxy-server to the
+                                        // response header.
                                         let headers = resp.headers_mut();
-                                        if let Some(measurements) = measurements.clone() {
-                                            match measurements.to_header_format() {
-                                                Ok(header_value) => {
-                                                    headers.insert(MEASUREMENT_HEADER, header_value);
-                                                }
-                                                Err(e) => {
-                                                    // This error is highly unlikely - that the measurement values fail to
-                                                    // encode to JSON or fit in an HTTP header
-                                                    error!("Failed to encode measurement values: {e}");
-                                                }
+                                        match measurements.to_header_format() {
+                                            Ok(header_value) => {
+                                                headers.insert(MEASUREMENT_HEADER, header_value);
+                                            }
+                                            Err(e) => {
+                                                // This error is highly unlikely - that the measurement values fail to
+                                                // encode to JSON or fit in an HTTP header
+                                                error!("Failed to encode measurement values: {e}");
                                             }
                                         }
 
@@ -628,7 +623,7 @@ impl ProxyClient {
         (
             HttpSender,
             HttpConnection,
-            Option<MultiMeasurements>,
+            ExpectedMeasurements,
             AttestationType,
         ),
         ProxyError,
@@ -665,7 +660,7 @@ impl ProxyClient {
         (
             HttpSender,
             HttpConnection,
-            Option<MultiMeasurements>,
+            ExpectedMeasurements,
             AttestationType,
         ),
         ProxyError,
@@ -800,8 +795,15 @@ mod tests {
     use super::*;
     use test_helpers::{
         example_http_service, generate_certificate_chain, generate_tls_config,
-        generate_tls_config_with_client_auth, init_tracing, mock_dcap_measurements,
+        generate_tls_config_with_client_auth, init_tracing, mock_expected_measurements,
     };
+
+    fn assert_no_attestation_header(value: &str) {
+        assert_eq!(
+            ExpectedMeasurements::from_header_format(value).unwrap(),
+            ExpectedMeasurements::NoAttestation
+        );
+    }
 
     #[test]
     fn proxy_alpn_protocols_prefer_http2() {
@@ -877,13 +879,11 @@ mod tests {
         assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
-        let measurements =
-            MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
-                .unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(measurements_json).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
 
         let res_body = res.text().await.unwrap();
-        assert_eq!(res_body, "No measurements");
+        assert_no_attestation_header(&res_body);
     }
 
     // Server has mock DCAP, client has no attestation and no client auth
@@ -943,13 +943,11 @@ mod tests {
         assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
-        let measurements =
-            MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
-                .unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(measurements_json).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
 
         let res_body = res.text().await.unwrap();
-        assert_eq!(res_body, "No measurements");
+        assert_no_attestation_header(&res_body);
     }
 
     // Server has no attestation, client has mock DCAP and client auth
@@ -1013,9 +1011,9 @@ mod tests {
             .await
             .unwrap();
 
-        // We expect no measurements from the server
+        // The server matched the policy record allowing no attestation.
         let headers = res.headers();
-        assert!(headers.get(MEASUREMENT_HEADER).is_none());
+        assert_no_attestation_header(headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap());
 
         let attestation_type = headers
             .get(ATTESTATION_TYPE_HEADER)
@@ -1028,9 +1026,8 @@ mod tests {
 
         // The response body shows us what was in the request header (as the test http server
         // handler puts them there)
-        let measurements =
-            MultiMeasurements::from_header_format(&res_body, AttestationType::DcapTdx).unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(&res_body).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
     }
 
     // Server has no attestation, client has mock DCAP but no client auth
@@ -1084,9 +1081,9 @@ mod tests {
             .await
             .unwrap();
 
-        // We expect no measurements from the server
+        // The server matched the policy record allowing no attestation.
         let headers = res.headers();
-        assert!(headers.get(MEASUREMENT_HEADER).is_none());
+        assert_no_attestation_header(headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap());
 
         let attestation_type = headers
             .get(ATTESTATION_TYPE_HEADER)
@@ -1099,9 +1096,8 @@ mod tests {
 
         // The response body shows us what was in the request header (as the test http server
         // handler puts them there)
-        let measurements =
-            MultiMeasurements::from_header_format(&res_body, AttestationType::DcapTdx).unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(&res_body).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
     }
 
     // Server has mock DCAP, client has mock DCAP and client auth
@@ -1167,10 +1163,8 @@ mod tests {
 
         let headers = res.headers();
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
-        let measurements =
-            MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
-                .unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(measurements_json).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
 
         let attestation_type = headers
             .get(ATTESTATION_TYPE_HEADER)
@@ -1183,9 +1177,8 @@ mod tests {
 
         // The response body shows us what was in the request header (as the test http server
         // handler puts them there)
-        let measurements =
-            MultiMeasurements::from_header_format(&res_body, AttestationType::DcapTdx).unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(&res_body).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
 
         // Now do another request - to check that the connection has stayed open
         let res = reqwest::get(format!("http://{}", proxy_client_addr.to_string()))
@@ -1194,10 +1187,8 @@ mod tests {
 
         let headers = res.headers();
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
-        let measurements =
-            MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
-                .unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(measurements_json).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
 
         let attestation_type = headers
             .get(ATTESTATION_TYPE_HEADER)
@@ -1210,9 +1201,8 @@ mod tests {
 
         // The response body shows us what was in the request header (as the test http server
         // handler puts them there)
-        let measurements =
-            MultiMeasurements::from_header_format(&res_body, AttestationType::DcapTdx).unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(&res_body).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
     }
 
     // Server has mock DCAP, client no attestation - just get the server certificate
@@ -1438,13 +1428,11 @@ mod tests {
         assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
-        let measurements =
-            MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
-                .unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(measurements_json).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
 
         let res_body = res.text().await.unwrap();
-        assert_eq!(res_body, "No measurements");
+        assert_no_attestation_header(&res_body);
     }
 
     // Use HTTP 1.1
@@ -1511,12 +1499,10 @@ mod tests {
         assert_eq!(attestation_type, AttestationType::DcapTdx.as_str());
 
         let measurements_json = headers.get(MEASUREMENT_HEADER).unwrap().to_str().unwrap();
-        let measurements =
-            MultiMeasurements::from_header_format(measurements_json, AttestationType::DcapTdx)
-                .unwrap();
-        assert_eq!(measurements, mock_dcap_measurements());
+        let measurements = ExpectedMeasurements::from_header_format(measurements_json).unwrap();
+        assert_eq!(measurements, mock_expected_measurements());
 
         let res_body = res.text().await.unwrap();
-        assert_eq!(res_body, "No measurements");
+        assert_no_attestation_header(&res_body);
     }
 }

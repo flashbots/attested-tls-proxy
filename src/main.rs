@@ -1,5 +1,4 @@
 use anyhow::{anyhow, ensure};
-use attested_tls::attestation::measurements::MultiMeasurements;
 use clap::{Parser, Subcommand};
 use std::{
     fs::File,
@@ -37,6 +36,9 @@ struct Cli {
     /// Path to file, or URL, containing JSON measurements to be enforced on the remote party
     #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
     measurements_file: Option<String>,
+    /// Reload the measurement policy from --measurements-file after a measurement mismatch
+    #[arg(long, global = true, requires = "measurements_file")]
+    dynamic_measurement_policy: bool,
     /// If no measurements file is specified, a single attestion type to allow
     #[arg(long, global = true)]
     allowed_remote_attestation_type: Option<String>,
@@ -186,6 +188,16 @@ async fn main() -> anyhow::Result<()> {
         cli.allowed_remote_attestation_type.is_some() != cli.measurements_file.is_some(),
         "Exactly one of --measurements-file or --allowed-remote-attestation-type must be provided"
     );
+    ensure!(
+        !cli.dynamic_measurement_policy || cli.measurements_file.is_some(),
+        "--dynamic-measurement-policy requires --measurements-file"
+    );
+
+    let dynamic_measurements_file_or_url = if cli.dynamic_measurement_policy {
+        cli.measurements_file.clone()
+    } else {
+        None
+    };
 
     let crate_name = env!("CARGO_CRATE_NAME");
 
@@ -236,6 +248,10 @@ async fn main() -> anyhow::Result<()> {
         .with_pccs_mode(PccsMode::Lazy)
         .with_dump_dcap_quotes(cli.log_dcap_quote)
         .with_override_azure_outdated_tcb(cli.override_azure_outdated_tcb);
+    if let Some(file_or_url) = dynamic_measurements_file_or_url {
+        attestation_verifier_builder =
+            attestation_verifier_builder.with_dynamic_measurements_file_or_url(file_or_url);
+    }
     if let Some(pccs_url) = cli.pccs_url {
         attestation_verifier_builder = attestation_verifier_builder.with_pccs_url(pccs_url);
     }
@@ -385,10 +401,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(path_to_write_measurements) = out_measurements {
                 std::fs::write(
                     path_to_write_measurements,
-                    measurements
-                        .unwrap_or(MultiMeasurements::NoAttestation)
-                        .to_header_format()?
-                        .as_bytes(),
+                    measurements.to_header_format()?.as_bytes(),
                 )?;
             }
             println!("{}", certs_to_pem_string(&cert_chain)?);
@@ -516,4 +529,39 @@ fn certs_to_pem_string(certs: &[CertificateDer<'_>]) -> Result<String, pem_rfc74
         out.push('\n');
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_measurement_policy_requires_measurements_file() {
+        let result = Cli::try_parse_from([
+            "attested-tls-proxy",
+            "--allowed-remote-attestation-type",
+            "none",
+            "--dynamic-measurement-policy",
+            "get-tls-cert",
+            "example.com",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn dynamic_measurement_policy_accepts_measurements_file() {
+        let cli = Cli::try_parse_from([
+            "attested-tls-proxy",
+            "--measurements-file",
+            "measurements.json",
+            "--dynamic-measurement-policy",
+            "get-tls-cert",
+            "example.com",
+        ])
+        .unwrap();
+
+        assert!(cli.dynamic_measurement_policy);
+        assert_eq!(cli.measurements_file.as_deref(), Some("measurements.json"));
+    }
 }
