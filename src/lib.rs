@@ -752,6 +752,8 @@ pub enum ProxyError {
     BadDnsName(#[from] tokio_rustls::rustls::pki_types::InvalidDnsNameError),
     #[error("HTTP: {0}")]
     Hyper(#[from] hyper::Error),
+    #[error("HTTP request: {0}")]
+    Reqwest(#[from] reqwest::Error),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("Could not forward response - sender was dropped")]

@@ -449,6 +449,12 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
 
+            ensure!(
+                !response.status().is_redirection(),
+                "Attested GET returned {}; redirects are not followed because the destination has not been attested",
+                response.status()
+            );
+
             // Write response body to standard output
             let mut stdout = tokio::io::stdout();
 
