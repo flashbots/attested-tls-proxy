@@ -197,17 +197,14 @@ impl AttestedTlsServer {
         let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
         let remote_attestation_type = remote_attestation_message.attestation_type();
 
-        // If we expect an attestaion from the client, verify it and get measurements
-        let measurements = if self.attestation_verifier.has_remote_attestation() {
-            let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
-
-            self.attestation_verifier
-                .verify_attestation(remote_attestation_message, remote_input_data)
-                .await?
-                .map(|verified| verified.measurements)
-        } else {
-            None
-        };
+        // Validate every exchange, including policies that only accept no attestation,
+        // before exposing the peer's attestation type to callers.
+        let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
+        let measurements = self
+            .attestation_verifier
+            .verify_attestation(remote_attestation_message, remote_input_data)
+            .await?
+            .map(|verified| verified.measurements);
 
         Ok((tls_stream, measurements, remote_attestation_type))
     }
@@ -670,6 +667,54 @@ mod tests {
 
         let (_stream, _measurements, _attestation_type) =
             client.connect_tcp(&server_addr.to_string()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_enforces_no_attestation_policy() {
+        for client_type in [AttestationType::None, AttestationType::DcapTdx] {
+            let (cert_chain, private_key) =
+                generate_certificate_chain("127.0.0.1".parse().unwrap());
+            let (server_config, client_config) =
+                generate_tls_config(cert_chain.clone(), private_key);
+            let server = AttestedTlsServer::new_with_tls_config(
+                cert_chain,
+                server_config,
+                AttestationGenerator::with_no_attestation(),
+                AttestationVerifier::expect_none(),
+            )
+            .unwrap();
+            let client = AttestedTlsClient::new_with_tls_config(
+                client_config,
+                AttestationGenerator::new(client_type, None).unwrap(),
+                AttestationVerifier::expect_none(),
+                None,
+            )
+            .unwrap();
+            let (server_io, client_io) = tokio::io::duplex(128 * 1024);
+            let (server_result, client_result) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    tokio::join!(
+                        server.handle_connection(server_io),
+                        client.connect("127.0.0.1", client_io),
+                    )
+                })
+                .await
+                .unwrap();
+            // The client finishes sending before the server checks its evidence.
+            let _client_connection = client_result.unwrap();
+            if client_type == AttestationType::None {
+                let (_stream, measurements, attestation_type) = server_result.unwrap();
+                assert!(measurements.is_none());
+                assert_eq!(attestation_type, AttestationType::None);
+            } else {
+                assert!(matches!(
+                    server_result,
+                    Err(AttestedTlsError::Attestation(
+                        AttestationError::MeasurementsNotAccepted
+                    ))
+                ));
+            }
+        }
     }
 
     // Negative test - server does not provide attestation but client requires it
