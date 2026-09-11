@@ -251,7 +251,8 @@ impl ProxyServer {
 
             update_header(headers, &X_FORWARDED_FOR, &new_x_forwarded_for);
 
-            // If we have measurements, from the remote peer, add them to the request header
+            // Discard untrusted measurements before inserting verified peer measurements.
+            headers.remove(MEASUREMENT_HEADER);
             let measurements = measurements.clone();
             if let Some(measurements) = measurements {
                 match measurements.to_header_format() {
@@ -499,6 +500,8 @@ impl ProxyClient {
                                         // If we have measurements from the proxy-server, inject them into the
                                         // response header
                                         let headers = resp.headers_mut();
+                                        // Never forward measurements supplied by the target service.
+                                        headers.remove(MEASUREMENT_HEADER);
                                         if let Some(measurements) = measurements.clone() {
                                             match measurements.to_header_format() {
                                                 Ok(header_value) => {
@@ -884,6 +887,120 @@ mod tests {
 
         let res_body = res.text().await.unwrap();
         assert_eq!(res_body, "No measurements");
+    }
+
+    #[tokio::test]
+    async fn http_proxy_sanitizes_measurement_headers() {
+        for protocol in [ALPN_HTTP11, ALPN_H2] {
+            for attested in [false, true] {
+                let app = axum::Router::new().route(
+                    "/",
+                    axum::routing::get(|headers: HeaderMap| async move {
+                        let received: Vec<String> = headers
+                            .get_all(MEASUREMENT_HEADER)
+                            .iter()
+                            .map(|value| value.to_str().unwrap().to_owned())
+                            .collect();
+                        let mut headers = HeaderMap::new();
+                        headers.append(
+                            MEASUREMENT_HEADER,
+                            HeaderValue::from_static("forged-server"),
+                        );
+                        headers.append(
+                            MEASUREMENT_HEADER,
+                            HeaderValue::from_static("another-forgery"),
+                        );
+                        (headers, axum::Json(received))
+                    }),
+                );
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let target_addr = listener.local_addr().unwrap();
+                let backend = tokio::spawn(async move {
+                    axum::serve(listener, app).await.unwrap();
+                });
+
+                let (cert_chain, private_key) =
+                    generate_certificate_chain("127.0.0.1".parse().unwrap());
+                let (mut server_config, mut client_config) =
+                    generate_tls_config(cert_chain.clone(), private_key);
+                server_config.alpn_protocols = vec![protocol.to_vec()];
+                client_config.alpn_protocols = vec![protocol.to_vec()];
+
+                let (generator, verifier, expected) = if attested {
+                    (
+                        AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
+                        AttestationVerifier::mock(),
+                        vec![
+                            serde_json::from_str::<serde_json::Value>(
+                                mock_dcap_measurements()
+                                    .to_header_format()
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap(),
+                            )
+                            .unwrap(),
+                        ],
+                    )
+                } else {
+                    (
+                        AttestationGenerator::with_no_attestation(),
+                        AttestationVerifier::expect_none(),
+                        Vec::new(),
+                    )
+                };
+                let server = ProxyServer::new_with_tls_config(
+                    cert_chain,
+                    server_config,
+                    "127.0.0.1:0",
+                    target_addr.to_string(),
+                    generator.clone(),
+                    verifier.clone(),
+                )
+                .await
+                .unwrap();
+                let server_addr = server.local_addr().unwrap();
+                tokio::spawn(async move { server.accept().await.unwrap() });
+
+                let client = ProxyClient::new_with_tls_config(
+                    client_config,
+                    "127.0.0.1:0",
+                    server_addr.to_string(),
+                    generator,
+                    verifier,
+                    None,
+                )
+                .await
+                .unwrap();
+                let client_addr = client.local_addr().unwrap();
+                tokio::spawn(async move { client.accept().await.unwrap() });
+
+                let response = reqwest::Client::new()
+                    .get(format!("http://{client_addr}/"))
+                    .header(MEASUREMENT_HEADER, "forged-client")
+                    .header(MEASUREMENT_HEADER, "another-forgery")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), http::StatusCode::OK);
+                let response_measurements: Vec<_> = response
+                    .headers()
+                    .get_all(MEASUREMENT_HEADER)
+                    .iter()
+                    .map(|value| {
+                        serde_json::from_str::<serde_json::Value>(value.to_str().unwrap()).unwrap()
+                    })
+                    .collect();
+                assert_eq!(response_measurements, expected);
+                let request_measurements: Vec<String> =
+                    serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+                let request_measurements: Vec<_> = request_measurements
+                    .iter()
+                    .map(|value| serde_json::from_str::<serde_json::Value>(value).unwrap())
+                    .collect();
+                assert_eq!(request_measurements, expected);
+                backend.abort();
+            }
+        }
     }
 
     // Server has mock DCAP, client has no attestation and no client auth
