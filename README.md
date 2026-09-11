@@ -78,9 +78,12 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `client`, `get-tls-cert`, and `attested-get` accept `--allow-self-signed` to permit a self-signed remote TLS certificate.
 - `client` and `server` accept `--listen-addr-healthcheck` to start a separate HTTP health-check listener.
 - `client --request-timeout-secs` sets the deadline from receipt of request headers through queueing, upload, and receipt of response headers (default: 60 seconds). Expired requests receive HTTP 504 and are not retried. If a response has already started, an unfinished upload is canceled at the deadline; its response status cannot be changed. Response bodies can continue streaming after that deadline once the upload completes.
+- `client --response-body-idle-timeout-secs` closes a source connection if its active response body makes no socket write progress for this interval (default: 60 seconds). This covers silent backends and clients that stop reading, even when body polling is blocked. The affected request releases its capacity; HTTP/1.1 reconnects upstream, while other HTTP/2 streams remain usable. Responses already started are truncated rather than replaced with a 504. Streams that keep making progress may continue indefinitely.
 - `client --max-in-flight-requests` limits admitted requests, including streaming responses (default: 64). HTTP/2 requests run concurrently; HTTP/1.1 uses one request at a time and reconnects after a timeout or cancellation. Requests waiting for capacity are subject to the same deadline. Library callers can set these limits with `ProxyClient::with_request_options` and `ProxyClientOptions`.
 - `get-tls-cert --out-measurements <PATH>` writes the verified remote measurements as JSON in addition to writing the certificate chain to standard output.
 - If `server` is started without `--tls-private-key-path` and `--tls-certificate-path`, it generates a self-signed certificate for its listening IP address.
+
+These limits also apply to library callers: `ProxyClient::new*` defaults to a 60-second request deadline, a 60-second response-body idle timeout, and 64 in-flight requests. Set `ProxyClientOptions` with `with_request_options` before accepting connections to adjust them, including for long-polling services or streams with long gaps between messages. The idle timeout is inactive while waiting for response headers or between requests on a keep-alive connection.
 
 ## Protocol Specification
 

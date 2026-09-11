@@ -33,6 +33,23 @@ struct Fixture {
 }
 
 async fn proxy(app: Router, protocol: &[u8], slots: usize, request_timeout: Duration) -> Fixture {
+    proxy_with_idle_timeout(
+        app,
+        protocol,
+        slots,
+        request_timeout,
+        Duration::from_secs(60),
+    )
+    .await
+}
+
+async fn proxy_with_idle_timeout(
+    app: Router,
+    protocol: &[u8],
+    slots: usize,
+    request_timeout: Duration,
+    response_body_idle_timeout: Duration,
+) -> Fixture {
     let mut tasks = JoinSet::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let target = listener.local_addr().unwrap();
@@ -74,6 +91,7 @@ async fn proxy(app: Router, protocol: &[u8], slots: usize, request_timeout: Dura
     .with_request_options(ProxyClientOptions {
         request_timeout,
         max_in_flight_requests: slots.try_into().unwrap(),
+        response_body_idle_timeout,
     });
     let addr = client.local_addr().unwrap();
     tasks.spawn(async move {
@@ -95,6 +113,83 @@ fn http_client() -> reqwest::Client {
         .timeout(Duration::from_secs(5))
         .build()
         .unwrap()
+}
+
+// Real Hyper senders over an in-memory connection make worker failures and
+// connection closure deterministic, without racing TCP shutdown against dispatch.
+async fn sender_for_test(http2: bool) -> (crate::http_version::HttpSender, JoinSet<()>) {
+    use hyper_util::rt::TokioIo;
+    let (client, server) = tokio::io::duplex(4096);
+    let mut tasks = JoinSet::new();
+    let service = hyper::service::service_fn(|_| async {
+        Ok::<_, std::convert::Infallible>(hyper::Response::new(crate::full("ok")))
+    });
+    let sender = if http2 {
+        tasks.spawn(async move {
+            let _ = hyper::server::conn::http2::Builder::new(crate::TokioExecutor)
+                .serve_connection(TokioIo::new(server), service)
+                .await;
+        });
+        let (sender, connection) =
+            hyper::client::conn::http2::handshake(crate::TokioExecutor, TokioIo::new(client))
+                .await
+                .unwrap();
+        tasks.spawn(async move {
+            let _ = connection.await;
+        });
+        sender.into()
+    } else {
+        tasks.spawn(async move {
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(server), service)
+                .await;
+        });
+        let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(client))
+            .await
+            .unwrap();
+        tasks.spawn(async move {
+            let _ = connection.await;
+        });
+        sender.into()
+    };
+    (sender, tasks)
+}
+
+#[tokio::test]
+async fn worker_panic_preserves_http2_sender_but_reconnects_http1() {
+    for http2 in [false, true] {
+        let (sender, _tasks) = sender_for_test(http2).await;
+        let mut sender = Some(sender);
+        let worker_sender = super::take_sender(&mut sender).unwrap();
+        let failure: Result<super::ForwardResult, _> = tokio::spawn(async move {
+            let _sender = worker_sender;
+            panic!("simulated forwarding worker panic");
+        })
+        .await;
+        assert!(matches!(&failure, Err(error) if error.is_panic()));
+        assert_eq!(super::worker_finished(&mut sender, failure), !http2);
+        if http2 {
+            let mut next = super::take_sender(&mut sender).unwrap();
+            timeout(Duration::from_secs(1), next.ready())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(!next.is_closed());
+        } else {
+            assert!(sender.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn closed_sender_is_not_dispatched() {
+    for http2 in [false, true] {
+        let (sender, mut tasks) = sender_for_test(http2).await;
+        tasks.shutdown().await;
+        let mut sender = Some(sender);
+        assert!(sender.as_ref().unwrap().is_closed());
+        assert!(super::take_sender(&mut sender).is_none());
+    }
 }
 
 #[tokio::test]
@@ -491,4 +586,157 @@ async fn early_response_allows_upload_to_finish_before_releasing_slot() {
         .unwrap();
     assert_eq!(response.text().await.unwrap(), "fast");
     assert_eq!(fixture.connections.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn non_reading_source_times_out_and_releases_capacity() {
+    for protocol in [ALPN_HTTP11, ALPN_H2] {
+        let started = Arc::new(Notify::new());
+        let signal = started.clone();
+        let app = Router::new()
+            .route(
+                "/stream",
+                get(move || {
+                    let signal = signal.clone();
+                    async move {
+                        let (tx, rx) = tokio::sync::mpsc::channel(1);
+                        tokio::spawn(async move {
+                            let chunk = bytes::Bytes::from(vec![b'x'; 64 * 1024]);
+                            // An endless body eventually fills the source TCP window.
+                            while tx
+                                .send(Ok(hyper::body::Frame::data(chunk.clone())))
+                                .await
+                                .is_ok()
+                            {
+                                signal.notify_one();
+                            }
+                        });
+                        axum::body::Body::new(TestBody(rx))
+                    }
+                }),
+            )
+            .route("/fast", get(|| async { "fast" }));
+        let fixture = proxy_with_idle_timeout(
+            app,
+            protocol,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(250),
+        )
+        .await;
+        let mut source = TcpStream::connect(fixture.addr).await.unwrap();
+        source
+            .write_all(b"GET /stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        // Keep the connection open without reading any response bytes. The only
+        // slot must become available well before the five-second request deadline.
+        let response = timeout(
+            Duration::from_secs(3),
+            http_client().get(format!("{}/fast", fixture.url)).send(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.text().await.unwrap(), "fast");
+        assert_eq!(
+            fixture.connections.load(Ordering::SeqCst),
+            if protocol == ALPN_HTTP11 { 2 } else { 1 }
+        );
+        drop(source);
+    }
+}
+
+#[tokio::test]
+async fn silent_response_body_times_out_and_releases_capacity() {
+    for protocol in [ALPN_HTTP11, ALPN_H2] {
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        let rx = Arc::new(tokio::sync::Mutex::new(Some(rx)));
+        let app = Router::new()
+            .route(
+                "/silent",
+                get(move || {
+                    let rx = rx.clone();
+                    async move { axum::body::Body::new(TestBody(rx.lock().await.take().unwrap())) }
+                }),
+            )
+            .route("/fast", get(|| async { "fast" }));
+        let fixture = proxy_with_idle_timeout(
+            app,
+            protocol,
+            1,
+            Duration::from_secs(5),
+            Duration::from_millis(200),
+        )
+        .await;
+        let client = http_client();
+        let response = client
+            .get(format!("{}/silent", fixture.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert!(
+            timeout(Duration::from_secs(2), response.bytes())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        let response = client
+            .get(format!("{}/fast", fixture.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "fast");
+    }
+}
+
+#[tokio::test]
+async fn progressing_response_outlives_idle_and_request_deadlines() {
+    for protocol in [ALPN_HTTP11, ALPN_H2] {
+        let app = Router::new().route(
+            "/",
+            get(|| async {
+                let (tx, rx) = tokio::sync::mpsc::channel(1);
+                tokio::spawn(async move {
+                    for _ in 0..10 {
+                        tx.send(Ok(hyper::body::Frame::data(bytes::Bytes::from_static(
+                            b"x",
+                        ))))
+                        .await
+                        .unwrap();
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                });
+                axum::body::Body::new(TestBody(rx))
+            }),
+        );
+        let fixture = proxy_with_idle_timeout(
+            app,
+            protocol,
+            1,
+            Duration::from_millis(200),
+            Duration::from_millis(200),
+        )
+        .await;
+        let client = http_client();
+        let response = client
+            .get(format!("{}/", fixture.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "xxxxxxxxxx");
+        // An idle keep-alive connection has no active body and must not time out.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let response = client
+            .get(format!("{}/", fixture.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "xxxxxxxxxx");
+        assert_eq!(fixture.connections.load(Ordering::SeqCst), 1);
+    }
 }

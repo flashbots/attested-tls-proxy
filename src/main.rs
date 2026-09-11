@@ -71,6 +71,9 @@ enum CliCommand {
         /// Request deadline in seconds, including queueing and waiting for response headers
         #[arg(long, default_value = "60")]
         request_timeout_secs: NonZeroU64,
+        /// Close a source connection if its response body makes no write progress for this many seconds
+        #[arg(long, default_value = "60")]
+        response_body_idle_timeout_secs: NonZeroU64,
         /// Maximum in-flight requests, including streaming responses
         #[arg(long, default_value = "64")]
         max_in_flight_requests: NonZeroUsize,
@@ -254,6 +257,7 @@ async fn main() -> anyhow::Result<()> {
             listen_addr,
             target_addr,
             request_timeout_secs,
+            response_body_idle_timeout_secs,
             max_in_flight_requests,
             client_attestation_type,
             tls_private_key_path,
@@ -324,6 +328,9 @@ async fn main() -> anyhow::Result<()> {
             }
             .with_request_options(ProxyClientOptions {
                 request_timeout: Duration::from_secs(request_timeout_secs.get()),
+                response_body_idle_timeout: Duration::from_secs(
+                    response_body_idle_timeout_secs.get(),
+                ),
                 max_in_flight_requests,
             });
 

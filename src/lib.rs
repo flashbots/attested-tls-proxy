@@ -12,7 +12,7 @@ pub use attested_tls::attestation::AttestationGenerator;
 mod client_request;
 mod http_version;
 pub use client_request::ProxyClientOptions;
-use client_request::{PendingRequest, forward, gateway_timeout};
+use client_request::{PendingRequest, forward, gateway_timeout, take_sender, worker_finished};
 
 #[cfg(test)]
 mod test_helpers;
@@ -456,6 +456,7 @@ impl ProxyClient {
             // Retired connections may still have complete responses waiting to be
             // delivered. Drain their workers without blocking a fresh connection.
             let mut draining = tokio::task::JoinSet::new();
+            let mut deferred = None;
             'reconnect: loop {
                 let (sender, conn, measurements, remote_attestation_type) =
                     // Connect to the proxy server and provide / verify attestation
@@ -492,13 +493,21 @@ impl ProxyClient {
                 let mut sender = Some(sender);
                 loop {
                     tokio::select! {
-                        incoming = requests_rx.recv(), if sender.is_some() => {
+                        incoming = async {
+                            match deferred.take() {
+                                Some(pending) => Some(pending),
+                                None => requests_rx.recv().await,
+                            }
+                        }, if sender.is_some() => {
                             let Some(pending) = incoming else {
                                 break 'reconnect;
                             };
-                            let request_sender = match sender.as_ref().unwrap() {
-                                HttpSender::Http2(inner) => HttpSender::Http2(inner.clone()),
-                                HttpSender::Http1(_) => sender.take().unwrap(),
+                            let Some(request_sender) = take_sender(&mut sender) else {
+                                // This request has not been dispatched. Preserve its
+                                // deadline and permit across reconnect; never replay
+                                // a request already handed to a worker.
+                                deferred = Some(pending);
+                                break;
                             };
                             in_flight.spawn(forward(
                                 request_sender,
@@ -508,13 +517,9 @@ impl ProxyClient {
                             ));
                         }
                         result = in_flight.join_next(), if !in_flight.is_empty() => {
-                            match result {
-                                Some(Ok(result)) if !result.reconnect => {
-                                    if matches!(result.sender, HttpSender::Http1(_)) {
-                                        sender = Some(result.sender);
-                                    }
-                                }
-                                _ => break,
+                            if let Some(result) = result
+                                && worker_finished(&mut sender, result) {
+                                break;
                             }
                         }
                         _ = connection.join_next() => {
@@ -577,28 +582,38 @@ impl ProxyClient {
     ) -> Result<(), ProxyError> {
         tracing::debug!("proxy-client accepted connection");
 
+        let (inbound, activity, idle_timeout) =
+            client_request::response_idle::new(inbound, options.response_body_idle_timeout);
+
         // Setup http server and handler
         let http = hyper::server::conn::http1::Builder::new();
         let service = service_fn(move |req| {
             let requests_tx = requests_tx.clone();
             let request_slots = request_slots.clone();
+            let activity = activity.clone();
             async move {
-                match Self::handle_http_request(req, requests_tx, options, request_slots).await {
-                    Ok(res) => {
-                        Ok::<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>(res)
-                    }
-                    Err(e) => {
-                        warn!("send_request error: {e}");
-                        let mut resp = Response::new(full(format!("Request failed: {e}")));
-                        *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
-                        Ok(resp)
-                    }
-                }
+                let response =
+                    match Self::handle_http_request(req, requests_tx, options, request_slots).await
+                    {
+                        Ok(res) => res,
+                        Err(e) => {
+                            warn!("send_request error: {e}");
+                            let mut resp = Response::new(full(format!("Request failed: {e}")));
+                            *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
+                            resp
+                        }
+                    };
+                Ok::<_, hyper::Error>(activity.track(response))
             }
         });
 
         let io = TokioIo::new(inbound);
-        http.serve_connection(io, service).await?;
+        tokio::select! {
+            result = http.serve_connection(io, service) => result?,
+            _ = idle_timeout => {
+                warn!("Closing source connection after response-body idle timeout");
+            }
+        }
 
         Ok(())
     }

@@ -1,4 +1,5 @@
 //! Per-request forwarding, deadlines, and response lifetime tracking.
+pub(crate) mod response_idle;
 #[cfg(test)]
 mod tests;
 mod upload;
@@ -35,6 +36,9 @@ pub struct ProxyClientOptions {
     /// Deadline covering queueing, request upload, and waiting for response headers.
     /// Response bodies may continue streaming after this deadline.
     pub request_timeout: Duration,
+    /// Maximum time without response bytes being written to the source while a
+    /// response body is active. Expiry closes the source connection.
+    pub response_body_idle_timeout: Duration,
     /// Maximum admitted requests, including responses whose bodies are still streaming.
     /// HTTP/1.1 forwards one request at a time on its shared connection.
     pub max_in_flight_requests: NonZeroUsize,
@@ -44,6 +48,7 @@ impl Default for ProxyClientOptions {
     fn default() -> Self {
         Self {
             request_timeout: Duration::from_secs(60),
+            response_body_idle_timeout: Duration::from_secs(60),
             max_in_flight_requests: NonZeroUsize::new(64).unwrap(),
         }
     }
@@ -68,6 +73,40 @@ pub(crate) fn gateway_timeout() -> ProxyResponse {
 pub(crate) struct ForwardResult {
     pub sender: HttpSender,
     pub reconnect: bool,
+}
+
+/// Borrow the shared HTTP/2 sender or take the exclusive HTTP/1 sender.
+/// A closed connection must be replaced before dispatching the queued request.
+pub(crate) fn take_sender(sender: &mut Option<HttpSender>) -> Option<HttpSender> {
+    match sender.as_ref()? {
+        inner if inner.is_closed() => None,
+        HttpSender::Http2(inner) => Some(HttpSender::Http2(inner.clone())),
+        HttpSender::Http1(_) => sender.take(),
+    }
+}
+
+/// Restore an exclusive sender, returning whether the connection must be replaced.
+pub(crate) fn worker_finished(
+    sender: &mut Option<HttpSender>,
+    result: Result<ForwardResult, tokio::task::JoinError>,
+) -> bool {
+    match result {
+        Ok(result) => {
+            if result.reconnect {
+                return true;
+            }
+            if matches!(result.sender, HttpSender::Http1(_)) {
+                *sender = Some(result.sender);
+            }
+            false
+        }
+        Err(error) => {
+            tracing::error!(%error, "Request worker failed");
+            // HTTP/1 lost its exclusive sender. HTTP/2 retains a shared sender
+            // and other streams can continue after this worker unwinds.
+            sender.as_ref().is_none_or(HttpSender::is_closed)
+        }
+    }
 }
 
 pub(crate) async fn forward(
