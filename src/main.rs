@@ -4,14 +4,16 @@ use clap::{Parser, Subcommand};
 use std::{
     fs::File,
     net::{IpAddr, SocketAddr},
+    num::{NonZeroU64, NonZeroUsize},
     path::PathBuf,
+    time::Duration,
 };
 use tokio::io::AsyncWriteExt;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
-    AttestationGenerator, ProxyClient, ProxyServer,
+    AttestationGenerator, ProxyClient, ProxyClientOptions, ProxyServer,
     attested_get::{attested_get, split_target_and_path},
     attested_tls::{
         TlsCertAndKey,
@@ -66,6 +68,12 @@ enum CliCommand {
         listen_addr: SocketAddr,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
+        /// Request deadline in seconds, including queueing and waiting for response headers
+        #[arg(long, default_value = "60")]
+        request_timeout_secs: NonZeroU64,
+        /// Maximum in-flight requests, including streaming responses
+        #[arg(long, default_value = "64")]
+        max_in_flight_requests: NonZeroUsize,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
@@ -245,6 +253,8 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Client {
             listen_addr,
             target_addr,
+            request_timeout_secs,
+            max_in_flight_requests,
             client_attestation_type,
             tls_private_key_path,
             tls_certificate_path,
@@ -311,7 +321,11 @@ async fn main() -> anyhow::Result<()> {
                     remote_tls_cert,
                 )
                 .await?
-            };
+            }
+            .with_request_options(ProxyClientOptions {
+                request_timeout: Duration::from_secs(request_timeout_secs.get()),
+                max_in_flight_requests,
+            });
 
             loop {
                 if let Err(err) = client.accept().await {

@@ -9,7 +9,10 @@ pub use attested_tls;
 pub use attested_tls::attestation;
 pub use attested_tls::attestation::AttestationGenerator;
 
+mod client_request;
 mod http_version;
+pub use client_request::ProxyClientOptions;
+use client_request::{PendingRequest, forward, gateway_timeout};
 
 #[cfg(test)]
 mod test_helpers;
@@ -23,7 +26,7 @@ use std::{net::SocketAddr, num::TryFromIntError, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
 use tokio_rustls::rustls::{
     self, ClientConfig, RootCertStore, ServerConfig, pki_types::CertificateDer,
@@ -55,11 +58,6 @@ const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 
 const KEEP_ALIVE_INTERVAL: u64 = 30;
 const KEEP_ALIVE_TIMEOUT: u64 = 10;
-
-type RequestWithResponseSender = (
-    http::Request<hyper::body::Incoming>,
-    oneshot::Sender<Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>>,
-);
 
 /// Adds HTTP 1 and 2 to the list of allowed protocols
 fn ensure_proxy_alpn_protocols(alpn_protocols: &mut Vec<Vec<u8>>) {
@@ -359,10 +357,19 @@ pub struct ProxyClient {
     /// The underlying TCP listener
     listener: TcpListener,
     /// A channel for sending requests to the connection to the proxy-server
-    requests_tx: mpsc::Sender<RequestWithResponseSender>,
+    requests_tx: mpsc::Sender<PendingRequest>,
+    options: ProxyClientOptions,
+    request_slots: Arc<Semaphore>,
 }
 
 impl ProxyClient {
+    /// Configure request limits before accepting source connections.
+    pub fn with_request_options(mut self, options: ProxyClientOptions) -> Self {
+        self.request_slots = Arc::new(Semaphore::new(options.max_in_flight_requests.get()));
+        self.options = options;
+        self
+    }
+
     /// Start with optional TLS client auth
     pub async fn new(
         cert_and_key: Option<TlsCertAndKey>,
@@ -438,12 +445,7 @@ impl ProxyClient {
         let target = host_to_host_with_port(target_name);
 
         // Channel for getting incoming requests from the source client
-        let (requests_tx, mut requests_rx) = mpsc::channel::<(
-            http::Request<hyper::body::Incoming>,
-            oneshot::Sender<
-                Result<http::Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>,
-            >,
-        )>(1024);
+        let (requests_tx, mut requests_rx) = mpsc::channel::<PendingRequest>(1024);
 
         // used only to signal "initial connect succeeded" or "failed with error"
         let (ready_tx, ready_rx) = oneshot::channel::<Result<(), ProxyError>>();
@@ -451,8 +453,11 @@ impl ProxyClient {
         tokio::spawn(async move {
             let mut first = true;
             let mut ready_tx = Some(ready_tx);
+            // Retired connections may still have complete responses waiting to be
+            // delivered. Drain their workers without blocking a fresh connection.
+            let mut draining = tokio::task::JoinSet::new();
             'reconnect: loop {
-                let (mut sender, conn, measurements, remote_attestation_type) =
+                let (sender, conn, measurements, remote_attestation_type) =
                     // Connect to the proxy server and provide / verify attestation
                     match Self::setup_connection_with_backoff(&target, &attested_tls_client, first)
                         .await
@@ -479,79 +484,48 @@ impl ProxyClient {
                         }
                     };
 
-                let (conn_done_tx, mut conn_done_rx) =
-                    tokio::sync::watch::channel::<Option<hyper::Error>>(None);
-
-                tokio::spawn(async move {
-                    let res = conn.await;
-                    let _ = conn_done_tx.send(res.err());
-                });
+                // The connection driver is stopped on reconnect. Request workers
+                // retain their own deadlines and connection-specific measurements.
+                let mut connection = tokio::task::JoinSet::new();
+                connection.spawn(conn);
+                let mut in_flight = tokio::task::JoinSet::new();
+                let mut sender = Some(sender);
                 loop {
                     tokio::select! {
-                        // Read an incoming request from the channel (from the source client)
-                        incoming_req_option = requests_rx.recv() => {
-                            if let Some((req, response_tx)) = incoming_req_option {
-                                debug!("[proxy-client] Read incoming request from source client: {req:?}");
-                                // Attempt to forward it to the proxy server
-                                let (response, should_reconnect) = match sender.send_request(req).await {
-                                    Ok(mut resp) => {
-                                        debug!("[proxy-client] Read response from proxy-server: {resp:?}");
-                                        // If we have measurements from the proxy-server, inject them into the
-                                        // response header
-                                        let headers = resp.headers_mut();
-                                        if let Some(measurements) = measurements.clone() {
-                                            match measurements.to_header_format() {
-                                                Ok(header_value) => {
-                                                    headers.insert(MEASUREMENT_HEADER, header_value);
-                                                }
-                                                Err(e) => {
-                                                    // This error is highly unlikely - that the measurement values fail to
-                                                    // encode to JSON or fit in an HTTP header
-                                                    error!("Failed to encode measurement values: {e}");
-                                                }
-                                            }
-                                        }
-
-                                        update_header(
-                                            headers,
-                                            ATTESTATION_TYPE_HEADER,
-                                            remote_attestation_type.as_str(),
-                                        );
-                                        (Ok(resp.map(|b| b.boxed())), false)
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to send request to proxy-server: {e}");
-                                        let mut resp = Response::new(full(format!("Request failed: {e}")));
-                                        *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
-
-                                        (Ok(resp), true)
-                                    }
-                                };
-
-                                // Send the response back to the source client
-                                if response_tx.send(response).is_err() {
-                                    warn!("Failed to forward response to source client, probably they dropped the connection");
-                                }
-
-                                if should_reconnect {
-                                    // Leave the inner loop and continue on the reconnect loop
-                                    warn!("Reconnecting to proxy-server due to failed request");
-                                    break;
-                                }
-                            } else {
-                                // The request sender was dropped - so no more incoming requests
-                                debug!("Request sender dropped - leaving connection handler loop");
+                        incoming = requests_rx.recv(), if sender.is_some() => {
+                            let Some(pending) = incoming else {
                                 break 'reconnect;
+                            };
+                            let request_sender = match sender.as_ref().unwrap() {
+                                HttpSender::Http2(inner) => HttpSender::Http2(inner.clone()),
+                                HttpSender::Http1(_) => sender.take().unwrap(),
+                            };
+                            in_flight.spawn(forward(
+                                request_sender,
+                                pending,
+                                measurements.clone(),
+                                remote_attestation_type,
+                            ));
+                        }
+                        result = in_flight.join_next(), if !in_flight.is_empty() => {
+                            match result {
+                                Some(Ok(result)) if !result.reconnect => {
+                                    if matches!(result.sender, HttpSender::Http1(_)) {
+                                        sender = Some(result.sender);
+                                    }
+                                }
+                                _ => break,
                             }
                         }
-
-                        // Connection closed
-                        _ = conn_done_rx.changed() => {
-                            // Leave the inner loop and continue on the reconnect loop
+                        _ = connection.join_next() => {
                             warn!("Connection dropped - reconnecting...");
                             break;
                         }
-                    };
+                        _ = draining.join_next(), if !draining.is_empty() => {}
+                    }
+                }
+                if !in_flight.is_empty() {
+                    draining.spawn(async move { while in_flight.join_next().await.is_some() {} });
                 }
             }
         });
@@ -560,6 +534,10 @@ impl ProxyClient {
             Ok(Ok(())) => Ok(Self {
                 listener,
                 requests_tx,
+                options: ProxyClientOptions::default(),
+                request_slots: Arc::new(Semaphore::new(
+                    ProxyClientOptions::default().max_in_flight_requests.get(),
+                )),
             }),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(e.into()),
@@ -576,9 +554,13 @@ impl ProxyClient {
         let (inbound, _client_addr) = self.listener.accept().await?;
 
         let requests_tx = self.requests_tx.clone();
+        let options = self.options;
+        let request_slots = self.request_slots.clone();
 
         let handle = tokio::spawn(async move {
-            if let Err(err) = Self::handle_connection(inbound, requests_tx).await {
+            if let Err(err) =
+                Self::handle_connection(inbound, requests_tx, options, request_slots).await
+            {
                 warn!("Failed to handle connection from source client: {err}");
             }
         });
@@ -589,7 +571,9 @@ impl ProxyClient {
     /// Handle an incoming connection from the source client
     async fn handle_connection(
         inbound: TcpStream,
-        requests_tx: mpsc::Sender<RequestWithResponseSender>,
+        requests_tx: mpsc::Sender<PendingRequest>,
+        options: ProxyClientOptions,
+        request_slots: Arc<Semaphore>,
     ) -> Result<(), ProxyError> {
         tracing::debug!("proxy-client accepted connection");
 
@@ -597,8 +581,9 @@ impl ProxyClient {
         let http = hyper::server::conn::http1::Builder::new();
         let service = service_fn(move |req| {
             let requests_tx = requests_tx.clone();
+            let request_slots = request_slots.clone();
             async move {
-                match Self::handle_http_request(req, requests_tx).await {
+                match Self::handle_http_request(req, requests_tx, options, request_slots).await {
                     Ok(res) => {
                         Ok::<Response<BoxBody<bytes::Bytes, hyper::Error>>, hyper::Error>(res)
                     }
@@ -684,13 +669,13 @@ impl ProxyClient {
                     .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
                     .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
                     .keep_alive_while_idle(true)
-                    .handshake::<_, hyper::body::Incoming>(outbound_io)
+                    .handshake::<_, client_request::RequestBody>(outbound_io)
                     .await?;
                 (sender.into(), conn.into())
             }
             HttpVersion::Http1 => {
                 let (sender, conn) = hyper::client::conn::http1::Builder::new()
-                    .handshake::<_, hyper::body::Incoming>(outbound_io)
+                    .handshake::<_, client_request::RequestBody>(outbound_io)
                     .await?;
                 (sender.into(), conn.into())
             }
@@ -703,11 +688,32 @@ impl ProxyClient {
     // Handle a request from the source client to the proxy server
     async fn handle_http_request(
         req: hyper::Request<hyper::body::Incoming>,
-        requests_tx: mpsc::Sender<RequestWithResponseSender>,
+        requests_tx: mpsc::Sender<PendingRequest>,
+        options: ProxyClientOptions,
+        request_slots: Arc<Semaphore>,
     ) -> Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, ProxyError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        requests_tx.send((req, response_tx)).await?;
-        Ok(response_rx.await??)
+        let deadline = tokio::time::Instant::now() + options.request_timeout;
+        let result = tokio::time::timeout_at(deadline, async {
+            let permit = request_slots
+                .acquire_owned()
+                .await
+                .expect("request semaphore is never closed");
+            let (response_tx, response_rx) = oneshot::channel();
+            requests_tx
+                .send(PendingRequest {
+                    request: req,
+                    response_tx,
+                    deadline,
+                    permit,
+                })
+                .await?;
+            Ok::<_, ProxyError>(response_rx.await?)
+        })
+        .await;
+        match result {
+            Ok(result) => result,
+            Err(_) => Ok(gateway_timeout()),
+        }
     }
 }
 
@@ -759,8 +765,8 @@ pub enum ProxyError {
     AttestedTls(#[from] AttestedTlsError),
 }
 
-impl From<mpsc::error::SendError<RequestWithResponseSender>> for ProxyError {
-    fn from(_err: mpsc::error::SendError<RequestWithResponseSender>) -> Self {
+impl From<mpsc::error::SendError<PendingRequest>> for ProxyError {
+    fn from(_err: mpsc::error::SendError<PendingRequest>) -> Self {
         Self::MpscSend
     }
 }

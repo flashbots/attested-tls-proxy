@@ -77,6 +77,8 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.
 - `client`, `get-tls-cert`, and `attested-get` accept `--allow-self-signed` to permit a self-signed remote TLS certificate.
 - `client` and `server` accept `--listen-addr-healthcheck` to start a separate HTTP health-check listener.
+- `client --request-timeout-secs` sets the deadline from receipt of request headers through queueing, upload, and receipt of response headers (default: 60 seconds). Expired requests receive HTTP 504 and are not retried. If a response has already started, an unfinished upload is canceled at the deadline; its response status cannot be changed. Response bodies can continue streaming after that deadline once the upload completes.
+- `client --max-in-flight-requests` limits admitted requests, including streaming responses (default: 64). HTTP/2 requests run concurrently; HTTP/1.1 uses one request at a time and reconnects after a timeout or cancellation. Requests waiting for capacity are subject to the same deadline. Library callers can set these limits with `ProxyClient::with_request_options` and `ProxyClientOptions`.
 - `get-tls-cert --out-measurements <PATH>` writes the verified remote measurements as JSON in addition to writing the certificate chain to standard output.
 - If `server` is started without `--tls-private-key-path` and `--tls-certificate-path`, it generates a self-signed certificate for its listening IP address.
 

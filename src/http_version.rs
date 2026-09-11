@@ -1,4 +1,5 @@
 //! HTTP Version support and negotiation
+use crate::client_request::RequestBody;
 use hyper::Response;
 use hyper_util::rt::TokioIo;
 use std::pin::Pin;
@@ -52,17 +53,17 @@ impl HttpVersion {
     }
 }
 
-type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
-type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
+type Http1Sender = hyper::client::conn::http1::SendRequest<RequestBody>;
+type Http2Sender = hyper::client::conn::http2::SendRequest<RequestBody>;
 
 type Http1Connection = hyper::client::conn::http1::Connection<
     TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
+    RequestBody,
 >;
 
 type Http2Connection = hyper::client::conn::http2::Connection<
     TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
+    RequestBody,
     crate::TokioExecutor,
 >;
 
@@ -85,9 +86,23 @@ impl From<Http2Sender> for HttpSender {
 }
 
 impl HttpSender {
+    pub async fn ready(&mut self) -> Result<(), hyper::Error> {
+        match self {
+            Self::Http1(sender) => sender.ready().await,
+            Self::Http2(sender) => sender.ready().await,
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        match self {
+            Self::Http1(sender) => sender.is_closed(),
+            Self::Http2(sender) => sender.is_closed(),
+        }
+    }
+
     pub async fn send_request(
         &mut self,
-        request: http::Request<hyper::body::Incoming>,
+        request: http::Request<RequestBody>,
     ) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
         match self {
             Self::Http1(sender) => sender.send_request(request).await,
