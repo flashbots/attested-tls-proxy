@@ -30,7 +30,11 @@ impl UploadState {
 
 fn cancel(state: &Mutex<UploadState>) {
     let waker = {
-        let mut state = state.lock().unwrap();
+        // Cleanup must also work during unwinding after a panic under this lock.
+        // Recover the guard only to discard the upload, never to resume it.
+        let mut state = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.inner.take();
         state.finished.take();
         state.waker.take()
@@ -96,28 +100,33 @@ impl Body for RequestBody {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let frame = {
-            let mut state = self.state.lock().unwrap();
-            if state.complete {
-                Poll::Ready(None)
-            } else if let Some(inner) = state.inner.as_mut() {
-                let frame = Pin::new(&mut *inner).poll_frame(cx);
-                if matches!(frame, Poll::Ready(Some(Err(_)))) {
-                    state.inner.take();
-                    state.finished.take();
-                } else if matches!(frame, Poll::Ready(None)) || inner.is_end_stream() {
-                    state.finish();
+        let frame = match self.state.lock() {
+            Err(_) => Poll::Ready(Some(Err(io::Error::other("request upload state poisoned")))),
+            Ok(mut state) => {
+                if state.complete {
+                    Poll::Ready(None)
+                } else if let Some(inner) = state.inner.as_mut() {
+                    let frame = Pin::new(&mut *inner).poll_frame(cx);
+                    if matches!(frame, Poll::Ready(Some(Err(_)))) {
+                        state.inner.take();
+                        state.finished.take();
+                    } else if matches!(frame, Poll::Ready(None)) || inner.is_end_stream() {
+                        state.finish();
+                    } else {
+                        state.waker = Some(cx.waker().clone());
+                    }
+                    frame.map(|frame| frame.map(|frame| frame.map_err(io::Error::other)))
                 } else {
-                    state.waker = Some(cx.waker().clone());
+                    Poll::Ready(Some(Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "request upload canceled",
+                    ))))
                 }
-                frame.map(|frame| frame.map(|frame| frame.map_err(io::Error::other)))
-            } else {
-                Poll::Ready(Some(Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "request upload canceled",
-                ))))
             }
         };
+        if matches!(frame, Poll::Ready(Some(Err(_)))) {
+            cancel(&self.state);
+        }
         if matches!(frame, Poll::Ready(None) | Poll::Ready(Some(Err(_)))) || self.is_end_stream() {
             self.permit.take();
         }
@@ -125,16 +134,17 @@ impl Body for RequestBody {
     }
 
     fn is_end_stream(&self) -> bool {
-        self.state.lock().unwrap().complete
+        self.state
+            .lock()
+            .map(|state| state.complete)
+            .unwrap_or(false)
     }
 
     fn size_hint(&self) -> SizeHint {
         self.state
             .lock()
-            .unwrap()
-            .inner
-            .as_ref()
-            .map(Body::size_hint)
+            .ok()
+            .and_then(|state| state.inner.as_ref().map(Body::size_hint))
             .unwrap_or_default()
     }
 }
