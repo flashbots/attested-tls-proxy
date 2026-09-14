@@ -1,4 +1,5 @@
 //! Per-request forwarding, deadlines, and response lifetime tracking.
+pub(crate) mod http2;
 pub(crate) mod response_idle;
 #[cfg(test)]
 mod tests;
@@ -54,8 +55,9 @@ impl Default for ProxyClientOptions {
     }
 }
 
+pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub(crate) type ProxyResponse =
-    Response<http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>>;
+    Response<http_body_util::combinators::BoxBody<bytes::Bytes, BoxError>>;
 
 pub(crate) struct PendingRequest {
     pub request: http::Request<Incoming>,
@@ -65,7 +67,11 @@ pub(crate) struct PendingRequest {
 }
 
 pub(crate) fn gateway_timeout() -> ProxyResponse {
-    let mut response = Response::new(full("Request deadline exceeded"));
+    let mut response = Response::new(
+        full("Request deadline exceeded")
+            .map_err(Into::into)
+            .boxed(),
+    );
     *response.status_mut() = http::StatusCode::GATEWAY_TIMEOUT;
     response
 }
@@ -153,7 +159,11 @@ pub(crate) async fn forward(
         failure => {
             if let Some(Err(error)) = failure {
                 tracing::warn!("Failed to send request to proxy-server: {error}");
-                let mut response = Response::new(full(format!("Request failed: {error}")));
+                let mut response = Response::new(
+                    full(format!("Request failed: {error}"))
+                        .map_err(Into::into)
+                        .boxed(),
+                );
                 *response.status_mut() = http::StatusCode::BAD_GATEWAY;
                 let _ = response_tx.send(response);
             }
@@ -228,7 +238,7 @@ pub(crate) async fn forward(
 pin_project_lite::pin_project! {
     struct TrackedBody {
         #[pin]
-        inner: Incoming,
+        inner: http_body_util::combinators::BoxBody<bytes::Bytes, BoxError>,
         permit: Option<Arc<OwnedSemaphorePermit>>,
         finished: Option<oneshot::Sender<()>>,
     }
@@ -245,7 +255,7 @@ impl TrackedBody {
 
 impl Body for TrackedBody {
     type Data = bytes::Bytes;
-    type Error = hyper::Error;
+    type Error = BoxError;
 
     fn poll_frame(
         self: Pin<&mut Self>,

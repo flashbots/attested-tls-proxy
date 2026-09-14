@@ -129,7 +129,7 @@ impl AsyncWrite for IdleIo {
 }
 
 struct IdleBody {
-    inner: http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>,
+    inner: http_body_util::combinators::BoxBody<bytes::Bytes, super::BoxError>,
     activity: Option<ResponseActivity>,
 }
 
@@ -149,7 +149,7 @@ impl Drop for IdleBody {
 
 impl Body for IdleBody {
     type Data = bytes::Bytes;
-    type Error = hyper::Error;
+    type Error = super::BoxError;
     fn poll_frame(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

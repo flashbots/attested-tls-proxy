@@ -598,7 +598,11 @@ impl ProxyClient {
                         Ok(res) => res,
                         Err(e) => {
                             warn!("send_request error: {e}");
-                            let mut resp = Response::new(full(format!("Request failed: {e}")));
+                            let mut resp = Response::new(
+                                full(format!("Request failed: {e}"))
+                                    .map_err(Into::into)
+                                    .boxed(),
+                            );
                             *resp.status_mut() = hyper::StatusCode::BAD_GATEWAY;
                             resp
                         }
@@ -679,13 +683,8 @@ impl ProxyClient {
         let outbound_io = TokioIo::new(tls_stream);
         let (sender, conn) = match http_version {
             HttpVersion::Http2 => {
-                let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor)
-                    .timer(hyper_util::rt::tokio::TokioTimer::new())
-                    .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
-                    .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
-                    .keep_alive_while_idle(true)
-                    .handshake::<_, client_request::RequestBody>(outbound_io)
-                    .await?;
+                let (sender, conn) =
+                    client_request::http2::handshake(outbound_io.into_inner()).await?;
                 (sender.into(), conn.into())
             }
             HttpVersion::Http1 => {
@@ -706,7 +705,7 @@ impl ProxyClient {
         requests_tx: mpsc::Sender<PendingRequest>,
         options: ProxyClientOptions,
         request_slots: Arc<Semaphore>,
-    ) -> Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, ProxyError> {
+    ) -> Result<client_request::ProxyResponse, ProxyError> {
         let deadline = tokio::time::Instant::now() + options.request_timeout;
         let result = tokio::time::timeout_at(deadline, async {
             let permit = request_slots
@@ -770,6 +769,8 @@ pub enum ProxyError {
     BadDnsName(#[from] tokio_rustls::rustls::pki_types::InvalidDnsNameError),
     #[error("HTTP: {0}")]
     Hyper(#[from] hyper::Error),
+    #[error("HTTP/2: {0}")]
+    Http2(#[from] h2::Error),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("Could not forward response - sender was dropped")]
