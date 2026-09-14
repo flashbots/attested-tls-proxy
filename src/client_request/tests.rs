@@ -740,3 +740,76 @@ async fn progressing_response_outlives_idle_and_request_deadlines() {
         assert_eq!(fixture.connections.load(Ordering::SeqCst), 1);
     }
 }
+
+/// Serves a single-frame response through the idle wrapper on a reusable connection.
+async fn finite_idle_response(body: bytes::Bytes) -> (TcpStream, JoinSet<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let source = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (inbound, _) = listener.accept().await.unwrap();
+    let (io, activity, idle) = super::response_idle::new(inbound, Duration::from_millis(200));
+    let mut tasks = JoinSet::new();
+    tasks.spawn(async move {
+        let service = hyper::service::service_fn(move |_| {
+            let response = activity.track(hyper::Response::new(crate::full(body.clone())));
+            async { Ok::<_, std::convert::Infallible>(response) }
+        });
+        tokio::select! {
+            result = hyper::server::conn::http1::Builder::new()
+                .serve_connection(hyper_util::rt::TokioIo::new(io), service) => result.unwrap(),
+            _ = idle => (),
+        }
+    });
+    (source, tasks)
+}
+
+/// Checks that a blocked final frame remains subject to the idle timeout.
+#[tokio::test]
+async fn idle_timeout_covers_final_buffered_frame() {
+    let (mut source, mut tasks) =
+        finite_idle_response(bytes::Bytes::from(vec![b'x'; 16 * 1024 * 1024])).await;
+    source
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    // Keep the socket open without reading. Consuming the final body frame must
+    // not disable the timeout while its bytes are still buffered by Hyper.
+    timeout(Duration::from_secs(2), tasks.join_next())
+        .await
+        .expect("final buffered frame escaped the idle timeout")
+        .unwrap()
+        .unwrap();
+}
+
+/// Checks that flushed empty and nonempty responses leave keep-alive connections usable.
+#[tokio::test]
+async fn flushed_responses_leave_source_keep_alive() {
+    use http_body_util::BodyExt;
+    // Empty responses must also disarm the timer after their headers are flushed.
+    for body in [bytes::Bytes::new(), bytes::Bytes::from_static(b"ok")] {
+        let (source, mut tasks) = finite_idle_response(body.clone()).await;
+        let (mut sender, connection) =
+            hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(source))
+                .await
+                .unwrap();
+        tasks.spawn(async move {
+            connection.await.unwrap();
+        });
+        for _ in 0..2 {
+            let response = sender
+                .send_request(http::Request::new(crate::full("")))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                body
+            );
+            tokio::time::sleep(Duration::from_millis(350)).await;
+            assert!(
+                !sender.is_closed(),
+                "flushed response timed out on keep-alive connection"
+            );
+        }
+    }
+}
