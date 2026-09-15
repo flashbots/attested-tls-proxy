@@ -75,7 +75,7 @@ enum CliCommand {
         #[arg(long, default_value = "60")]
         response_body_idle_timeout_secs: NonZeroU64,
         /// Maximum in-flight requests, including streaming responses
-        #[arg(long, default_value = "64")]
+        #[arg(long, default_value = "64", value_parser = parse_max_in_flight_requests)]
         max_in_flight_requests: NonZeroUsize,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
@@ -543,4 +543,57 @@ fn certs_to_pem_string(certs: &[CertificateDer<'_>]) -> Result<String, pem_rfc74
         out.push('\n');
     }
     Ok(out)
+}
+
+/// Parses an admission limit within Tokio's supported semaphore range.
+fn parse_max_in_flight_requests(value: &str) -> Result<NonZeroUsize, String> {
+    let count = value
+        .parse::<NonZeroUsize>()
+        .map_err(|error| error.to_string())?;
+    if count.get() > tokio::sync::Semaphore::MAX_PERMITS {
+        return Err(format!(
+            "must not exceed {}",
+            tokio::sync::Semaphore::MAX_PERMITS,
+        ));
+    }
+    Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks that CLI parsing rejects invalid limits before starting the proxy.
+    #[test]
+    fn max_in_flight_requests_validates_semaphore_limit() {
+        for count in [
+            0,
+            1,
+            tokio::sync::Semaphore::MAX_PERMITS,
+            tokio::sync::Semaphore::MAX_PERMITS + 1,
+        ] {
+            let result = Cli::try_parse_from([
+                "attested-tls-proxy",
+                "client",
+                "localhost:443",
+                "--max-in-flight-requests",
+                &count.to_string(),
+            ]);
+            if (1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&count) {
+                let CliCommand::Client {
+                    max_in_flight_requests,
+                    ..
+                } = result.unwrap().command
+                else {
+                    panic!("expected client command");
+                };
+                assert_eq!(max_in_flight_requests.get(), count);
+            } else {
+                assert_eq!(
+                    result.unwrap_err().kind(),
+                    clap::error::ErrorKind::ValueValidation
+                );
+            }
+        }
+    }
 }
