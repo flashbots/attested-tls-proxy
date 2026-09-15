@@ -4,14 +4,16 @@ use clap::{Parser, Subcommand};
 use std::{
     fs::File,
     net::{IpAddr, SocketAddr},
+    num::{NonZeroU64, NonZeroUsize},
     path::PathBuf,
+    time::Duration,
 };
 use tokio::io::AsyncWriteExt;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::level_filters::LevelFilter;
 
 use attested_tls_proxy::{
-    AttestationGenerator, ProxyClient, ProxyServer,
+    AttestationGenerator, ProxyClient, ProxyClientOptions, ProxyServer,
     attested_get::{attested_get, split_target_and_path},
     attested_tls::{
         TlsCertAndKey,
@@ -66,6 +68,15 @@ enum CliCommand {
         listen_addr: SocketAddr,
         /// The hostname:port or ip:port of the proxy server (port defaults to 443)
         target_addr: String,
+        /// Request deadline in seconds, including queueing and waiting for response headers
+        #[arg(long, default_value = "60")]
+        request_timeout_secs: NonZeroU64,
+        /// Close a source connection if its response body makes no write progress for this many seconds
+        #[arg(long, default_value = "60")]
+        response_body_idle_timeout_secs: NonZeroU64,
+        /// Maximum in-flight requests, including streaming responses
+        #[arg(long, default_value = "64", value_parser = parse_max_in_flight_requests)]
+        max_in_flight_requests: NonZeroUsize,
         /// Type of attestation to present (dafaults to 'auto' for automatic detection)
         /// If other than None, a TLS key and certicate must also be given
         #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
@@ -245,6 +256,9 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Client {
             listen_addr,
             target_addr,
+            request_timeout_secs,
+            response_body_idle_timeout_secs,
+            max_in_flight_requests,
             client_attestation_type,
             tls_private_key_path,
             tls_certificate_path,
@@ -311,7 +325,14 @@ async fn main() -> anyhow::Result<()> {
                     remote_tls_cert,
                 )
                 .await?
-            };
+            }
+            .with_request_options(ProxyClientOptions {
+                request_timeout: Duration::from_secs(request_timeout_secs.get()),
+                response_body_idle_timeout: Duration::from_secs(
+                    response_body_idle_timeout_secs.get(),
+                ),
+                max_in_flight_requests,
+            });
 
             loop {
                 if let Err(err) = client.accept().await {
@@ -522,4 +543,57 @@ fn certs_to_pem_string(certs: &[CertificateDer<'_>]) -> Result<String, pem_rfc74
         out.push('\n');
     }
     Ok(out)
+}
+
+/// Parses an admission limit within Tokio's supported semaphore range.
+fn parse_max_in_flight_requests(value: &str) -> Result<NonZeroUsize, String> {
+    let count = value
+        .parse::<NonZeroUsize>()
+        .map_err(|error| error.to_string())?;
+    if count.get() > tokio::sync::Semaphore::MAX_PERMITS {
+        return Err(format!(
+            "must not exceed {}",
+            tokio::sync::Semaphore::MAX_PERMITS,
+        ));
+    }
+    Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks that CLI parsing rejects invalid limits before starting the proxy.
+    #[test]
+    fn max_in_flight_requests_validates_semaphore_limit() {
+        for count in [
+            0,
+            1,
+            tokio::sync::Semaphore::MAX_PERMITS,
+            tokio::sync::Semaphore::MAX_PERMITS + 1,
+        ] {
+            let result = Cli::try_parse_from([
+                "attested-tls-proxy",
+                "client",
+                "localhost:443",
+                "--max-in-flight-requests",
+                &count.to_string(),
+            ]);
+            if (1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&count) {
+                let CliCommand::Client {
+                    max_in_flight_requests,
+                    ..
+                } = result.unwrap().command
+                else {
+                    panic!("expected client command");
+                };
+                assert_eq!(max_in_flight_requests.get(), count);
+            } else {
+                assert_eq!(
+                    result.unwrap_err().kind(),
+                    clap::error::ErrorKind::ValueValidation
+                );
+            }
+        }
+    }
 }
