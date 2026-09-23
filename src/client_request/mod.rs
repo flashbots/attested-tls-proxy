@@ -177,6 +177,8 @@ pub(crate) async fn forward(
 
     // These measurements belong to the connection used for this request.
     let headers = response.headers_mut();
+    // Never forward measurements supplied by the target service.
+    headers.remove(MEASUREMENT_HEADER);
     if let Some(measurements) = measurements {
         match measurements.to_header_format() {
             Ok(value) => {

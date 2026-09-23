@@ -23,6 +23,8 @@ pub fn split_target_and_path(target: &str) -> (String, Option<String>) {
 
 /// Start a proxy-client, send a single HTTP GET request to the given path and return the
 /// [reqwest::Response]
+///
+/// Redirects are returned without following them, so requests stay on the attested channel.
 pub async fn attested_get(
     target_addr: String,
     url_path: &str,
@@ -62,7 +64,17 @@ async fn attested_get_with_client(
     proxy_client: ProxyClient,
     url_path: &str,
 ) -> Result<reqwest::Response, ProxyError> {
-    let proxy_client_addr = proxy_client.local_addr().unwrap();
+    let proxy_client_addr = proxy_client.local_addr()?;
+
+    // Keep the request on the local proxy and return redirects without following them.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()?;
+    let url_path = url_path.strip_prefix("/").unwrap_or(url_path);
+    let request = client
+        .get(format!("http://{proxy_client_addr}/{url_path}"))
+        .build()?;
 
     // Accept a single connection in a separate task
     tokio::spawn(async move {
@@ -71,16 +83,7 @@ async fn attested_get_with_client(
         }
     });
 
-    // Remove leading '/' if present
-    let url_path = url_path.strip_prefix("/").unwrap_or(url_path);
-
-    // Make a GET request
-    let request = reqwest::Request::new(
-        reqwest::Method::GET,
-        reqwest::Url::parse(&format!("http://{proxy_client_addr}/{url_path}")).unwrap(),
-    );
-    let client = reqwest::Client::new();
-    let response = client.execute(request).await.unwrap();
+    let response = client.execute(request).await?;
     Ok(response)
 }
 
