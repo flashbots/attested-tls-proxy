@@ -1085,3 +1085,190 @@ async fn flushed_responses_leave_source_keep_alive() {
         }
     }
 }
+
+/// Selects how the accepted response ends after its connection is retired.
+#[derive(Clone, Copy)]
+enum DrainEnd {
+    Complete,
+    Idle,
+    Disconnect,
+    Empty,
+}
+
+/// Exercises real proxy reconnection while an upstream HTTP/2 connection drains.
+async fn check_http2_drain(end: DrainEnd) {
+    let mut tasks = JoinSet::new();
+    let (certs, key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+    let (mut server_config, mut client_config) = generate_tls_config(certs.clone(), key);
+    server_config.alpn_protocols = vec![ALPN_H2.to_vec()];
+    client_config.alpn_protocols = vec![ALPN_H2.to_vec()];
+    let server = crate::AttestedTlsServer::new_with_tls_config(
+        certs,
+        server_config,
+        AttestationGenerator::with_no_attestation(),
+        AttestationVerifier::expect_none(),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (retired_tx, retired_rx) = tokio::sync::oneshot::channel();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+    let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+    tasks.spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let (tls, _, _) = server.handle_connection(socket).await.unwrap();
+        let mut connection = h2::server::handshake(tls).await.unwrap();
+        let mut ping = connection.ping_pong().unwrap();
+        let (request, mut respond) = connection.accept().await.unwrap().unwrap();
+        assert_eq!(request.uri().path(), "/old");
+        let response = respond
+            .send_response(http::Response::new(()), matches!(end, DrainEnd::Empty))
+            .unwrap();
+        drop(respond);
+        drop(request);
+        let mut streams = JoinSet::new();
+        streams.spawn(async move {
+            let mut response = response;
+            finish_rx.await.unwrap();
+            match end {
+                DrainEnd::Complete => response
+                    .send_data(bytes::Bytes::from_static(b"complete"), true)
+                    .unwrap(),
+                DrainEnd::Idle => {
+                    let _ = std::future::poll_fn(|cx| response.poll_reset(cx)).await;
+                }
+                DrainEnd::Empty | DrainEnd::Disconnect => {}
+            }
+        });
+        tokio::select! {
+            _ = shutdown_rx => {},
+            _ = connection.accept() => panic!("unexpected request before GOAWAY"),
+        }
+        connection.graceful_shutdown();
+        let mut drivers = JoinSet::new();
+        drivers.spawn(async move {
+            while let Some(Ok(request)) = connection.accept().await {
+                panic!("unexpected request on retired connection: {request:?}");
+            }
+        });
+        // A pong confirms the client processed preceding GOAWAY frames.
+        // An empty connection can close before replying, which also retires it.
+        let _ = ping.ping(h2::Ping::opaque()).await;
+        retired_tx.send(()).unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let (tls, _, _) = server.handle_connection(socket).await.unwrap();
+        let mut replacement = h2::server::handshake(tls).await.unwrap();
+        let (request, mut respond) = replacement.accept().await.unwrap().unwrap();
+        assert_eq!(request.uri().path(), "/fresh");
+        respond
+            .send_response(http::Response::new(()), true)
+            .unwrap();
+        drop(respond);
+        drop(request);
+        let mut replacements = JoinSet::new();
+        replacements.spawn(async move { while replacement.accept().await.is_some() {} });
+        while streams.join_next().await.is_some() {}
+        if matches!(end, DrainEnd::Disconnect) {
+            drivers.abort_all();
+        }
+        drivers.join_next().await.unwrap().unwrap_or_else(|error| {
+            assert!(matches!(end, DrainEnd::Disconnect) && error.is_cancelled());
+        });
+        closed_tx.send(()).unwrap();
+        while replacements.join_next().await.is_some() {}
+    });
+    let client = Arc::new(
+        ProxyClient::new_with_tls_config(
+            client_config,
+            "127.0.0.1:0",
+            target.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            None,
+        )
+        .await
+        .unwrap()
+        .with_request_options(ProxyClientOptions {
+            request_timeout: Duration::from_secs(5),
+            response_body_idle_timeout: Duration::from_millis(800),
+            max_in_flight_requests: 2.try_into().unwrap(),
+        }),
+    );
+    let url = format!("http://{}", client.local_addr().unwrap());
+    let acceptor = client.clone();
+    tasks.spawn(async move {
+        loop {
+            acceptor.accept().await.unwrap();
+        }
+    });
+    let old = http_client()
+        .get(format!("{url}/old"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(old.status(), http::StatusCode::OK);
+    shutdown_tx.send(()).unwrap();
+    timeout(Duration::from_secs(2), retired_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    // Discovering GOAWAY may fail this request; it must never reach the peer or be replayed.
+    let probe = http_client()
+        .get(format!("{url}/fresh"))
+        .send()
+        .await
+        .unwrap();
+    if probe.status() == http::StatusCode::BAD_GATEWAY {
+        let fresh = http_client()
+            .get(format!("{url}/fresh"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(fresh.status(), http::StatusCode::OK);
+    } else {
+        assert_eq!(probe.status(), http::StatusCode::OK);
+    }
+    finish_tx.send(()).unwrap();
+    let result = old.text().await;
+    match end {
+        DrainEnd::Complete => assert_eq!(result.unwrap(), "complete"),
+        DrainEnd::Empty => assert_eq!(result.unwrap(), ""),
+        DrainEnd::Idle | DrainEnd::Disconnect => assert!(result.is_err()),
+    }
+    timeout(Duration::from_secs(2), closed_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    timeout(Duration::from_secs(2), async {
+        while client.request_slots.available_permits() != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// Checks that a fresh connection serves requests before an accepted response finishes.
+#[tokio::test]
+async fn http2_goaway_drains_accepted_response() {
+    check_http2_drain(DrainEnd::Complete).await;
+}
+
+/// Checks that retiring a connection does not disable response idle timeouts.
+#[tokio::test]
+async fn http2_goaway_drain_respects_idle_timeout() {
+    check_http2_drain(DrainEnd::Idle).await;
+}
+
+/// Checks that abrupt failure of a draining connection releases request capacity.
+#[tokio::test]
+async fn http2_goaway_drain_disconnect_releases_capacity() {
+    check_http2_drain(DrainEnd::Disconnect).await;
+}
+
+/// Checks that retirement without an active response releases the old connection.
+#[tokio::test]
+async fn http2_goaway_empty_connection_finishes() {
+    check_http2_drain(DrainEnd::Empty).await;
+}

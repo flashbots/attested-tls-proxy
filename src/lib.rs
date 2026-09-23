@@ -454,8 +454,8 @@ impl ProxyClient {
         tokio::spawn(async move {
             let mut first = true;
             let mut ready_tx = Some(ready_tx);
-            // Retired connections may still have complete responses waiting to be
-            // delivered. Drain their workers without blocking a fresh connection.
+            // Retired HTTP/2 connections and their workers drain in the background
+            // without blocking a fresh connection.
             let mut draining = tokio::task::JoinSet::new();
             let mut deferred = None;
             'reconnect: loop {
@@ -486,8 +486,9 @@ impl ProxyClient {
                         }
                     };
 
-                // The connection driver is stopped on reconnect. Request workers
-                // retain their own deadlines and connection-specific measurements.
+                // HTTP/2 drivers survive retirement so accepted streams can finish.
+                // Workers retain their deadlines and connection-specific measurements.
+                let http2 = matches!(sender, HttpSender::Http2(_));
                 let mut connection = tokio::task::JoinSet::new();
                 connection.spawn(conn);
                 let mut in_flight = tokio::task::JoinSet::new();
@@ -530,8 +531,17 @@ impl ProxyClient {
                         _ = draining.join_next(), if !draining.is_empty() => {}
                     }
                 }
-                if !in_flight.is_empty() {
-                    draining.spawn(async move { while in_flight.join_next().await.is_some() {} });
+                drop(sender);
+                if !http2 {
+                    connection.abort_all();
+                }
+                if !in_flight.is_empty() || !connection.is_empty() {
+                    draining.spawn(async move {
+                        tokio::join!(
+                            async { while in_flight.join_next().await.is_some() {} },
+                            async { while connection.join_next().await.is_some() {} },
+                        );
+                    });
                 }
             }
         });
