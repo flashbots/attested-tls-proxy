@@ -128,12 +128,16 @@ impl Sender {
 }
 
 fn strip_connection_headers(headers: &mut http::HeaderMap) {
-    if let Some(connection) = headers.remove(http::header::CONNECTION)
-        && let Ok(names) = connection.to_str()
-    {
-        for name in names.split(',') {
-            headers.remove(name.trim());
-        }
+    let connection_headers: Vec<http::header::HeaderName> = headers
+        .get_all(http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|name| name.trim().parse().ok())
+        .collect();
+    headers.remove(http::header::CONNECTION);
+    for name in connection_headers {
+        headers.remove(name);
     }
     for name in [
         "keep-alive",
@@ -187,5 +191,30 @@ impl Body for ResponseBody {
     }
     fn size_hint(&self) -> SizeHint {
         SizeHint::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_connection_headers;
+
+    /// Removes headers nominated by every Connection field, including comma-separated names.
+    #[test]
+    fn strips_all_connection_header_values() {
+        let mut headers = http::HeaderMap::new();
+        headers.append("connection", "x-first, connection".parse().unwrap());
+        headers.append("connection", " X-Second, x-third ".parse().unwrap());
+        for name in ["x-first", "x-second", "x-third", "x-end-to-end"] {
+            headers.insert(name, "value".parse().unwrap());
+        }
+        headers.insert("te", "trailers".parse().unwrap());
+
+        strip_connection_headers(&mut headers);
+
+        for name in ["connection", "x-first", "x-second", "x-third"] {
+            assert!(!headers.contains_key(name), "unexpected header: {name}");
+        }
+        assert_eq!(headers["x-end-to-end"], "value");
+        assert_eq!(headers["te"], "trailers");
     }
 }
