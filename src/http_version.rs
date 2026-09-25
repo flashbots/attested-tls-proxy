@@ -1,5 +1,10 @@
 //! HTTP Version support and negotiation
-use hyper::Response;
+use crate::client_request::RequestBody;
+use crate::{
+    ProxyError,
+    client_request::{ProxyResponse, http2},
+};
+use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -52,19 +57,15 @@ impl HttpVersion {
     }
 }
 
-type Http1Sender = hyper::client::conn::http1::SendRequest<hyper::body::Incoming>;
-type Http2Sender = hyper::client::conn::http2::SendRequest<hyper::body::Incoming>;
+type Http1Sender = hyper::client::conn::http1::SendRequest<RequestBody>;
+type Http2Sender = http2::Sender;
 
 type Http1Connection = hyper::client::conn::http1::Connection<
     TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
+    RequestBody,
 >;
 
-type Http2Connection = hyper::client::conn::http2::Connection<
-    TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
-    hyper::body::Incoming,
-    crate::TokioExecutor,
->;
+type Http2Connection = http2::Connection;
 
 /// A protocol version agnostic HTTP sender
 pub enum HttpSender {
@@ -85,12 +86,30 @@ impl From<Http2Sender> for HttpSender {
 }
 
 impl HttpSender {
+    pub async fn ready(&mut self) -> Result<(), ProxyError> {
+        match self {
+            Self::Http1(sender) => sender.ready().await.map_err(Into::into),
+            Self::Http2(sender) => sender.ready().await,
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        match self {
+            Self::Http1(sender) => sender.is_closed(),
+            Self::Http2(sender) => sender.is_closed(),
+        }
+    }
+
     pub async fn send_request(
         &mut self,
-        request: http::Request<hyper::body::Incoming>,
-    ) -> Result<Response<hyper::body::Incoming>, hyper::Error> {
+        request: http::Request<RequestBody>,
+    ) -> Result<ProxyResponse, ProxyError> {
         match self {
-            Self::Http1(sender) => sender.send_request(request).await,
+            Self::Http1(sender) => sender
+                .send_request(request)
+                .await
+                .map(|response| response.map(|body| body.map_err(Into::into).boxed()))
+                .map_err(Into::into),
             Self::Http2(sender) => sender.send_request(request).await,
         }
     }
@@ -118,11 +137,11 @@ impl From<Http2Connection> for HttpConnection {
 }
 
 impl Future for HttpConnection {
-    type Output = Result<(), hyper::Error>;
+    type Output = Result<(), ProxyError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.project() {
-            HttpConnectionProj::Http1 { inner } => inner.poll(cx),
+            HttpConnectionProj::Http1 { inner } => inner.poll(cx).map_err(Into::into),
             HttpConnectionProj::Http2 { inner } => inner.poll(cx),
         }
     }

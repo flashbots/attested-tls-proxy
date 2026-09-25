@@ -23,6 +23,7 @@ rustls-pemfile = "2.2.0"
 anyhow = "1.0.100"
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
 hyper = { version = "1.7.0", features = ["server", "http2"] }
+h2 = "0.4.12"
 hyper-util = { version = "0.1.17", features = ["tokio"] }
 http-body-util = "0.1.3"
 bytes = "1.11.1"
