@@ -66,6 +66,7 @@ pub(crate) struct PendingRequest {
     pub permit: OwnedSemaphorePermit,
 }
 
+/// Create a gateway timeout error response
 pub(crate) fn gateway_timeout() -> ProxyResponse {
     let mut response = Response::new(
         full("Request deadline exceeded")

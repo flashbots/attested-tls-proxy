@@ -124,6 +124,7 @@ impl AsyncWrite for IdleIo {
         self.activity.wrote_bytes(&result);
         result
     }
+
     fn poll_write_vectored(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -133,9 +134,11 @@ impl AsyncWrite for IdleIo {
         self.activity.wrote_bytes(&result);
         result
     }
+
     fn is_write_vectored(&self) -> bool {
         self.stream.is_write_vectored()
     }
+
     /// Disarms the idle timer once a completed response has been flushed.
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let result = Pin::new(&mut self.stream).poll_flush(cx);
@@ -153,6 +156,7 @@ impl AsyncWrite for IdleIo {
         }
         result
     }
+
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.stream).poll_shutdown(cx)
     }
@@ -188,6 +192,7 @@ impl Drop for IdleBody {
 impl Body for IdleBody {
     type Data = bytes::Bytes;
     type Error = super::BoxError;
+
     fn poll_frame(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -200,9 +205,11 @@ impl Body for IdleBody {
         }
         result
     }
+
     fn is_end_stream(&self) -> bool {
         self.inner.is_end_stream()
     }
+
     fn size_hint(&self) -> SizeHint {
         self.inner.size_hint()
     }
