@@ -8,7 +8,12 @@ pub mod attested_rpc;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
 
+mod resumption;
+
 pub use attestation;
+use resumption::{
+    ClientCache, ClientStore, ConnectionRecord, ServerCache, ServerStore, VerifiedPeer,
+};
 
 use attestation::{
     AttestationError, AttestationExchangeMessage, AttestationGenerator, AttestationType,
@@ -34,10 +39,10 @@ use tokio_rustls::{
     rustls::{ClientConfig, ServerConfig},
 };
 
-/// This makes it possible to add breaking protocol changes and provide backwards compatibility.
-/// When adding more supported versions, note that ordering is important. ALPN will pick the first
-/// protocol which both parties support - so newer supported versions should come first.
-pub const SUPPORTED_ALPN_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"flashbots-ratls/1"];
+/// Experimental protocol identifier. This branch deliberately does not offer v1:
+/// skipping the attestation exchange on resumption changes the wire protocol.
+pub const SUPPORTED_ALPN_PROTOCOL_VERSIONS: [&[u8]; 1] =
+    [b"flashbots-ratls/experimental-resumption-1"];
 
 /// The label used when exporting key material from a TLS session
 pub(crate) const EXPORTER_LABEL: &[u8; 24] = b"EXPORTER-Channel-Binding";
@@ -63,6 +68,9 @@ pub struct AttestedTlsServer {
     cert_chain: Vec<CertificateDer<'static>>,
     /// For accepting TLS connections
     acceptor: TlsAcceptor,
+    sessions: Arc<ServerCache>,
+    #[cfg(test)]
+    counts: Arc<resumption::AttestationCounts>,
 }
 
 impl std::fmt::Debug for AttestedTlsServer {
@@ -106,7 +114,8 @@ impl AttestedTlsServer {
 
     /// Start with preconfigured TLS
     ///
-    /// This allows dangerous configuration
+    /// This allows dangerous configuration. The experiment replaces session storage,
+    /// disables early data, and rejects enabled stateless ticket generators.
     pub fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
         mut server_config: ServerConfig,
@@ -115,6 +124,10 @@ impl AttestedTlsServer {
     ) -> Result<Self, AttestedTlsError> {
         #[cfg(feature = "mock")]
         tracing::warn!("AttestedTlsServer instantiated in MOCK mode - do NOT use in production");
+        if server_config.ticketer.enabled() {
+            return Err(AttestedTlsError::StatelessResumptionUnsupported);
+        }
+        server_config.max_early_data_size = 0;
         // Ensure protocol version compatibility
         server_config.alpn_protocols = map_alpn_protocols(server_config.alpn_protocols);
 
@@ -124,12 +137,16 @@ impl AttestedTlsServer {
             attestation_generator,
             attestation_verifier,
             acceptor,
+            sessions: Arc::default(),
+            #[cfg(test)]
+            counts: Arc::default(),
             cert_chain,
         })
     }
 
     /// Handle an incoming connection from an [AttestedTlsClient]
     ///
+    /// Authenticated TLS resumptions reuse the previously verified peer metadata.
     /// This is transport agnostic and will work with any asynchronous stream
     pub async fn handle_connection<IO>(
         &self,
@@ -147,8 +164,14 @@ impl AttestedTlsServer {
     {
         tracing::debug!("attested-tls-server accepted connection");
 
-        // Do TLS handshake
-        let mut tls_stream = self.acceptor.accept(inbound).await?;
+        // Each connection gets a record for its issued and selected tickets.
+        let record = ConnectionRecord::default();
+        let mut config = (**self.acceptor.config()).clone();
+        config.session_storage = Arc::new(ServerStore {
+            cache: self.sessions.clone(),
+            record: record.clone(),
+        });
+        let mut tls_stream = TlsAcceptor::from(Arc::new(config)).accept(inbound).await?;
         let (_io, connection) = tls_stream.get_ref();
 
         // Ensure TLS 1.3
@@ -157,9 +180,15 @@ impl AttestedTlsServer {
         }
 
         // Ensure that we agreed a protocol
-        let _negotiated_protocol = connection
-            .alpn_protocol()
-            .ok_or(AttestedTlsError::AlpnFailed)?;
+        validate_alpn(connection.alpn_protocol())?;
+
+        if connection.handshake_kind() == Some(rustls::HandshakeKind::Resumed) {
+            let peer = record
+                .verified_peer()?
+                .ok_or(AttestedTlsError::MissingResumptionAttestation)?;
+            record.authenticate(peer.clone())?;
+            return Ok((tls_stream, peer.measurements, peer.attestation_type));
+        }
 
         // Compute an exporter unique to the session
         let mut exporter = [0u8; 32];
@@ -175,6 +204,10 @@ impl AttestedTlsServer {
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
         // If we are in a CVM, generate an attestation off the async runtime thread.
+        #[cfg(test)]
+        self.counts
+            .generated
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let attestation = {
             let attestation_generator = self.attestation_generator.clone();
             tokio::task::spawn_blocking(move || {
@@ -200,12 +233,20 @@ impl AttestedTlsServer {
         // Validate every exchange, including policies that only accept no attestation,
         // before exposing the peer's attestation type to callers.
         let remote_input_data = compute_report_input(remote_cert_chain.as_deref(), exporter)?;
+        #[cfg(test)]
+        self.counts
+            .verified
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let measurements = self
             .attestation_verifier
             .verify_attestation(remote_attestation_message, remote_input_data)
             .await?
             .map(|verified| verified.measurements);
 
+        record.authenticate(VerifiedPeer {
+            measurements: measurements.clone(),
+            attestation_type: remote_attestation_type,
+        })?;
         Ok((tls_stream, measurements, remote_attestation_type))
     }
 
@@ -232,6 +273,9 @@ impl AttestedTlsServer {
 pub struct AttestedTlsClient {
     /// The connector for making TLS connections with out configuration
     connector: TlsConnector,
+    sessions: Arc<ClientCache>,
+    #[cfg(test)]
+    counts: Arc<resumption::AttestationCounts>,
     /// Quote generation type to use (including none)
     attestation_generator: AttestationGenerator,
     /// Verifier for remote attestation (including none)
@@ -292,7 +336,8 @@ impl AttestedTlsClient {
 
     /// Create a new proxy client with given TLS configuration
     ///
-    /// This allows dangerous configuration but is used in tests
+    /// This allows dangerous configuration but is used in tests. The experiment
+    /// replaces session storage and disables early data.
     pub fn new_with_tls_config(
         mut client_config: ClientConfig,
         attestation_generator: AttestationGenerator,
@@ -304,6 +349,7 @@ impl AttestedTlsClient {
         if client_config.client_auth_cert_resolver.has_certs() && cert_chain.is_none() {
             return Err(AttestedTlsError::ClientAuthWithoutClientCert);
         }
+        client_config.enable_early_data = false;
         // Ensure protocol version compatibility
         client_config.alpn_protocols = map_alpn_protocols(client_config.alpn_protocols);
 
@@ -311,6 +357,9 @@ impl AttestedTlsClient {
 
         Ok(Self {
             connector,
+            sessions: Arc::default(),
+            #[cfg(test)]
+            counts: Arc::default(),
             attestation_generator,
             attestation_verifier,
             cert_chain,
@@ -320,6 +369,7 @@ impl AttestedTlsClient {
     /// Given a connection to an attested TLS server, do a TLS handshake and attestation exchange, and return the TLS
     /// stream together with measurement details
     ///
+    /// Authenticated TLS resumptions reuse the previously verified peer metadata.
     /// This is transport agnostic and will work with any asynchronous stream
     pub async fn connect<IO>(
         &self,
@@ -336,9 +386,14 @@ impl AttestedTlsClient {
     where
         IO: AsyncRead + AsyncWrite + Unpin,
     {
-        // Make a TLS handshake with the given connection
-        let mut tls_stream = self
-            .connector
+        let record = ConnectionRecord::default();
+        let mut config = (**self.connector.config()).clone();
+        config.resumption = rustls::client::Resumption::store(Arc::new(ClientStore {
+            cache: self.sessions.clone(),
+            target: target.to_owned(),
+            record: record.clone(),
+        }));
+        let mut tls_stream = TlsConnector::from(Arc::new(config))
             .connect(server_name_from_host(target)?, outbound)
             .await?;
 
@@ -350,9 +405,15 @@ impl AttestedTlsClient {
         }
 
         // Ensure that we agreed a protocol
-        let _negotiated_protocol = server_connection
-            .alpn_protocol()
-            .ok_or(AttestedTlsError::AlpnFailed)?;
+        validate_alpn(server_connection.alpn_protocol())?;
+
+        if server_connection.handshake_kind() == Some(rustls::HandshakeKind::Resumed) {
+            let peer = record
+                .verified_peer()?
+                .ok_or(AttestedTlsError::MissingResumptionAttestation)?;
+            record.authenticate(peer.clone())?;
+            return Ok((tls_stream, peer.measurements, peer.attestation_type));
+        }
 
         // Compute an exporter unique to the channel
         let mut exporter = [0u8; 32];
@@ -377,6 +438,10 @@ impl AttestedTlsClient {
         let remote_attestation_type = remote_attestation_message.attestation_type();
 
         // Verify the remote attestation against our accepted measurements
+        #[cfg(test)]
+        self.counts
+            .verified
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let measurements = self
             .attestation_verifier
             .verify_attestation(remote_attestation_message, remote_input_data)
@@ -385,6 +450,10 @@ impl AttestedTlsClient {
 
         // If we are in a CVM, provide an attestation
         let attestation = if self.attestation_generator.attestation_type != AttestationType::None {
+            #[cfg(test)]
+            self.counts
+                .generated
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let local_input_data = compute_report_input(self.cert_chain.as_deref(), exporter)?;
             let attestation_generator = self.attestation_generator.clone();
             tokio::task::spawn_blocking(move || {
@@ -401,6 +470,11 @@ impl AttestedTlsClient {
         let attestation_length_prefix = checked_length_prefix(&attestation)?;
         tls_stream.write_all(&attestation_length_prefix).await?;
         tls_stream.write_all(&attestation).await?;
+        tls_stream.flush().await?;
+        record.authenticate(VerifiedPeer {
+            measurements: measurements.clone(),
+            attestation_type: remote_attestation_type,
+        })?;
 
         Ok((tls_stream, measurements, remote_attestation_type))
     }
@@ -534,10 +608,31 @@ pub enum AttestedTlsError {
     NoCryptoProvider,
     #[error("Only TLS 1.3 is supported")]
     NotTls13,
+    #[error("Experimental attestation resumption requires stateful TLS tickets")]
+    StatelessResumptionUnsupported,
+    #[error("TLS resumed without verified attestation metadata")]
+    MissingResumptionAttestation,
+    #[error("Attestation resumption state was poisoned by a prior panic")]
+    PoisonedResumptionState,
     #[error("Attestation length {length} exceeds maximum {max}")]
     AttestationTooLarge { length: usize, max: usize },
     #[error("Blocking task failed: {0}")]
     Join(#[from] JoinError),
+}
+
+/// Requires the experimental protocol prefix, allowing an application-protocol suffix.
+fn validate_alpn(protocol: Option<&[u8]>) -> Result<(), AttestedTlsError> {
+    let protocol = protocol.ok_or(AttestedTlsError::AlpnFailed)?;
+    if SUPPORTED_ALPN_PROTOCOL_VERSIONS.iter().any(|prefix| {
+        protocol == *prefix
+            || protocol
+                .strip_prefix(*prefix)
+                .is_some_and(|suffix| suffix.starts_with(b"+"))
+    }) {
+        Ok(())
+    } else {
+        Err(AttestedTlsError::AlpnFailed)
+    }
 }
 
 /// Given a byte array, encode its length as a 4 byte big endian u32
@@ -599,7 +694,7 @@ fn host_to_host_with_port(host: &str) -> String {
     }
 }
 
-/// Ensure protocol compatibility with the other party by adding 'flashbots-ratls/<version>' to the
+/// Ensure protocol compatibility by adding the experimental attested TLS prefix to the
 /// protocol names of all supported protocols
 fn map_alpn_protocols(existing_protocols: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     let mut mapped_protocols = Vec::new();
@@ -700,7 +795,7 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            // The client finishes sending before the server checks its evidence.
+            // The client returns after sending; only the server knows whether it accepted the evidence.
             let _client_connection = client_result.unwrap();
             if client_type == AttestationType::None {
                 let (_stream, measurements, attestation_type) = server_result.unwrap();
