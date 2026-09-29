@@ -2,7 +2,6 @@
 pub mod attested_get;
 pub mod file_server;
 pub mod health_check;
-pub mod normalize_pem;
 pub mod self_signed;
 
 pub use attested_tls;

@@ -14,6 +14,8 @@ It uses session binding through exported key material from the TLS session. This
 
 Attestation may be provided by either the server, or the client, or both.
 
+The optional `self-signed` feature exposes the `self_signed` module for generating and verifying self-signed certificates.
+
 ## Protocol Specification
 
 A TLS 1.3 handshake is made between server and client. The protocol name `flashbots-ratls/1` is included in ALPN. Future versions of the protocol may add additional protocol names which increment the number given after the slash, but backwards compatibility will be provided through also specifying `flashbots-ratls/1`.

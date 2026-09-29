@@ -1,0 +1,33 @@
+[package]
+name = "attested-tls-tcp-tunnel"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "A bidirectional TCP tunnel over remote-attested TLS"
+repository = "https://github.com/flashbots/attested-tls-proxy"
+build = "../build.rs"
+
+[dependencies]
+attested-tls = { workspace = true, features = ["self-signed"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls = { workspace = true, features = ["aws_lc_rs"] }
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+rustls-pemfile.workspace = true
+serde_json.workspace = true
+webpki-roots.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[features]
+default = []
+azure = ["attested-tls/azure"]
+
+[dev-dependencies]
+attested-tls = { workspace = true, features = ["test-helpers", "mock"] }
+tokio = { workspace = true, features = ["process"] }
+tempfile.workspace = true
+h2.workspace = true
+http.workspace = true
+bytes.workspace = true

@@ -8,6 +8,9 @@ pub mod attested_rpc;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
 
+#[cfg(feature = "self-signed")]
+pub mod self_signed;
+
 pub use attestation;
 
 use attestation::{

@@ -17,6 +17,8 @@ It has five subcommands:
 - `attested-tls-proxy attested-file-server` - serve files from a local filesystem path over an attested TLS channel.
 - `attested-tls-proxy attested-get` - connect to a proxy server, verify its attestation, make a single HTTP GET request, and write the response body to standard output.
 
+If you rather want opaque TCP forwarding, see [`attested-tls-tcp-tunnel`](tcp-tunnel/README.md). It provides a separate CLI and library with one attested connection per source TCP connection.
+
 ### How it works
 
 This works as follows:
