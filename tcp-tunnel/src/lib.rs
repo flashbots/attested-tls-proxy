@@ -294,6 +294,7 @@ impl Tunnel {
         let slots = Arc::new(Semaphore::new(options.max_connections.get()));
         // JoinSet aborts all children when this serving future is dropped.
         let mut tasks = JoinSet::new();
+        let mut next_accept = tokio::time::Instant::now();
         tokio::pin!(shutdown);
         loop {
             tokio::select! {
@@ -304,8 +305,21 @@ impl Tunnel {
                         tracing::warn!(%error, "Tunnel task failed");
                     }
                 }
-                incoming = listener.accept() => {
-                    let (inbound, peer) = incoming.map_err(io_error("accept"))?;
+                incoming = async {
+                    tokio::time::sleep_until(next_accept).await;
+                    listener.accept().await
+                } => {
+                    let (inbound, peer) = match incoming {
+                        Ok(connection) => connection,
+                        Err(error) => {
+                            // Resource exhaustion and per-connection errors must
+                            // not tear down established tunnels. Delay only this
+                            // branch so shutdown and task reaping remain responsive.
+                            tracing::warn!(%error, "Accept failed; retrying");
+                            next_accept = tokio::time::Instant::now() + Duration::from_secs(1);
+                            continue;
+                        }
+                    };
                     let Ok(permit) = slots.clone().try_acquire_owned() else {
                         tracing::debug!(%peer, "Connection limit reached; closing new connection");
                         continue;

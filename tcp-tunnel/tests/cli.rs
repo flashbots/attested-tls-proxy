@@ -10,7 +10,11 @@ use tokio::{
 };
 
 fn command() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_attested-tls-tcp-tunnel"));
+    clean_command(env!("CARGO_BIN_EXE_attested-tls-tcp-tunnel"))
+}
+
+fn clean_command(program: &str) -> Command {
+    let mut command = Command::new(program);
     command.kill_on_drop(true);
     for variable in [
         "LISTEN_ADDR",
@@ -27,17 +31,128 @@ fn command() -> Command {
 }
 
 async fn start(args: &[&str]) -> (Child, SocketAddr) {
-    let mut child = command().args(args).stdout(Stdio::piped()).spawn().unwrap();
+    let (child, address, _) = start_command(command().args(args)).await;
+    (child, address)
+}
+
+async fn start_command(
+    command: &mut Command,
+) -> (Child, SocketAddr, tokio::sync::oneshot::Receiver<()>) {
+    let mut child = command.stdout(Stdio::piped()).spawn().unwrap();
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     while let Some(line) = lines.next_line().await.unwrap() {
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
         if let Some(address) = value["fields"]["address"].as_str() {
             // Keep stdout open: tracing may log again during shutdown.
-            tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
-            return (child, address.parse().unwrap());
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move {
+                let mut tx = Some(tx);
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    if value["fields"]["message"] == "Accept failed; retrying"
+                        && let Some(tx) = tx.take()
+                    {
+                        let _ = tx.send(());
+                    }
+                }
+            });
+            return (child, address.parse().unwrap(), rx);
         }
     }
     panic!("process exited before logging its listening address");
+}
+
+#[tokio::test]
+async fn descriptor_exhaustion_preserves_tunnels_and_recovers() {
+    exercise_descriptor_exhaustion(true).await;
+}
+
+#[tokio::test]
+async fn descriptor_exhaustion_does_not_delay_shutdown() {
+    exercise_descriptor_exhaustion(false).await;
+}
+
+async fn exercise_descriptor_exhaustion(recover: bool) {
+    bounded(async {
+        let target = listener().await;
+        // Limit only the child, leaving the test runner's descriptor limit intact.
+        let (mut server, server_addr, accept_error) = start_command(clean_command("sh").args([
+            "-c",
+            "ulimit -n 64 && exec \"$@\"",
+            "sh",
+            env!("CARGO_BIN_EXE_attested-tls-tcp-tunnel"),
+            "server",
+            &target.local_addr().unwrap().to_string(),
+            "--listen-addr",
+            LOCAL,
+            "--server-attestation-type",
+            "none",
+            "--allowed-remote-attestation-type",
+            "none",
+            "--setup-timeout-secs",
+            "2",
+            "--shutdown-grace-secs",
+            "0",
+            "--log-json",
+        ]))
+        .await;
+        let (mut client, client_addr) = start(&[
+            "client",
+            &server_addr.to_string(),
+            "--client-attestation-type",
+            "none",
+            "--allowed-remote-attestation-type",
+            "none",
+            "--allow-self-signed",
+            "--shutdown-grace-secs",
+            "0",
+            "--log-json",
+        ])
+        .await;
+        let mut source = TcpStream::connect(client_addr).await.unwrap();
+        let (mut backend, _) = target.accept().await.unwrap();
+
+        let mut stalled = Vec::new();
+        for _ in 0..80 {
+            stalled.push(TcpStream::connect(server_addr).await.unwrap());
+        }
+        accept_error
+            .await
+            .expect("server must report descriptor exhaustion");
+        assert!(server.try_wait().unwrap().is_none());
+        source.write_all(b"still alive").await.unwrap();
+        let mut bytes = [0; 11];
+        backend.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"still alive");
+        backend.write_all(&bytes).await.unwrap();
+        source.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"still alive");
+
+        if !recover {
+            // Less than the one-second accept backoff, with descriptors still
+            // exhausted: shutdown must interrupt the pending retry delay.
+            tokio::time::timeout(
+                std::time::Duration::from_millis(750),
+                terminate(&mut server),
+            )
+            .await
+            .expect("shutdown was blocked by accept backoff");
+            terminate(&mut client).await;
+            return;
+        }
+
+        drop(stalled);
+        // The listener must resume acceptance after descriptors become available.
+        let mut recovered = TcpStream::connect(client_addr).await.unwrap();
+        let (mut recovered_backend, _) = target.accept().await.unwrap();
+        recovered.write_all(b"recovered").await.unwrap();
+        let mut bytes = [0; 9];
+        recovered_backend.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"recovered");
+        terminate(&mut server).await;
+        terminate(&mut client).await;
+    })
+    .await;
 }
 
 async fn terminate(child: &mut Child) {
