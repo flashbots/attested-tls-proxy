@@ -580,6 +580,11 @@ where
 pub(crate) fn server_name_from_host(
     host: &str,
 ) -> Result<ServerName<'static>, tokio_rustls::rustls::pki_types::InvalidDnsNameError> {
+    // A scope ID selects the local network interface, not the TLS peer identity.
+    if let Ok(std::net::SocketAddr::V6(address)) = host.parse() {
+        return ServerName::try_from(address.ip().to_string());
+    }
+
     // If host contains ':', try to split off the port.
     let host_part = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
 
@@ -629,6 +634,16 @@ fn map_alpn_protocols(existing_protocols: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scoped_ipv6_tls_identity_excludes_scope_id() {
+        for target in ["[fe80::1%3]:443", "[fe80::1%0]:8443", "[fe80::1]:443"] {
+            assert_eq!(
+                super::server_name_from_host(target).unwrap(),
+                tokio_rustls::rustls::pki_types::ServerName::try_from("fe80::1").unwrap(),
+            );
+        }
+    }
+
     use super::*;
 
     use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
