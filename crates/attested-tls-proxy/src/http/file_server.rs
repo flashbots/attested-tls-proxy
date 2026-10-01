@@ -1,5 +1,7 @@
 //! Static HTTP file server provided by an attested TLS proxy server
-use crate::{AttestationGenerator, AttestationVerifier, ProxyError, ProxyServer, TlsCertAndKey};
+use crate::http::{
+    AttestationGenerator, AttestationVerifier, ProxyError, ProxyServer, TlsCertAndKey,
+};
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
 use tower_http::services::ServeDir;
@@ -52,10 +54,10 @@ pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, Prox
 
 #[cfg(test)]
 mod tests {
-    use crate::{ProxyClient, attestation::AttestationType};
+    use crate::http::{ProxyClient, attestation::AttestationType};
 
     use super::*;
-    use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
+    use crate::http::test_helpers::{generate_certificate_chain, generate_tls_config};
     use tempfile::tempdir;
 
     /// Given a URL, fetch response body and content type header

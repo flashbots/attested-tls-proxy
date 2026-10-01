@@ -26,9 +26,9 @@ RUN build_features="$FEATURES"; \
         fi; \
     fi; \
     if [ -n "$build_features" ]; then \
-        cargo build --release --no-default-features --features "$build_features"; \
+        cargo build -p attested-tls-proxy --locked --release --no-default-features --features "$build_features"; \
     else \
-        cargo build --release --no-default-features; \
+        cargo build -p attested-tls-proxy --locked --release --no-default-features; \
     fi
 
 # Runtime stage

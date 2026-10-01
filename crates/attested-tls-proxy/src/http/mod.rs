@@ -1,9 +1,8 @@
-//! An attested TLS protocol and HTTPS proxy
+//! HTTP forwarding over attested TLS.
 pub mod attested_get;
 pub mod file_server;
 pub mod health_check;
-pub mod normalize_pem;
-pub mod self_signed;
+use crate::self_signed;
 
 pub use attested_tls;
 pub use attested_tls::attestation;
@@ -15,10 +14,10 @@ pub use client_request::ProxyClientOptions;
 use client_request::{PendingRequest, forward, gateway_timeout, take_sender, worker_finished};
 
 #[cfg(test)]
-mod test_helpers;
+pub(crate) mod test_helpers;
 
+use ::http::{HeaderMap, HeaderName, HeaderValue};
 use bytes::Bytes;
-use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::{Response, service::service_fn};
 use hyper_util::rt::TokioIo;
@@ -33,7 +32,7 @@ use tokio_rustls::rustls::{
 };
 use tracing::{debug, error, warn};
 
-use crate::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
+use crate::http::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
 use attested_tls::{
     AttestedTlsClient, AttestedTlsError, AttestedTlsServer, TlsCertAndKey,
     attestation::{
@@ -231,7 +230,7 @@ impl ProxyServer {
             let headers = req.headers_mut();
 
             // Add or update the HOST header
-            let old_value = update_header(headers, &http::header::HOST, &target);
+            let old_value = update_header(headers, &::http::header::HOST, &target);
             debug!("Updating Host header - old value: {old_value:?} new value: {target}",);
 
             // Add the x-real-ip header
@@ -751,7 +750,7 @@ fn update_header<K>(
     header_value: &str,
 ) -> Option<HeaderValue>
 where
-    K: http::header::IntoHeaderName + std::fmt::Display,
+    K: ::http::header::IntoHeaderName + std::fmt::Display,
 {
     if let Ok(value) = HeaderValue::from_str(header_value) {
         headers.insert(header_name, value)
@@ -827,7 +826,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{
+    use crate::http::{
         attestation::{PccsMode, measurements::MeasurementPolicy},
         attested_tls::get_tls_cert_with_config,
     };
@@ -1013,7 +1012,7 @@ mod tests {
                     .send()
                     .await
                     .unwrap();
-                assert_eq!(response.status(), http::StatusCode::OK);
+                assert_eq!(response.status(), ::http::StatusCode::OK);
                 let response_measurements: Vec<_> = response
                     .headers()
                     .get_all(MEASUREMENT_HEADER)

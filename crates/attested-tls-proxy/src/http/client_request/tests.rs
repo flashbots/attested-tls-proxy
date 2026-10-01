@@ -19,7 +19,7 @@ use tokio::{
 };
 
 use super::ProxyClientOptions;
-use crate::{
+use crate::http::{
     AttestationGenerator, AttestationVerifier, ProxyClient, ProxyServer,
     http_version::{ALPN_H2, ALPN_HTTP11},
     test_helpers::{generate_certificate_chain, generate_tls_config},
@@ -117,16 +117,16 @@ fn http_client() -> reqwest::Client {
 
 // Real Hyper senders over an in-memory connection make worker failures and
 // connection closure deterministic, without racing TCP shutdown against dispatch.
-async fn sender_for_test(http2: bool) -> (crate::http_version::HttpSender, JoinSet<()>) {
+async fn sender_for_test(http2: bool) -> (crate::http::http_version::HttpSender, JoinSet<()>) {
     use hyper_util::rt::TokioIo;
     let (client, server) = tokio::io::duplex(4096);
     let mut tasks = JoinSet::new();
     let service = hyper::service::service_fn(|_| async {
-        Ok::<_, std::convert::Infallible>(hyper::Response::new(crate::full("ok")))
+        Ok::<_, std::convert::Infallible>(hyper::Response::new(crate::http::full("ok")))
     });
     let sender = if http2 {
         tasks.spawn(async move {
-            let _ = hyper::server::conn::http2::Builder::new(crate::TokioExecutor)
+            let _ = hyper::server::conn::http2::Builder::new(crate::http::TokioExecutor)
                 .serve_connection(TokioIo::new(server), service)
                 .await;
         });
@@ -221,7 +221,7 @@ async fn http2_stalled_request_does_not_block_fast_request() {
     assert_eq!(fast.text().await.unwrap(), "fast");
     assert_eq!(
         slow.await.unwrap().unwrap().status(),
-        http::StatusCode::GATEWAY_TIMEOUT
+        ::http::StatusCode::GATEWAY_TIMEOUT
     );
     assert_eq!(fixture.connections.load(Ordering::SeqCst), 1);
 }
@@ -249,7 +249,7 @@ async fn http1_timeout_reconnects_without_replaying_post() {
         .send()
         .await
         .unwrap();
-    assert_eq!(slow.status(), http::StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(slow.status(), ::http::StatusCode::GATEWAY_TIMEOUT);
     let fast = client
         .get(format!("{}/fast", fixture.url))
         .send()
@@ -298,13 +298,13 @@ async fn streaming_bodies_hold_capacity_and_expired_requests_are_not_forwarded()
             .send()
             .await
             .unwrap();
-        assert_eq!(stream.status(), http::StatusCode::OK);
+        assert_eq!(stream.status(), ::http::StatusCode::OK);
         let blocked = client
             .get(format!("{}/fast", fixture.url))
             .send()
             .await
             .unwrap();
-        assert_eq!(blocked.status(), http::StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(blocked.status(), ::http::StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         drop(body_tx);
         assert!(stream.bytes().await.unwrap().is_empty());
@@ -438,7 +438,7 @@ async fn dropping_streaming_response_releases_slot() {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.status(), ::http::StatusCode::OK);
         drop(response);
         let fast = timeout(
             Duration::from_secs(1),
@@ -460,7 +460,7 @@ async fn dropping_streaming_response_releases_slot() {
 async fn http1_clean_close_preserves_response() {
     let app = Router::new().route(
         "/",
-        get(|| async { ([(http::header::CONNECTION, "close")], "ok") }),
+        get(|| async { ([(::http::header::CONNECTION, "close")], "ok") }),
     );
     let fixture = proxy(app, ALPN_HTTP11, 2, Duration::from_secs(3)).await;
     let client = http_client();
@@ -472,7 +472,7 @@ async fn http1_clean_close_preserves_response() {
             .unwrap();
         let status = response.status();
         let body = response.text().await.unwrap();
-        assert_eq!(status, http::StatusCode::OK, "request {i}: {body}");
+        assert_eq!(status, ::http::StatusCode::OK, "request {i}: {body}");
         assert_eq!(body, "ok");
     }
 }
@@ -491,7 +491,7 @@ async fn early_response_keeps_upload_bounded() {
                     let _ = axum::body::to_bytes(request.into_body(), 1024).await;
                     counter.fetch_sub(1, Ordering::SeqCst);
                 });
-                http::StatusCode::OK
+                ::http::StatusCode::OK
             }
         }),
     );
@@ -544,7 +544,7 @@ async fn early_response_allows_upload_to_finish_before_releasing_slot() {
                             .unwrap();
                         uploaded_tx.lock().await.take().unwrap().send(body).unwrap();
                     });
-                    http::StatusCode::OK
+                    ::http::StatusCode::OK
                 }
             }),
         )
@@ -675,7 +675,7 @@ async fn silent_response_body_times_out_and_releases_capacity() {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.status(), ::http::StatusCode::OK);
         assert!(
             timeout(Duration::from_secs(2), response.bytes())
                 .await
@@ -750,7 +750,7 @@ async fn flow_control_blocked_upload_deadline_releases_capacity() {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     drop(request);
                 });
-                http::StatusCode::OK
+                ::http::StatusCode::OK
             }),
         )
         .route("/fast", get(|| async { "fast" }));
@@ -778,7 +778,7 @@ async fn flow_control_blocked_upload_deadline_releases_capacity() {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(response.status(), ::http::StatusCode::OK);
     assert_eq!(response.text().await.unwrap(), "fast");
     assert_eq!(fixture.connections.load(Ordering::SeqCst), 1);
 }
@@ -788,7 +788,7 @@ async fn flow_control_blocked_upload_deadline_releases_capacity() {
 async fn incoming_request(
     raw: Vec<u8>,
     tasks: &mut JoinSet<()>,
-) -> http::Request<hyper::body::Incoming> {
+) -> ::http::Request<hyper::body::Incoming> {
     let (mut source, server) = tokio::io::duplex(4096);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
@@ -797,7 +797,7 @@ async fn incoming_request(
             tx.lock().unwrap().take().unwrap().send(request).unwrap();
             std::future::pending::<
                 Result<
-                    http::Response<http_body_util::Full<bytes::Bytes>>,
+                    ::http::Response<http_body_util::Full<bytes::Bytes>>,
                     std::convert::Infallible,
                 >,
             >()
@@ -838,7 +838,7 @@ async fn blocked_uploads_reset_streams_and_preserve_other_http2_responses() {
             } else {
                 Some(
                     respond
-                        .send_response(http::Response::new(()), !other)
+                        .send_response(::http::Response::new(()), !other)
                         .unwrap(),
                 )
             };
@@ -868,7 +868,7 @@ async fn blocked_uploads_reset_streams_and_preserve_other_http2_responses() {
     tasks.spawn(async move {
         let _ = connection.await;
     });
-    let mut sender = Some(crate::http_version::HttpSender::Http2(sender));
+    let mut sender = Some(crate::http::http_version::HttpSender::Http2(sender));
     let slots = Arc::new(tokio::sync::Semaphore::new(2));
     let (tx, rx) = tokio::sync::oneshot::channel();
     let other_request = incoming_request(
@@ -885,7 +885,7 @@ async fn blocked_uploads_reset_streams_and_preserve_other_http2_responses() {
             permit: slots.clone().acquire_owned().await.unwrap(),
         },
         None,
-        crate::attestation::AttestationType::None,
+        crate::http::attestation::AttestationType::None,
     ));
     let response = timeout(Duration::from_secs(1), rx).await.unwrap().unwrap();
     // Cover both completed and partial source bodies, with and without early
@@ -911,14 +911,14 @@ async fn blocked_uploads_reset_streams_and_preserve_other_http2_responses() {
                 permit: slots.clone().acquire_owned().await.unwrap(),
             },
             None,
-            crate::attestation::AttestationType::None,
+            crate::http::attestation::AttestationType::None,
         ));
         assert_eq!(
             rx.await.unwrap().status(),
             if path == "/late" {
-                http::StatusCode::GATEWAY_TIMEOUT
+                ::http::StatusCode::GATEWAY_TIMEOUT
             } else {
-                http::StatusCode::OK
+                ::http::StatusCode::OK
             },
         );
         let result = timeout(Duration::from_secs(1), worker)
@@ -960,7 +960,7 @@ async fn http2_upload_and_response_preserve_trailers() {
                 assert!(!request.headers().contains_key("transfer-encoding"));
                 assert_eq!(request.headers()["te"], "trailers");
                 let mut response = respond
-                    .send_response(http::Response::new(()), false)
+                    .send_response(::http::Response::new(()), false)
                     .unwrap();
                 let mut body = request.into_body();
                 let mut received = Vec::new();
@@ -990,7 +990,7 @@ async fn http2_upload_and_response_preserve_trailers() {
     let slots = Arc::new(tokio::sync::Semaphore::new(1));
     let (tx, rx) = tokio::sync::oneshot::channel();
     let worker = tokio::spawn(super::forward(
-        crate::http_version::HttpSender::Http2(sender),
+        crate::http::http_version::HttpSender::Http2(sender),
         super::PendingRequest {
             request,
             response_tx: tx,
@@ -998,7 +998,7 @@ async fn http2_upload_and_response_preserve_trailers() {
             permit: slots.clone().acquire_owned().await.unwrap(),
         },
         None,
-        crate::attestation::AttestationType::None,
+        crate::http::attestation::AttestationType::None,
     ));
     let response = timeout(Duration::from_secs(2), rx).await.unwrap().unwrap();
     let body = timeout(Duration::from_secs(2), response.into_body().collect())
@@ -1023,7 +1023,7 @@ async fn finite_idle_response(body: bytes::Bytes) -> (TcpStream, JoinSet<()>) {
     tasks.spawn(async move {
         let service = hyper::service::service_fn(move |_| {
             let response = activity.track(hyper::Response::new(http_body_util::BodyExt::boxed(
-                http_body_util::BodyExt::map_err(crate::full(body.clone()), Into::into),
+                http_body_util::BodyExt::map_err(crate::http::full(body.clone()), Into::into),
             )));
             async { Ok::<_, std::convert::Infallible>(response) }
         });
@@ -1070,7 +1070,7 @@ async fn flushed_responses_leave_source_keep_alive() {
         });
         for _ in 0..2 {
             let response = sender
-                .send_request(http::Request::new(crate::full("")))
+                .send_request(::http::Request::new(crate::http::full("")))
                 .await
                 .unwrap();
             assert_eq!(
@@ -1102,7 +1102,7 @@ async fn check_http2_drain(end: DrainEnd) {
     let (mut server_config, mut client_config) = generate_tls_config(certs.clone(), key);
     server_config.alpn_protocols = vec![ALPN_H2.to_vec()];
     client_config.alpn_protocols = vec![ALPN_H2.to_vec()];
-    let server = crate::AttestedTlsServer::new_with_tls_config(
+    let server = crate::http::AttestedTlsServer::new_with_tls_config(
         certs,
         server_config,
         AttestationGenerator::with_no_attestation(),
@@ -1123,7 +1123,7 @@ async fn check_http2_drain(end: DrainEnd) {
         let (request, mut respond) = connection.accept().await.unwrap().unwrap();
         assert_eq!(request.uri().path(), "/old");
         let response = respond
-            .send_response(http::Response::new(()), matches!(end, DrainEnd::Empty))
+            .send_response(::http::Response::new(()), matches!(end, DrainEnd::Empty))
             .unwrap();
         drop(respond);
         drop(request);
@@ -1162,7 +1162,7 @@ async fn check_http2_drain(end: DrainEnd) {
         let (request, mut respond) = replacement.accept().await.unwrap().unwrap();
         assert_eq!(request.uri().path(), "/fresh");
         respond
-            .send_response(http::Response::new(()), true)
+            .send_response(::http::Response::new(()), true)
             .unwrap();
         drop(respond);
         drop(request);
@@ -1207,7 +1207,7 @@ async fn check_http2_drain(end: DrainEnd) {
         .send()
         .await
         .unwrap();
-    assert_eq!(old.status(), http::StatusCode::OK);
+    assert_eq!(old.status(), ::http::StatusCode::OK);
     shutdown_tx.send(()).unwrap();
     timeout(Duration::from_secs(2), retired_rx)
         .await
@@ -1219,15 +1219,15 @@ async fn check_http2_drain(end: DrainEnd) {
         .send()
         .await
         .unwrap();
-    if probe.status() == http::StatusCode::BAD_GATEWAY {
+    if probe.status() == ::http::StatusCode::BAD_GATEWAY {
         let fresh = http_client()
             .get(format!("{url}/fresh"))
             .send()
             .await
             .unwrap();
-        assert_eq!(fresh.status(), http::StatusCode::OK);
+        assert_eq!(fresh.status(), ::http::StatusCode::OK);
     } else {
-        assert_eq!(probe.status(), http::StatusCode::OK);
+        assert_eq!(probe.status(), ::http::StatusCode::OK);
     }
     finish_tx.send(()).unwrap();
     let result = old.text().await;

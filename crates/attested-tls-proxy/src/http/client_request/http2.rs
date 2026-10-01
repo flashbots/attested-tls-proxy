@@ -18,7 +18,7 @@ use hyper::body::{Body, Frame, SizeHint};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{BoxError, ProxyResponse, RequestBody};
-use crate::ProxyError;
+use crate::http::ProxyError;
 
 pub(crate) type Connection = Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send>>;
 
@@ -65,9 +65,9 @@ where
 
 async fn keep_alive(mut ping: h2::PingPong) -> Result<(), ProxyError> {
     loop {
-        tokio::time::sleep(Duration::from_secs(crate::KEEP_ALIVE_INTERVAL)).await;
+        tokio::time::sleep(Duration::from_secs(crate::http::KEEP_ALIVE_INTERVAL)).await;
         tokio::time::timeout(
-            Duration::from_secs(crate::KEEP_ALIVE_TIMEOUT),
+            Duration::from_secs(crate::http::KEEP_ALIVE_TIMEOUT),
             ping.ping(h2::Ping::opaque()),
         )
         .await
@@ -93,7 +93,7 @@ impl Sender {
 
     pub(crate) async fn send_request(
         &mut self,
-        request: http::Request<RequestBody>,
+        request: ::http::Request<RequestBody>,
     ) -> Result<ProxyResponse, ProxyError> {
         let (mut parts, body) = request.into_parts();
         strip_connection_headers(&mut parts.headers);
@@ -101,18 +101,18 @@ impl Sender {
             && (length != 0
                 || matches!(
                     parts.method,
-                    http::Method::POST | http::Method::PUT | http::Method::PATCH
+                    ::http::Method::POST | ::http::Method::PUT | ::http::Method::PATCH
                 ))
         {
             parts
                 .headers
-                .entry(http::header::CONTENT_LENGTH)
+                .entry(::http::header::CONTENT_LENGTH)
                 .or_insert(length.into());
         }
         let end = body.is_end_stream();
         let (response, stream) = self
             .inner
-            .send_request(http::Request::from_parts(parts, ()), end)?;
+            .send_request(::http::Request::from_parts(parts, ()), end)?;
         if !end {
             body.send_http2(stream);
         }
@@ -127,15 +127,15 @@ impl Sender {
     }
 }
 
-fn strip_connection_headers(headers: &mut http::HeaderMap) {
-    let connection_headers: Vec<http::header::HeaderName> = headers
-        .get_all(http::header::CONNECTION)
+fn strip_connection_headers(headers: &mut ::http::HeaderMap) {
+    let connection_headers: Vec<::http::header::HeaderName> = headers
+        .get_all(::http::header::CONNECTION)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(','))
         .filter_map(|name| name.trim().parse().ok())
         .collect();
-    headers.remove(http::header::CONNECTION);
+    headers.remove(::http::header::CONNECTION);
     for name in connection_headers {
         headers.remove(name);
     }
@@ -148,10 +148,10 @@ fn strip_connection_headers(headers: &mut http::HeaderMap) {
         headers.remove(name);
     }
     if headers
-        .get(http::header::TE)
+        .get(::http::header::TE)
         .is_some_and(|value| value != "trailers")
     {
-        headers.remove(http::header::TE);
+        headers.remove(::http::header::TE);
     }
 }
 
@@ -201,7 +201,7 @@ mod tests {
     /// Removes headers nominated by every Connection field, including comma-separated names.
     #[test]
     fn strips_all_connection_header_values() {
-        let mut headers = http::HeaderMap::new();
+        let mut headers = ::http::HeaderMap::new();
         headers.append("connection", "x-first, connection".parse().unwrap());
         headers.append("connection", " X-Second, x-third ".parse().unwrap());
         for name in ["x-first", "x-second", "x-third", "x-end-to-end"] {

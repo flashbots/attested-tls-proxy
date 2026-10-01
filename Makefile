@@ -72,11 +72,11 @@ endif
 
 .PHONY: build
 build: ## Build (release version)
-	$(BUILD_ENV) cargo build $(FEATURE_ARGS) --locked $(if $(BUILD_TARGET),--target $(BUILD_TARGET)) --profile $(BUILD_PROFILE)
+	$(BUILD_ENV) cargo build -p attested-tls-proxy $(FEATURE_ARGS) --locked $(if $(BUILD_TARGET),--target $(BUILD_TARGET)) --profile $(BUILD_PROFILE)
 
 .PHONY: build-dev
 build-dev: ## Build (debug version)
-	cargo build $(FEATURE_ARGS)
+	cargo build -p attested-tls-proxy $(FEATURE_ARGS)
 
 ##@ Debian Packages
 
@@ -95,18 +95,18 @@ build-deb: install-cargo-deb ## Build Debian package
 
 .PHONY: lint
 lint: ## Run the linters
-	cargo fmt -- --check
+	cargo fmt --all -- --check
 	cargo clippy --workspace $(FEATURE_ARGS) -- -D warnings
 
 .PHONY: test
 test:
-	cargo test --verbose $(FEATURE_ARGS)
+	cargo test --workspace --verbose $(FEATURE_ARGS)
 
 .PHONY: lt
 lt: lint test ## Run "lint" and "test"
 
 .PHONY: fmt
 fmt: ## Format the code
-	cargo fmt
-	cargo fix --allow-staged
-	cargo clippy $(FEATURE_ARGS) --fix --allow-staged
+	cargo fmt --all
+	cargo fix --workspace --allow-staged
+	cargo clippy --workspace $(FEATURE_ARGS) --fix --allow-staged

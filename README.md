@@ -5,7 +5,7 @@ This is a reverse HTTP proxy allowing a normal HTTP client to communicate with a
 
 This is designed to be an alternative to [`cvm-reverse-proxy`](https://github.com/flashbots/cvm-reverse-proxy). Unlike `cvm-reverse-proxy` this uses post-handshake remote-attested TLS, meaning regular CA-signed TLS certificates can be used.
 
-Details of the remote-attested TLS protocol are in [attested-tls/README.md](attested-tls/README.md).  This is provided as a separate crate for other uses than HTTP proxying.
+Details of the remote-attested TLS protocol are in [crates/attested-tls/README.md](crates/attested-tls/README.md).  This is provided as a separate crate for other uses than HTTP proxying.
 
 The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for requests from that proxy-client instance. If the channel is lost, the client reconnects automatically and repeats the attestation exchange before forwarding subsequent requests.
 
@@ -94,13 +94,34 @@ Proxy-client to proxy-server connections use TLS 1.3.
 
 The protocol name `flashbots-ratls/1` must be given in the TLS configuration for ALPN protocol negotiation during the TLS handshake. Future versions of this protocol will use incrementing version numbers, eg: `flashbots-ratls/2`.
 
-Immediately after the TLS handshake, an attestation exchange is made. Details of how this works are in the [attested-tls protocol specification](attested-tls/README.md#protocol-specification).
+Immediately after the TLS handshake, an attestation exchange is made. Details of how this works are in the [attested-tls protocol specification](crates/attested-tls/README.md#protocol-specification).
 
 Following a successful attestation exchange, the client can make HTTP requests, and the server will forward them to the target service.
 
 As described above, the server will inject measurement data into the request headers before forwarding them to the target service, and the client will inject measurement data into the response headers before forwarding them to the source client.
 
 The proxy client and proxy server support HTTP/2 and HTTP/1.1 over their attested-TLS channel, with HTTP/2 preferred. The HTTP protocol is combined with the attested-TLS protocol version in ALPN, producing `flashbots-ratls/1+h2` or `flashbots-ratls/1+http/1.1`. A negotiated `flashbots-ratls/1` value without an HTTP suffix falls back to HTTP/1.1.
+
+## Repository layout and development
+
+- `crates/attested-tls`: the attested TLS protocol library.
+- `crates/attested-tls-proxy`: the HTTP proxy library and CLI. HTTP forwarding
+  lives in `src/http`; its public API is also re-exported at the crate root.
+
+Run the commands below from the repository root. The proxy is the default
+workspace member, so existing `cargo run -- ...` commands still work. Build
+artifacts remain in the root `target/` directory.
+
+```sh
+cargo build -p attested-tls-proxy --locked
+cargo test --workspace --features azure --all-targets --locked
+cargo clippy --workspace --features azure --locked -- -D warnings
+cargo fmt --all -- --check
+```
+
+Omit `--features azure` on systems without the TPM dependencies described below.
+To install from a local checkout, use `cargo install --path crates/attested-tls-proxy --locked`.
+Docker and Compose commands also run from the repository root.
 
 ## Dependencies and feature flags
 
