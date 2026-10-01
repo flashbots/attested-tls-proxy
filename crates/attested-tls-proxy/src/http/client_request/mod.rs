@@ -23,7 +23,7 @@ use tokio::{
     time::Instant,
 };
 
-use crate::{
+use crate::http::{
     ATTESTATION_TYPE_HEADER, MEASUREMENT_HEADER,
     attestation::{AttestationType, measurements::MultiMeasurements},
     full,
@@ -60,7 +60,7 @@ pub(crate) type ProxyResponse =
     Response<http_body_util::combinators::BoxBody<bytes::Bytes, BoxError>>;
 
 pub(crate) struct PendingRequest {
-    pub request: http::Request<Incoming>,
+    pub request: ::http::Request<Incoming>,
     pub response_tx: oneshot::Sender<ProxyResponse>,
     pub deadline: Instant,
     pub permit: OwnedSemaphorePermit,
@@ -73,7 +73,7 @@ pub(crate) fn gateway_timeout() -> ProxyResponse {
             .map_err(Into::into)
             .boxed(),
     );
-    *response.status_mut() = http::StatusCode::GATEWAY_TIMEOUT;
+    *response.status_mut() = ::http::StatusCode::GATEWAY_TIMEOUT;
     response
 }
 
@@ -141,7 +141,7 @@ pub(crate) async fn forward(
     let permit = Arc::new(permit);
     let (parts, body) = request.into_parts();
     let (body, upload_guard, mut upload_finished) = RequestBody::new(body, permit.clone());
-    let request = http::Request::from_parts(parts, body);
+    let request = ::http::Request::from_parts(parts, body);
 
     let response = tokio::select! {
         biased;
@@ -165,7 +165,7 @@ pub(crate) async fn forward(
                         .map_err(Into::into)
                         .boxed(),
                 );
-                *response.status_mut() = http::StatusCode::BAD_GATEWAY;
+                *response.status_mut() = ::http::StatusCode::BAD_GATEWAY;
                 let _ = response_tx.send(response);
             }
             // HTTP/2 stream failures/cancellations must not interrupt other streams.

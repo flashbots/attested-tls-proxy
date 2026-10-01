@@ -37,10 +37,8 @@ fn emit_git_rerun_hints() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_owned()));
 
-    for git_dir in [
-        manifest_dir.join(".git"),
-        manifest_dir.join("..").join(".git"),
-    ] {
+    for ancestor in manifest_dir.ancestors() {
+        let git_dir = ancestor.join(".git");
         if git_dir.exists() {
             println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
             println!(

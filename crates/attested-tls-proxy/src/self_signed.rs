@@ -203,7 +203,7 @@ mod tests {
         AttestationGenerator,
         attestation::{AttestationType, AttestationVerifier},
         attested_tls::{AttestedTlsClient, AttestedTlsServer},
-        test_helpers::{generate_certificate_chain, generate_tls_config},
+        http::test_helpers::{generate_certificate_chain, generate_tls_config},
     };
     use tokio::net::TcpListener;
     use tokio_rustls::rustls::pki_types::ServerName;

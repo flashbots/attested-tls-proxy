@@ -1,6 +1,6 @@
 //! HTTP Version support and negotiation
-use crate::client_request::RequestBody;
-use crate::{
+use crate::http::client_request::RequestBody;
+use crate::http::{
     ProxyError,
     client_request::{ProxyResponse, http2},
 };
@@ -102,7 +102,7 @@ impl HttpSender {
 
     pub async fn send_request(
         &mut self,
-        request: http::Request<RequestBody>,
+        request: ::http::Request<RequestBody>,
     ) -> Result<ProxyResponse, ProxyError> {
         match self {
             Self::Http1(sender) => sender

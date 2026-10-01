@@ -14,7 +14,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 static INIT: Once = Once::new();
 
-use crate::MEASUREMENT_HEADER;
+use crate::http::MEASUREMENT_HEADER;
 
 pub use attested_tls::attestation::measurements::mock_dcap_measurements;
 
@@ -131,7 +131,7 @@ pub async fn example_http_service() -> SocketAddr {
     addr
 }
 
-async fn get_handler(headers: http::HeaderMap) -> impl IntoResponse {
+async fn get_handler(headers: ::http::HeaderMap) -> impl IntoResponse {
     headers
         .get(MEASUREMENT_HEADER)
         .and_then(|v| v.to_str().ok())
