@@ -1,8 +1,10 @@
-//! One TCP connection per attested TLS tunnel, with bounded buffering and no
-//! application-protocol interpretation. Install a Rustls crypto provider before
-//! constructing tunnels. Serving futures own their connections: dropping one
-//! aborts its connection tasks. Blocking attestation generation cannot itself be
-//! canceled; embedding applications remain responsible for runtime shutdown.
+//! Tunnel a TCP connection over remote attested TLS.
+//!
+//! This is a proxy which accepts TCP connections and does TLS handshake followed
+//! by an attestation exchange.  The TLS session byte-stream is then handed back to
+//! the calling application.
+//!
+//! Assumes a Rustls crypto provider is already installed.
 pub mod tls;
 
 use std::{future::Future, io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
@@ -26,9 +28,11 @@ const APPLICATION_PROTOCOL: &[u8] = b"tcp-tunnel";
 /// inactivity of an established tunnel.
 #[derive(Clone, Copy, Debug)]
 pub struct TunnelOptions {
+    /// Timeout for connections establishment, TLS handshake and attestation exchange
     pub setup_timeout: Duration,
     /// Counts both connections being established and established connections.
     pub max_connections: NonZeroUsize,
+    /// Timeout for closing connections during graceful shutdown.
     pub shutdown_grace: Duration,
 }
 
@@ -56,30 +60,8 @@ impl TunnelOptions {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum TunnelError {
-    #[error("{phase}: {source}")]
-    Io {
-        phase: &'static str,
-        #[source]
-        source: io::Error,
-    },
-    #[error("TLS/attestation: {0}")]
-    Attestation(#[from] AttestedTlsError),
-    #[error("connection setup timed out")]
-    SetupTimeout,
-    #[error("protocol validation: peer did not negotiate an attested TCP tunnel")]
-    ProtocolMismatch,
-    #[error("configuration: {0}")]
-    Configuration(&'static str),
-}
-
-fn io_error(phase: &'static str) -> impl FnOnce(io::Error) -> TunnelError {
-    move |source| TunnelError::Io { phase, source }
-}
-
 /// Accepts local TCP connections and opens a dedicated attested connection for
-/// each. Construction only binds the listener; it does not contact the server.
+/// each. Constructor only binds the listener; it does not contact the server.
 pub struct TunnelClient(Tunnel);
 
 impl TunnelClient {
@@ -131,6 +113,7 @@ impl TunnelClient {
         ))
     }
 
+    /// Return local address of the underlying listener
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.0.listener.local_addr()
     }
@@ -194,15 +177,19 @@ impl TunnelServer {
         ))
     }
 
+    /// Return local address of the underlying listener
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.0.listener.local_addr()
     }
 
+    /// Serve until shutdown resolves, then stop accepting and drain existing
+    /// connections for `shutdown_grace`. Individual connection failures are logged.
     pub async fn serve_until(self, shutdown: impl Future<Output = ()>) -> Result<(), TunnelError> {
         self.0.serve_until(shutdown).await
     }
 }
 
+/// Attested TLS client or server
 #[derive(Clone)]
 enum Endpoint {
     Client(AttestedTlsClient),
@@ -210,48 +197,63 @@ enum Endpoint {
 }
 
 impl Endpoint {
+    /// Common method for attested TLS connection setup for both client and server
     async fn setup(
         &self,
         inbound: TcpStream,
         target: &str,
     ) -> Result<(TcpStream, tokio_rustls::TlsStream<TcpStream>), TunnelError> {
+        // Disable Nagle's algorithm to reduce latency
         inbound
             .set_nodelay(true)
             .map_err(io_error("configure inbound TCP"))?;
+
         match self {
             Self::Client(client) => {
                 let outbound = TcpStream::connect(target)
                     .await
                     .map_err(io_error("connect tunnel server"))?;
+
                 outbound
                     .set_nodelay(true)
                     .map_err(io_error("configure outbound TCP"))?;
+
+                // Do TLS handshake and attestation exchange
                 let (stream, _, _) = client.connect(target, outbound).await?;
+
+                // Ensure correct negotiated application protocol
                 require_tunnel_protocol(stream.get_ref().1.alpn_protocol())?;
+
                 Ok((inbound, stream.into()))
             }
             Self::Server(server) => {
+                // Do TLS handshake and attestation exchange on inbound connection
                 let (stream, _, _) = server.handle_connection(inbound).await?;
+
+                // Ensure correct negotiated application protocol
                 require_tunnel_protocol(stream.get_ref().1.alpn_protocol())?;
-                // Never contact the target until peer attestation AND the
-                // negotiated application protocol have been checked.
+
+                // Open connection to target service
                 let target = TcpStream::connect(target)
                     .await
                     .map_err(io_error("connect target"))?;
+
                 target
                     .set_nodelay(true)
                     .map_err(io_error("configure target TCP"))?;
+
                 Ok((target, stream.into()))
             }
         }
     }
 }
 
+/// Check negotiated application protocol
 fn require_tunnel_protocol(protocol: Option<&[u8]>) -> Result<(), TunnelError> {
-    let valid = SUPPORTED_ALPN_PROTOCOL_VERSIONS.iter().any(|version| {
-        protocol == Some([*version, b"+", APPLICATION_PROTOCOL].concat().as_slice())
-    });
-    if valid {
+    if SUPPORTED_ALPN_PROTOCOL_VERSIONS
+        .iter()
+        .any(|version| protocol == Some([*version, b"+", APPLICATION_PROTOCOL].concat().as_slice()))
+    {
         Ok(())
     } else {
         Err(TunnelError::ProtocolMismatch)
@@ -259,13 +261,17 @@ fn require_tunnel_protocol(protocol: Option<&[u8]>) -> Result<(), TunnelError> {
 }
 
 struct Tunnel {
+    /// Listener for source client (for client) or proxy client (for server)
     listener: TcpListener,
+    /// The proxy-server address (for client) or target server address (for server)
     target: String,
+    /// Attested TLS client or server
     endpoint: Endpoint,
     options: TunnelOptions,
 }
 
 impl Tunnel {
+    /// Setup listener and check configuration
     async fn bind(
         listen: impl ToSocketAddrs,
         target: String,
@@ -273,9 +279,11 @@ impl Tunnel {
         options: TunnelOptions,
     ) -> Result<Self, TunnelError> {
         let options = options.validate()?;
+
         let listener = TcpListener::bind(listen)
             .await
             .map_err(io_error("bind listener"))?;
+
         Ok(Self {
             listener,
             target,
@@ -284,6 +292,7 @@ impl Tunnel {
         })
     }
 
+    /// Run until told to shut down
     async fn serve_until(self, shutdown: impl Future<Output = ()>) -> Result<(), TunnelError> {
         let Self {
             listener,
@@ -291,11 +300,16 @@ impl Tunnel {
             endpoint,
             options,
         } = self;
+
         let slots = Arc::new(Semaphore::new(options.max_connections.get()));
+
         // JoinSet aborts all children when this serving future is dropped.
         let mut tasks = JoinSet::new();
+
         let mut next_accept = tokio::time::Instant::now();
+
         tokio::pin!(shutdown);
+
         loop {
             tokio::select! {
                 biased;
@@ -320,10 +334,12 @@ impl Tunnel {
                             continue;
                         }
                     };
+
                     let Ok(permit) = slots.clone().try_acquire_owned() else {
-                        tracing::debug!(%peer, "Connection limit reached; closing new connection");
+                        tracing::warn!(%peer, "Connection limit reached; closing new connection");
                         continue;
                     };
+
                     let endpoint = endpoint.clone();
                     let target = target.clone();
                     let span = tracing::info_span!("tunnel", %peer, %target);
@@ -334,11 +350,14 @@ impl Tunnel {
                                 options.setup_timeout, endpoint.setup(inbound, &target),
                             ).await.map_err(|_| TunnelError::SetupTimeout)??;
                             tracing::debug!("Tunnel established");
+
                             let (sent, received) = tokio::io::copy_bidirectional(&mut local, &mut remote)
                                 .await.map_err(io_error("forwarding"))?;
+
                             tracing::debug!(sent, received, "Tunnel closed");
                             Ok::<(), TunnelError>(())
                         }.await;
+
                         if let Err(error) = result {
                             tracing::warn!(%error, "Tunnel connection failed");
                         }
@@ -346,7 +365,9 @@ impl Tunnel {
                 }
             }
         }
+
         drop(listener);
+
         tracing::info!(connections = tasks.len(), "Draining tunnels");
         if tokio::time::timeout(options.shutdown_grace, async {
             while let Some(result) = tasks.join_next().await {
@@ -364,6 +385,7 @@ impl Tunnel {
     }
 }
 
+/// Validate and process a caller-supplied target address/hostname
 fn normalize_target(target: &str, default_port: Option<u16>) -> Result<String, TunnelError> {
     let invalid = || {
         TunnelError::Configuration(
@@ -403,6 +425,28 @@ fn normalize_target(target: &str, default_port: Option<u16>) -> Result<String, T
         return Err(invalid());
     }
     Ok(format!("{host}:{port}"))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TunnelError {
+    #[error("{phase}: {source}")]
+    Io {
+        phase: &'static str,
+        #[source]
+        source: io::Error,
+    },
+    #[error("TLS/attestation: {0}")]
+    Attestation(#[from] AttestedTlsError),
+    #[error("connection setup timed out")]
+    SetupTimeout,
+    #[error("protocol validation: peer did not negotiate an attested TCP tunnel")]
+    ProtocolMismatch,
+    #[error("configuration: {0}")]
+    Configuration(&'static str),
+}
+
+fn io_error(phase: &'static str) -> impl FnOnce(io::Error) -> TunnelError {
+    move |source| TunnelError::Io { phase, source }
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@ name = "attested-tls-tcp-tunnel"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "A bidirectional TCP tunnel over remote-attested TLS"
+description = "A remote-attested TLS TCP tunnel"
 repository = "https://github.com/flashbots/attested-tls-proxy"
 build = "../build.rs"
 
