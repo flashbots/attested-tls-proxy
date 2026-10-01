@@ -114,31 +114,20 @@ impl ClientArgs {
         let client_attestation_generator =
             AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)?;
 
-        let client = if allow_self_signed {
-            let client_tls_config =
-                attested_tls_proxy::self_signed::client_tls_config_allow_self_signed(
-                    tls_cert_and_chain.as_ref(),
-                )?;
-            ProxyClient::new_with_tls_config(
-                client_tls_config,
-                listen_addr,
-                target_addr,
-                client_attestation_generator,
-                attestation_verifier,
-                tls_cert_and_chain.map(|identity| identity.cert_chain),
-            )
-            .await?
-        } else {
-            ProxyClient::new(
-                tls_cert_and_chain,
-                listen_addr,
-                target_addr,
-                client_attestation_generator,
-                attestation_verifier,
-                remote_tls_cert,
-            )
-            .await?
-        }
+        let client_tls_config = attested_tls_proxy::tls::client_config(
+            tls_cert_and_chain.as_ref(),
+            remote_tls_cert,
+            allow_self_signed,
+        )?;
+        let client = ProxyClient::new_with_tls_config(
+            client_tls_config,
+            listen_addr,
+            target_addr,
+            client_attestation_generator,
+            attestation_verifier,
+            tls_cert_and_chain.map(|identity| identity.cert_chain),
+        )
+        .await?
         .with_request_options(ProxyClientOptions {
             request_timeout: Duration::from_secs(request_timeout_secs.get()),
             response_body_idle_timeout: Duration::from_secs(response_body_idle_timeout_secs.get()),

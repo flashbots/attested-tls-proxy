@@ -3,7 +3,7 @@ use crate::target::{InvalidTarget, normalize_target};
 pub mod attested_get;
 pub mod file_server;
 pub mod health_check;
-use crate::self_signed;
+use crate::tls;
 
 pub use attested_tls;
 pub use attested_tls::attestation;
@@ -27,10 +27,8 @@ use thiserror::Error;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::sync::{Semaphore, mpsc, oneshot};
-use tokio_rustls::rustls::server::{VerifierBuilderError, WebPkiClientVerifier};
-use tokio_rustls::rustls::{
-    self, ClientConfig, RootCertStore, ServerConfig, pki_types::CertificateDer,
-};
+use tokio_rustls::rustls::server::VerifierBuilderError;
+use tokio_rustls::rustls::{ClientConfig, ServerConfig, pki_types::CertificateDer};
 use tracing::{debug, error, warn};
 
 use crate::http::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
@@ -77,17 +75,13 @@ pub async fn get_tls_cert(
     remote_certificate: Option<CertificateDer<'static>>,
     allow_self_signed: bool,
 ) -> Result<(Vec<CertificateDer<'static>>, Option<MultiMeasurements>), AttestedTlsError> {
-    let (cert, measurements) = if allow_self_signed {
-        let client_tls_config = self_signed::client_tls_config_allow_self_signed(None)?;
-        attested_tls::get_tls_cert_with_config(
-            &server_name,
-            attestation_verifier,
-            client_tls_config,
-        )
-        .await?
-    } else {
-        attested_tls::get_tls_cert(server_name, attestation_verifier, remote_certificate).await?
-    };
+    let client_tls_config = tls::client_config(None, remote_certificate, allow_self_signed)?;
+    let (cert, measurements) = attested_tls::get_tls_cert_with_config(
+        &server_name,
+        attestation_verifier,
+        client_tls_config,
+    )
+    .await?;
 
     debug!("[get-tls-cert] Connected to proxy server with measurements: {measurements:?}");
     Ok((cert, measurements))
@@ -115,25 +109,7 @@ impl ProxyServer {
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
         let target_addr = normalize_target(&target, None)?;
-        let mut server_config = if client_auth {
-            let root_store =
-                RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
-
-            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_client_cert_verifier(verifier)
-                .with_single_cert(
-                    cert_and_key.cert_chain.clone(),
-                    cert_and_key.key.clone_key(),
-                )?
-        } else {
-            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(
-                    cert_and_key.cert_chain.clone(),
-                    cert_and_key.key.clone_key(),
-                )?
-        };
+        let mut server_config = tls::server_config(&cert_and_key, client_auth)?;
         ensure_proxy_alpn_protocols(&mut server_config.alpn_protocols);
 
         let attested_tls_server = AttestedTlsServer::new_with_tls_config(
@@ -389,27 +365,8 @@ impl ProxyClient {
         attestation_verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
     ) -> Result<Self, ProxyError> {
-        let root_store = match remote_certificate {
-            Some(remote_certificate) => {
-                let mut root_store = RootCertStore::empty();
-                root_store.add(remote_certificate)?;
-                root_store
-            }
-            None => RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
-        };
-
-        let mut client_config = if let Some(ref cert_and_key) = cert_and_key {
-            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(root_store)
-                .with_client_auth_cert(
-                    cert_and_key.cert_chain.clone(),
-                    cert_and_key.key.clone_key(),
-                )?
-        } else {
-            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(root_store)
-                .with_no_client_auth()
-        };
+        let mut client_config =
+            tls::client_config(cert_and_key.as_ref(), remote_certificate, false)?;
         ensure_proxy_alpn_protocols(&mut client_config.alpn_protocols);
 
         let attested_tls_client = AttestedTlsClient::new_with_tls_config(

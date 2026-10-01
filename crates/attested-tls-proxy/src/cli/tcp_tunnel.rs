@@ -4,7 +4,8 @@ use attested_tls::{
     attestation::{AttestationGenerator, AttestationVerifier},
 };
 use attested_tls_proxy::self_signed::generate_self_signed_cert;
-use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer, tls};
+use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer};
+use attested_tls_proxy::tls;
 use clap::Args;
 use std::{
     net::SocketAddr,

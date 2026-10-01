@@ -1,4 +1,4 @@
-//! TLS configuration helpers for the CLI and embedding applications.
+//! Shared TLS 1.3 configuration for HTTP proxies and TCP tunnels.
 use std::sync::Arc;
 
 use crate::self_signed::SkipServerVerification;
@@ -39,9 +39,9 @@ pub fn client_config(
     })
 }
 
-/// Build a TLS 1.3 server configuration. As in the HTTP proxy, optional client
-/// certificate authentication uses public roots. Use a custom ServerConfig
-/// with TunnelServer::new_with_tls_config for private client CAs.
+/// Build a TLS 1.3 server configuration. Optional client certificate authentication
+/// uses public roots. For private client CAs, supply a custom ServerConfig through
+/// the HTTP proxy or TCP tunnel's `new_with_tls_config` constructor.
 pub fn server_config(
     identity: &TlsCertAndKey,
     client_auth: bool,

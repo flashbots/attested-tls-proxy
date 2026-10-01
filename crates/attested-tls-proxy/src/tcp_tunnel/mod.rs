@@ -5,7 +5,7 @@
 //! the calling application.
 //!
 //! Assumes a Rustls crypto provider is already installed.
-pub mod tls;
+use crate::tls;
 
 use crate::target::{InvalidTarget, normalize_target};
 

@@ -1,11 +1,12 @@
 use attested_tls_proxy::self_signed::generate_self_signed_cert;
+use attested_tls_proxy::tls;
 
 use super::common::*;
 use attested_tls::{
     AttestedTlsClient, AttestedTlsServer,
     attestation::{AttestationGenerator, AttestationType, AttestationVerifier},
 };
-use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer, tls};
+use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer};
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

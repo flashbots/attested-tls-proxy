@@ -23,21 +23,6 @@ pub fn generate_self_signed_cert(ip_address: IpAddr) -> Result<TlsCertAndKey, rc
     })
 }
 
-/// Accept self-signed remote certificates and optionally authenticate with a client identity.
-pub fn client_tls_config_allow_self_signed(
-    identity: Option<&TlsCertAndKey>,
-) -> Result<rustls::ClientConfig, AttestedTlsError> {
-    let builder = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(SkipServerVerification::new()?);
-    Ok(match identity {
-        Some(identity) => {
-            builder.with_client_auth_cert(identity.cert_chain.clone(), identity.key.clone_key())?
-        }
-        None => builder.with_no_client_auth(),
-    })
-}
-
 /// Used to allow verification of self-signed certificates
 #[derive(Debug, Clone)]
 pub struct SkipServerVerification {
@@ -246,7 +231,7 @@ mod tests {
                 server.handle_connection(tcp_stream).await.unwrap();
         });
 
-        let client_config = client_tls_config_allow_self_signed(None).unwrap();
+        let client_config = crate::tls::client_config(None, None, true).unwrap();
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config.into(),
@@ -304,7 +289,7 @@ mod tests {
         });
 
         // Inner TLS config
-        let client_config = client_tls_config_allow_self_signed(None).unwrap();
+        let client_config = crate::tls::client_config(None, None, true).unwrap();
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config.into(),
