@@ -15,6 +15,7 @@ use attested_tls::{
     attestation::{AttestationGenerator, AttestationVerifier},
 };
 use tokio::{
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::Semaphore,
     task::JoinSet,
@@ -61,10 +62,15 @@ impl TunnelOptions {
 }
 
 /// Accepts local TCP connections and opens a dedicated attested connection for
-/// each. Constructor only binds the listener; it does not contact the server.
+/// each. Constructors contact the server only when `startup_check` is enabled.
 pub struct TunnelClient(Tunnel);
 
 impl TunnelClient {
+    /// If `startup_check` is true, verify an upstream connection within
+    /// `options.setup_timeout` and close it before returning. This checks TLS,
+    /// attestation, and ALPN, not final target reachability. The server may open
+    /// an empty target connection. On failure the local listener is dropped.
+    #[allow(clippy::too_many_arguments)] // Keep the startup check explicit in the constructor.
     pub async fn new(
         listen: impl ToSocketAddrs,
         target: String,
@@ -72,6 +78,7 @@ impl TunnelClient {
         generator: AttestationGenerator,
         verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
+        startup_check: bool,
         options: TunnelOptions,
     ) -> Result<Self, TunnelError> {
         let config = tls::client_config(identity.as_ref(), remote_certificate, false)?;
@@ -82,6 +89,7 @@ impl TunnelClient {
             generator,
             verifier,
             identity.map(|i| i.cert_chain),
+            startup_check,
             options,
         )
         .await
@@ -90,6 +98,8 @@ impl TunnelClient {
     /// Uses the supplied certificate validation and client identity settings.
     /// ALPN is replaced with the tunnel protocol. `cert_chain` must match the
     /// client identity in `config`, if present, for attestation session binding.
+    /// `startup_check` has the same behavior as in [`Self::new`].
+    #[allow(clippy::too_many_arguments)] // Mirrors new with caller-supplied TLS settings.
     pub async fn new_with_tls_config(
         listen: impl ToSocketAddrs,
         target: String,
@@ -97,20 +107,32 @@ impl TunnelClient {
         generator: AttestationGenerator,
         verifier: AttestationVerifier,
         cert_chain: Option<Vec<CertificateDer<'static>>>,
+        startup_check: bool,
         options: TunnelOptions,
     ) -> Result<Self, TunnelError> {
         config.alpn_protocols = vec![APPLICATION_PROTOCOL.to_vec()];
         let inner =
             AttestedTlsClient::new_with_tls_config(config, generator, verifier, cert_chain)?;
-        Ok(Self(
-            Tunnel::bind(
-                listen,
-                normalize_target(&target, Some(443))?,
-                Endpoint::Client(inner),
-                options,
-            )
-            .await?,
-        ))
+        let tunnel = Tunnel::bind(
+            listen,
+            normalize_target(&target, Some(443))?,
+            Endpoint::Client(inner.clone()),
+            options,
+        )
+        .await?;
+        if startup_check {
+            tokio::time::timeout(options.setup_timeout, async {
+                let mut stream = connect_upstream(&inner, &tunnel.target).await?;
+                stream
+                    .shutdown()
+                    .await
+                    .map_err(io_error("close startup check"))?;
+                Ok::<(), TunnelError>(())
+            })
+            .await
+            .map_err(|_| TunnelError::SetupTimeout)??;
+        }
+        Ok(Self(tunnel))
     }
 
     /// Return local address of the underlying listener
@@ -210,20 +232,7 @@ impl Endpoint {
 
         match self {
             Self::Client(client) => {
-                let outbound = TcpStream::connect(target)
-                    .await
-                    .map_err(io_error("connect tunnel server"))?;
-
-                outbound
-                    .set_nodelay(true)
-                    .map_err(io_error("configure outbound TCP"))?;
-
-                // Do TLS handshake and attestation exchange
-                let (stream, _, _) = client.connect(target, outbound).await?;
-
-                // Ensure correct negotiated application protocol
-                require_tunnel_protocol(stream.get_ref().1.alpn_protocol())?;
-
+                let stream = connect_upstream(client, target).await?;
                 Ok((inbound, stream.into()))
             }
             Self::Server(server) => {
@@ -246,6 +255,28 @@ impl Endpoint {
             }
         }
     }
+}
+
+/// Shared by startup checks and real tunnels so both enforce the same policy.
+async fn connect_upstream(
+    client: &AttestedTlsClient,
+    target: &str,
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, TunnelError> {
+    let outbound = TcpStream::connect(target)
+        .await
+        .map_err(io_error("connect tunnel server"))?;
+
+    outbound
+        .set_nodelay(true)
+        .map_err(io_error("configure outbound TCP"))?;
+
+    // Do TLS handshake and attestation exchange
+    let (stream, _, _) = client.connect(target, outbound).await?;
+
+    // Check application protocol was negotiated
+    require_tunnel_protocol(stream.get_ref().1.alpn_protocol())?;
+
+    Ok(stream)
 }
 
 /// Check negotiated application protocol

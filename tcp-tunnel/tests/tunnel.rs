@@ -144,6 +144,7 @@ async fn client_capacity_includes_setup_and_timeout_does_not_retry() {
             AttestationGenerator::with_no_attestation(),
             AttestationVerifier::expect_none(),
             None,
+            false, // No startup check.
             options,
         )
         .await
@@ -354,7 +355,7 @@ async fn server_rejects_wrong_protocol_and_attestation_before_target_connect() {
 async fn client_rejects_wrong_protocol_attestation_and_untrusted_tls() {
     bounded(async {
         provider();
-        for mode in 0..3 {
+        for (mode, startup_check) in (0..3).flat_map(|mode| [(mode, false), (mode, true)]) {
             let identity = generate_self_signed_cert("127.0.0.1".parse().unwrap()).unwrap();
             let cert = identity.cert_chain[0].clone();
             let mut config = tls::server_config(&identity, false).unwrap();
@@ -384,19 +385,26 @@ async fn client_rejects_wrong_protocol_attestation_and_untrusted_tls() {
             } else {
                 AttestationVerifier::expect_none()
             };
-            let client = Running::client(
-                TunnelClient::new(
-                    LOCAL,
-                    addr.to_string(),
-                    None,
-                    AttestationGenerator::with_no_attestation(),
-                    verifier,
-                    if mode == 2 { None } else { Some(cert) },
-                    TunnelOptions::default(),
-                )
-                .await
-                .unwrap(),
-            );
+            let result = TunnelClient::new(
+                LOCAL,
+                addr.to_string(),
+                None,
+                AttestationGenerator::with_no_attestation(),
+                verifier,
+                if mode == 2 { None } else { Some(cert) },
+                startup_check,
+                TunnelOptions::default(),
+            )
+            .await;
+            if startup_check {
+                assert!(
+                    result.is_err(),
+                    "startup check accepted invalid peer, mode {mode}"
+                );
+                backend.await.unwrap();
+                continue;
+            }
+            let client = Running::client(result.unwrap());
             let mut source = TcpStream::connect(client.addr).await.unwrap();
             source.write_all(b"must not reach peer").await.unwrap();
             closed(&mut source).await;
@@ -446,6 +454,7 @@ async fn self_signed_mode_preserves_client_identity_and_mutual_attestation() {
                 AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
                 AttestationVerifier::mock(),
                 Some(client_identity.cert_chain),
+                false, // No startup check.
                 TunnelOptions::default(),
             )
             .await
@@ -499,6 +508,82 @@ async fn application_tls_is_opaque_to_the_tunnel() {
         assert_eq!(data, b"opaque");
         stream.shutdown().await.unwrap();
         backend.await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn startup_check_closes_probe_and_serves_fresh_connections() {
+    bounded(async {
+        provider();
+        let identity = generate_self_signed_cert("127.0.0.1".parse().unwrap()).unwrap();
+        let config = tls::client_config(None, Some(identity.cert_chain[0].clone()), false).unwrap();
+        let target = listener().await;
+        let server = Running::server(
+            TunnelServer::new(
+                LOCAL,
+                target.local_addr().unwrap().to_string(),
+                identity,
+                AttestationGenerator::with_no_attestation(),
+                AttestationVerifier::expect_none(),
+                false,
+                TunnelOptions::default(),
+            )
+            .await
+            .unwrap(),
+        );
+        let client = TunnelClient::new_with_tls_config(
+            LOCAL,
+            server.addr.to_string(),
+            config,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            None,
+            true,
+            TunnelOptions::default(),
+        )
+        .await
+        .unwrap();
+        let (mut probe, _) = target.accept().await.unwrap();
+        closed(&mut probe).await;
+        let client = Running::client(client);
+        let mut source = TcpStream::connect(client.addr).await.unwrap();
+        let (mut backend, _) = target.accept().await.unwrap();
+        source.write_all(b"fresh").await.unwrap();
+        let mut bytes = [0; 5];
+        backend.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"fresh");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn startup_check_timeout_releases_listener() {
+    bounded(async {
+        provider();
+        let stalled = listener().await;
+        let local = listener().await;
+        let address = local.local_addr().unwrap();
+        drop(local);
+        let result = TunnelClient::new(
+            address,
+            stalled.local_addr().unwrap().to_string(),
+            None,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            None,
+            true,
+            TunnelOptions {
+                setup_timeout: Duration::from_millis(100),
+                ..TunnelOptions::default()
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(attested_tls_tcp_tunnel::TunnelError::SetupTimeout)
+        ));
+        let _rebound = tokio::net::TcpListener::bind(address).await.unwrap();
     })
     .await;
 }

@@ -95,7 +95,7 @@ dependencies as the HTTP proxy. There is no health-check listener in this versio
 
 ## Lifecycle and trust
 
-Startup binds the listener without contacting the remote service. Each accepted
+CLI startup binds the listener without contacting the remote service. Each accepted
 connection gets one setup attempt. Failures close that connection and are logged
 with the endpoint and phase; the tunnel does not send HTTP/gRPC error messages.
 It does not retry, reconnect an established stream, or replay application data.
@@ -148,6 +148,7 @@ let client = TunnelClient::new(
     AttestationGenerator::with_no_attestation(),
     AttestationVerifier::expect_none(), // replace with your measurement policy
     None, // use public CA roots
+    false, // No startup check.
     TunnelOptions::default(),
 ).await?;
 client.serve_until(async {
@@ -162,6 +163,14 @@ resolve the supplied shutdown future and await completion instead. Embedding
 applications own runtime shutdown, including outstanding blocking attestation
 work. The `tls` module provides TLS configuration helpers, including self-signed
 verification that retains client credentials.
+
+Both client constructors accept a `startup_check` boolean before `options`.
+When true, construction binds the listener, verifies an upstream connection
+(TLS, attestation, and tunnel ALPN), and closes that probe before returning.
+The check uses `setup_timeout`; a failure returns an error and drops the listener.
+It may cause an empty connection to the server's target, but does not confirm
+target connectivity because the protocol has no readiness acknowledgement.
+The CLI passes false and has no startup-check option.
 
 ## Validation
 

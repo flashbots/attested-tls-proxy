@@ -243,6 +243,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 generator,
                 verifier,
                 credentials.map(|c| c.cert_chain),
+                false, // No startup check.
                 limits.into(),
             )
             .await?;

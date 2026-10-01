@@ -98,6 +98,7 @@ pub async fn pair(target: SocketAddr, options: TunnelOptions) -> (Running, Runni
         AttestationGenerator::with_no_attestation(),
         AttestationVerifier::expect_none(),
         Some(cert),
+        false, // No startup check.
         options,
     )
     .await
