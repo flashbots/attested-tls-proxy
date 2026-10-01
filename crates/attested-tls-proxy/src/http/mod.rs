@@ -1,4 +1,5 @@
 //! HTTP forwarding over attested TLS.
+use crate::target::{InvalidTarget, normalize_target};
 pub mod attested_get;
 pub mod file_server;
 pub mod health_check;
@@ -100,6 +101,8 @@ pub struct ProxyServer {
     listener: Arc<TcpListener>,
     /// The address/hostname of the target service we are proxying to
     target: String,
+    /// Normalized TCP destination; preserve the original target for the Host header.
+    target_addr: String,
 }
 
 impl ProxyServer {
@@ -111,6 +114,7 @@ impl ProxyServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, ProxyError> {
+        let target_addr = normalize_target(&target, None)?;
         let mut server_config = if client_auth {
             let root_store =
                 RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -145,6 +149,7 @@ impl ProxyServer {
             attested_tls_server,
             listener: listener.into(),
             target,
+            target_addr,
         })
     }
 
@@ -157,6 +162,7 @@ impl ProxyServer {
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
+        let target_addr = normalize_target(&target, None)?;
         ensure_proxy_alpn_protocols(&mut server_config.alpn_protocols);
 
         let attested_tls_server = AttestedTlsServer::new_with_tls_config(
@@ -172,6 +178,7 @@ impl ProxyServer {
             attested_tls_server,
             listener: listener.into(),
             target,
+            target_addr,
         })
     }
 
@@ -180,6 +187,7 @@ impl ProxyServer {
     /// Returns the handle for the task handling the connection
     pub async fn accept(&self) -> Result<tokio::task::JoinHandle<()>, ProxyError> {
         let target = self.target.clone();
+        let target_addr = self.target_addr.clone();
         let (inbound, client_addr) = self.listener.accept().await?;
         let attested_tls_server = self.attested_tls_server.clone();
 
@@ -191,6 +199,7 @@ impl ProxyServer {
                         measurements,
                         attestation_type,
                         target,
+                        target_addr,
                         client_addr,
                     )
                     .await
@@ -218,6 +227,7 @@ impl ProxyServer {
         measurements: Option<MultiMeasurements>,
         remote_attestation_type: AttestationType,
         target: String,
+        target_addr: String,
         client_addr: SocketAddr,
     ) -> Result<(), ProxyError> {
         debug!("[proxy-server] accepted connection with measurements: {measurements:?}");
@@ -270,7 +280,7 @@ impl ProxyServer {
                 remote_attestation_type.as_str(),
             );
 
-            let target = target.clone();
+            let target = target_addr.clone();
             async move {
                 match Self::handle_http_request(req, target).await {
                     Ok(res) => {
@@ -439,10 +449,8 @@ impl ProxyClient {
         attested_tls_client: AttestedTlsClient,
         target_name: &str,
     ) -> Result<Self, ProxyError> {
+        let target = normalize_target(target_name, Some(443))?;
         let listener = TcpListener::bind(address).await?;
-
-        // Process the hostname / port provided by the user
-        let target = host_to_host_with_port(target_name);
 
         // Channel for getting incoming requests from the source client
         let (requests_tx, mut requests_rx) = mpsc::channel::<PendingRequest>(1024);
@@ -763,6 +771,8 @@ where
 /// An error when running a proxy client or server
 #[derive(Error, Debug)]
 pub enum ProxyError {
+    #[error("Invalid target: {0}")]
+    InvalidTarget(#[from] InvalidTarget),
     #[error("Failed to get server ceritifcate")]
     NoCertificate,
     #[error("TLS: {0}")]
@@ -796,15 +806,6 @@ pub enum ProxyError {
 impl From<mpsc::error::SendError<PendingRequest>> for ProxyError {
     fn from(_err: mpsc::error::SendError<PendingRequest>) -> Self {
         Self::MpscSend
-    }
-}
-
-/// If no port was provided, default to 443
-pub(crate) fn host_to_host_with_port(host: &str) -> String {
-    if host.contains(':') {
-        host.to_string()
-    } else {
-        format!("{host}:443")
     }
 }
 
@@ -1620,6 +1621,7 @@ mod tests {
             attested_tls_server,
             listener: listener.into(),
             target: target_addr.to_string(),
+            target_addr: target_addr.to_string(),
         };
 
         let proxy_addr = proxy_server.local_addr().unwrap();

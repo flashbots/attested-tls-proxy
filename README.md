@@ -9,13 +9,19 @@ Details of the remote-attested TLS protocol are in [crates/attested-tls/README.m
 
 The proxy-client, on starting, immediately connects to the proxy-server and an attestation-verification exchange is made. This attested-TLS channel is then re-used for requests from that proxy-client instance. If the channel is lost, the client reconnects automatically and repeats the attestation exchange before forwarding subsequent requests.
 
-It has five subcommands:
+It has seven subcommands:
 
 - `attested-tls-proxy server` - run a proxy server, which accepts TLS connections from a proxy client, sends an attestation and then forwards traffic to a target CVM service.
 - `attested-tls-proxy client` - run a proxy client, which accepts connections from elsewhere, connects to and verifies the attestation from the proxy server, and then forwards traffic to it over TLS.
 - `attested-tls-proxy get-tls-cert` - connect to a proxy server, verify its attestation, and, if successful, write its PEM-encoded TLS certificate chain to standard output. This can be used to make subsequent connections to services using this certificate over regular TLS.
 - `attested-tls-proxy attested-file-server` - serve files from a local filesystem path over an attested TLS channel.
 - `attested-tls-proxy attested-get` - connect to a proxy server, verify its attestation, make a single HTTP GET request, and write the response body to standard output.
+- `attested-tls-proxy tcp-tunnel-client` - forward local TCP connections through an attested tunnel.
+- `attested-tls-proxy tcp-tunnel-server` - accept attested tunnels and forward each to a fixed TCP target.
+
+For opaque TCP forwarding, see [the TCP tunnel](crates/attested-tls-proxy/TCP_TUNNEL.md). The `tcp-tunnel-client` and `tcp-tunnel-server` commands and the `attested_tls_proxy::tcp_tunnel` library module provide one attested connection per source TCP connection, including support for gRPC.
+
+All commands log at info level to stderr by default. Use `--log-debug` for debug logs and `--log-json` for structured logs. Command output, such as HTTP response bodies and certificates, is written to stdout.
 
 ### How it works
 
