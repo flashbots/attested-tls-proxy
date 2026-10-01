@@ -34,10 +34,6 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 axum = "0.8.8"
 tower-http = { version = "0.6.7", features = ["fs"] }
-rsa   = { version = "0.9", default-features = false }
-p256 = { version = "0.13.2", features = ["pkcs8"] }
-pkcs1 = "0.7.5"
-pkcs8 = "0.10.2"
 rcgen.workspace = true
 pin-project-lite = "0.2.16"
 pccs = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
