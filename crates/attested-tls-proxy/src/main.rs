@@ -304,14 +304,16 @@ async fn main() -> anyhow::Result<()> {
 
             let client = if allow_self_signed {
                 let client_tls_config =
-                    attested_tls_proxy::self_signed::client_tls_config_allow_self_signed()?;
+                    attested_tls_proxy::self_signed::client_tls_config_allow_self_signed(
+                        tls_cert_and_chain.as_ref(),
+                    )?;
                 ProxyClient::new_with_tls_config(
                     client_tls_config,
                     listen_addr,
                     target_addr,
                     client_attestation_generator,
                     attestation_verifier,
-                    None,
+                    tls_cert_and_chain.map(|identity| identity.cert_chain),
                 )
                 .await?
             } else {

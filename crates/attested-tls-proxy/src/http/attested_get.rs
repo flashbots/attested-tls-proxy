@@ -33,7 +33,7 @@ pub async fn attested_get(
     allow_self_signed: bool,
 ) -> Result<reqwest::Response, ProxyError> {
     let proxy_client = if allow_self_signed {
-        let client_config = crate::self_signed::client_tls_config_allow_self_signed()?;
+        let client_config = crate::self_signed::client_tls_config_allow_self_signed(None)?;
         ProxyClient::new_with_tls_config(
             client_config,
             "127.0.0.1:0".to_string(),
