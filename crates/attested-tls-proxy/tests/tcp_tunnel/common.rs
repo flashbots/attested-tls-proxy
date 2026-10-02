@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 use attested_tls::attestation::{AttestationGenerator, AttestationVerifier};
 use attested_tls_proxy::self_signed::generate_self_signed_cert;
-use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelError, TunnelOptions, TunnelServer};
+use attested_tls_proxy::tcp_tunnel::{
+    TunnelClient, TunnelError, TunnelOptions, TunnelServer, WarmPoolOptions,
+};
 use std::{future::Future, net::SocketAddr, time::Duration};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 
@@ -74,6 +76,14 @@ impl Drop for Running {
 }
 
 pub async fn pair(target: SocketAddr, options: TunnelOptions) -> (Running, Running) {
+    pair_with_pool(target, options, WarmPoolOptions::default()).await
+}
+
+pub async fn pair_with_pool(
+    target: SocketAddr,
+    options: TunnelOptions,
+    pool: WarmPoolOptions,
+) -> (Running, Running) {
     provider();
     let identity = generate_self_signed_cert("127.0.0.1".parse().unwrap()).unwrap();
     let cert = identity.cert_chain[0].clone();
@@ -101,5 +111,5 @@ pub async fn pair(target: SocketAddr, options: TunnelOptions) -> (Running, Runni
     )
     .await
     .unwrap();
-    (Running::client(client), server)
+    (Running::client(client.with_pool(pool).unwrap()), server)
 }

@@ -3,7 +3,7 @@
 //! is needed to exercise the tunnel's transport guarantees.
 
 use super::common::*;
-use attested_tls_proxy::tcp_tunnel::TunnelOptions;
+use attested_tls_proxy::tcp_tunnel::{TunnelOptions, WarmPoolOptions};
 use bytes::Bytes;
 use h2::{
     RecvStream, SendStream,
@@ -121,16 +121,36 @@ async fn handle(request: http::Request<RecvStream>, mut respond: h2::server::Sen
 
 #[tokio::test]
 async fn grpc_streaming_multiplexing_trailers_and_cancellation() {
+    exercise_grpc(0).await;
+}
+
+#[tokio::test]
+async fn grpc_over_a_warm_connection() {
+    exercise_grpc(1).await;
+}
+
+async fn exercise_grpc(pool_size: usize) {
     bounded(async {
         let target = listener().await;
         let options = TunnelOptions {
             setup_timeout: Duration::from_secs(1),
+            max_connections: std::num::NonZeroUsize::new(1).unwrap(),
             ..TunnelOptions::default()
         };
-        let (client, _server) = pair(target.local_addr().unwrap(), options).await;
+        let (client, _server) = pair_with_pool(
+            target.local_addr().unwrap(),
+            options,
+            WarmPoolOptions {
+                size: pool_size,
+                ..WarmPoolOptions::default()
+            },
+        )
+        .await;
         let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
+        let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
         let backend = tokio::spawn(async move {
             let (socket, _) = target.accept().await.unwrap();
+            connected_tx.send(()).unwrap();
             // All RPCs below must travel over this single target connection.
             let mut connection = h2::server::handshake(socket).await.unwrap();
             let mut tasks = tokio::task::JoinSet::new();
@@ -153,6 +173,10 @@ async fn grpc_streaming_multiplexing_trailers_and_cancellation() {
                 result.unwrap();
             }
         });
+        if pool_size > 0 {
+            // The target is already connected before any source arrives.
+            connected_rx.await.unwrap();
+        }
         let socket = TcpStream::connect(client.addr).await.unwrap();
         // Leave connection-level capacity for siblings when one stream consumes
         // its entire (default 64 KiB) receive window without being read.

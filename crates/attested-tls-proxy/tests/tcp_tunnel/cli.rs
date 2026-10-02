@@ -166,6 +166,15 @@ async fn terminate(child: &mut Child) {
 
 #[tokio::test]
 async fn cli_round_trip_and_sigterm_shutdown() {
+    cli_round_trip(0).await;
+}
+
+#[tokio::test]
+async fn cli_warm_pool_round_trip_and_sigterm_shutdown() {
+    cli_round_trip(1).await;
+}
+
+async fn cli_round_trip(pool_size: usize) {
     bounded(async {
         let target = listener().await;
         let target_addr = target.local_addr().unwrap().to_string();
@@ -191,14 +200,24 @@ async fn cli_round_trip_and_sigterm_shutdown() {
             "--allowed-remote-attestation-type",
             "none",
             "--allow-self-signed",
+            "--pool-size",
+            &pool_size.to_string(),
             "--shutdown-grace-secs",
             "0",
             "--log-json",
         ])
         .await;
         assert!(client_addr.ip().is_loopback());
+        let warm_backend = if pool_size > 0 {
+            Some(target.accept().await.unwrap().0)
+        } else {
+            None
+        };
         let mut source = TcpStream::connect(client_addr).await.unwrap();
-        let (mut backend, _) = target.accept().await.unwrap();
+        let mut backend = match warm_backend {
+            Some(backend) => backend,
+            None => target.accept().await.unwrap().0,
+        };
         source.write_all(b"cli smoke test").await.unwrap();
         let mut bytes = [0; 14];
         backend.read_exact(&mut bytes).await.unwrap();

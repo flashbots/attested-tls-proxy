@@ -6,7 +6,7 @@ use attested_tls::{
     AttestedTlsClient, AttestedTlsServer,
     attestation::{AttestationGenerator, AttestationType, AttestationVerifier},
 };
-use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer};
+use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer, WarmPoolOptions};
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -416,6 +416,10 @@ async fn client_rejects_wrong_protocol_attestation_and_untrusted_tls() {
 
 #[tokio::test]
 async fn self_signed_mode_preserves_client_identity_and_mutual_attestation() {
+    exercise_mutual_attestation(0).await;
+}
+
+pub(super) async fn exercise_mutual_attestation(pool_size: usize) {
     bounded(async {
         provider();
         let server_identity = generate_self_signed_cert("127.0.0.1".parse().unwrap()).unwrap();
@@ -458,10 +462,23 @@ async fn self_signed_mode_preserves_client_identity_and_mutual_attestation() {
                 TunnelOptions::default(),
             )
             .await
+            .unwrap()
+            .with_pool(WarmPoolOptions {
+                size: pool_size,
+                ..WarmPoolOptions::default()
+            })
             .unwrap(),
         );
+        let warm_backend = if pool_size > 0 {
+            Some(target.accept().await.unwrap().0)
+        } else {
+            None
+        };
         let mut source = TcpStream::connect(client.addr).await.unwrap();
-        let (mut backend, _) = target.accept().await.unwrap();
+        let mut backend = match warm_backend {
+            Some(backend) => backend,
+            None => target.accept().await.unwrap().0,
+        };
         source.write_all(b"authenticated").await.unwrap();
         let mut bytes = [0; 13];
         backend.read_exact(&mut bytes).await.unwrap();

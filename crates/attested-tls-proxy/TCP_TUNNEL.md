@@ -8,9 +8,10 @@ It forwards bytes without parsing any application protocol:
 source <-- TCP --> tunnel client <-- attested TLS TCP --> tunnel server <-- TCP --> target
 ```
 
-Each source TCP connection opens a dedicated attested-TLS connection and target
-TCP connection. Separate source connections get separate tunnels; no connections are
-pooled. The server forwards to one configured target, which may itself dispatch
+Each source TCP connection uses a dedicated attested-TLS connection and target
+TCP connection. By default, these open on demand; an optional client pool can
+prepare unused connections in advance. Used connections are never reused for
+another source. The server forwards to one configured target, which may itself dispatch
 requests to a pool of workers.
 
 ## Local example
@@ -78,7 +79,10 @@ settings follow the [HTTP proxy CLI](../../README.md#measurements-file).
 | `--listen-addr`, `-l` (`LISTEN_ADDR`) | Client `127.0.0.1:0`; server `0.0.0.0:0`. The actual bound address is logged. |
 | Positional target | Client `host[:port]`, default port 443; server `host:port` with required port. IPv6 literals use brackets; numeric scope IDs are supported, e.g. `[fe80::1%3]:50051`. |
 | `--setup-timeout-secs` | 60; includes DNS, connect, TLS, attestation, and the server's target connect. Applied independently at each endpoint. |
-| `--max-connections` | 256 per listener, including connections still establishing; excess arrivals are immediately closed. |
+| `--max-connections` | 256 per listener, including establishing, active, and unused pooled connections; excess arrivals are immediately closed. |
+| Client `--pool-size` | 0 (disabled); desired ready plus warming unused connections. Must not exceed `--max-connections`. |
+| Client `--pool-max-age-secs` | 60; positive maximum unused age after preparation completes. Reads do not extend it. |
+| Client `--pool-refill-concurrency` | 1; positive maximum concurrent background preparations, effectively bounded by pool size. |
 | `--shutdown-grace-secs` | 30; stop accepting, drain, then close remaining tunnels. Zero closes immediately. |
 | `--tls-private-key-path`, `--tls-certificate-path` | Must be supplied together; accept PKCS#8, RSA PKCS#1, and P-256 SEC1 PEM keys. |
 | Client `--tls-ca-certificate` | Trust the first PEM certificate instead of public roots. |
@@ -98,8 +102,10 @@ dependencies as the HTTP proxy. There is no health-check listener in this versio
 
 ## Lifecycle and trust
 
-CLI startup binds the listener without contacting the remote service. Each accepted
-connection gets one setup attempt. Failures close that connection and are logged
+By default, CLI startup binds the listener without contacting the remote service.
+With pooling enabled, serving starts filling the pool in the background without
+waiting for readiness. Each accepted connection gets one prepared connection or
+one setup attempt. Failures close that connection and are logged
 with the endpoint and phase; the tunnel does not send HTTP/gRPC error messages.
 It does not retry, reconnect an established stream, or replay application data.
 gRPC channels and applications own reconnection, retries, and stream recovery.
@@ -130,6 +136,36 @@ generation cannot be canceled by dropping its async task; the executable uses
 bounded runtime shutdown after draining sockets. The connection cap bounds live
 connections, not quote-generation work that outlives a setup timeout.
 
+## Warm connections
+
+Add `--pool-size 4` to `tcp-tunnel-client` to prepare four unused connections.
+The pool uses the oldest eligible ready connection. On a miss, it connects on
+demand if capacity is available; at capacity, it claims the oldest unassigned
+warm-up instead. If all capacity belongs to sources, the new source is closed.
+Claiming a warm-up does not restart its setup deadline. Assigned connections no
+longer count toward the desired pool size, but still count toward the shared cap.
+
+Background connection failures and unexpected idle closure trigger exponential
+refill backoff from one to 30 seconds. A successful handoff resets the backoff;
+on-demand attempts bypass it. Idle streams expire after their maximum age and
+are monitored for closure. Up to 16 KiB of early target bytes are buffered per
+entry and replayed when a source arrives; beyond that, reads pause and apply
+backpressure. Monitoring is best effort: a stream can fail immediately after
+handoff, and the tunnel never retries or replays that source's traffic.
+
+Warming performs attestation before source arrival and opens real target
+connections immediately. It consumes capacity on both the tunnel server and
+target. Target handshake/idle deadlines can close unused connections, particularly
+when the target expects an HTTP/2 preface or application TLS handshake. There are
+no application probes, keepalives, activation messages, or readiness acknowledgements.
+Client readiness does not confirm remote acceptance of client attestation or
+target reachability. Size zero retains the original on-demand behavior.
+
+Shutdown immediately cancels unassigned warm-ups and closes idle connections;
+only assigned sources drain for the grace period. Background concurrency limits
+async setup attempts, not blocking quote generation left running after a timeout.
+Canceling that blocking work remains outside the pool's scope.
+
 ## Rust API
 
 `TunnelClient` and `TunnelServer` offer `new`, `new_with_tls_config`, `local_addr`,
@@ -137,6 +173,13 @@ and `serve_until`. `TunnelOptions` contains setup timeout, connection count, and
 shutdown grace. The custom constructors accept Rustls configurations alongside
 attestation generators/verifiers and matching certificate chains. They replace
 ALPN with the tunnel protocol. Initialize a Rustls crypto provider before use.
+
+Use `client.with_pool(WarmPoolOptions { size: 4, ..Default::default() })?` to
+enable pooling. `WarmPoolOptions` is exported from `tcp_tunnel`; configuration
+does not open connections until `serve_until` is driven, and does not change
+constructor startup checks. Pool management lives in a private transport-agnostic
+module, supplied with an async connector; it can be extracted independently of
+source acceptance, attestation configuration, and forwarding.
 
 ```rust,no_run
 use attested_tls::attestation::{AttestationGenerator, AttestationVerifier};
