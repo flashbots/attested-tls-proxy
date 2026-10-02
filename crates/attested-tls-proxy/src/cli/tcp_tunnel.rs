@@ -4,7 +4,7 @@ use attested_tls::{
     attestation::{AttestationGenerator, AttestationVerifier},
 };
 use attested_tls_proxy::self_signed::generate_self_signed_cert;
-use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer};
+use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer, WarmPoolOptions};
 use attested_tls_proxy::tls;
 use clap::Args;
 use std::{
@@ -23,6 +23,8 @@ pub(super) struct ClientArgs {
     listen_addr: SocketAddr,
     #[command(flatten)]
     limits: Limits,
+    #[command(flatten)]
+    pool: PoolArgs,
     #[command(flatten)]
     identity: Identity,
     /// Local attestation type (defaults to automatic detection)
@@ -86,12 +88,35 @@ struct Limits {
     /// Deadline for DNS, connections, TLS, and attestation; not stream lifetime
     #[arg(long, default_value = "60")]
     setup_timeout_secs: NonZeroU64,
-    /// Maximum connections including setup; excess arrivals are closed
+    /// Maximum connections including setup and unused pool entries; excess arrivals are closed
     #[arg(long, default_value = "256", value_parser = parse_connection_limit)]
     max_connections: NonZeroUsize,
     /// Time to drain connections at shutdown before closing them (0 closes immediately)
     #[arg(long, default_value = "30")]
     shutdown_grace_secs: u64,
+}
+
+#[derive(Debug, Clone, Args)]
+struct PoolArgs {
+    /// Unused attested connections to prepare in the background (0 disables pooling)
+    #[arg(long, default_value = "0")]
+    pool_size: usize,
+    /// Maximum unused connection age after preparation
+    #[arg(long, default_value = "60")]
+    pool_max_age_secs: NonZeroU64,
+    /// Maximum concurrent background connection attempts
+    #[arg(long, default_value = "1")]
+    pool_refill_concurrency: NonZeroUsize,
+}
+
+impl From<PoolArgs> for WarmPoolOptions {
+    fn from(value: PoolArgs) -> Self {
+        Self {
+            size: value.pool_size,
+            max_age: Duration::from_secs(value.pool_max_age_secs.get()),
+            refill_concurrency: value.pool_refill_concurrency,
+        }
+    }
 }
 
 impl From<Limits> for TunnelOptions {
@@ -116,11 +141,20 @@ fn parse_connection_limit(value: &str) -> Result<NonZeroUsize, String> {
 }
 
 impl ClientArgs {
+    pub(super) fn validate(&self) -> anyhow::Result<()> {
+        ensure!(
+            self.pool.pool_size <= self.limits.max_connections.get(),
+            "Pool size must not exceed --max-connections"
+        );
+        Ok(())
+    }
+
     pub(super) async fn run(self, verifier: AttestationVerifier) -> anyhow::Result<()> {
         let Self {
             target_addr,
             listen_addr,
             limits,
+            pool,
             identity,
             client_attestation_type,
             tls_ca_certificate,
@@ -149,7 +183,8 @@ impl ClientArgs {
             false, // No startup check.
             limits.into(),
         )
-        .await?;
+        .await?
+        .with_pool(pool.into())?;
         tracing::info!(address = %client.local_addr()?, "Tunnel client listening");
         client.serve_until(shutdown_signal()).await?;
         Ok(())
@@ -234,6 +269,7 @@ mod tests {
                 CliCommand::TcpTunnelClient(ClientArgs {
                     listen_addr,
                     limits,
+                    pool,
                     ..
                 }),
             ..
@@ -252,6 +288,9 @@ mod tests {
         assert_eq!(limits.setup_timeout_secs.get(), 60);
         assert_eq!(limits.max_connections.get(), 256);
         assert_eq!(limits.shutdown_grace_secs, 30);
+        assert_eq!(pool.pool_size, 0);
+        assert_eq!(pool.pool_max_age_secs.get(), 60);
+        assert_eq!(pool.pool_refill_concurrency.get(), 1);
         let Cli {
             command: CliCommand::TcpTunnelServer(ServerArgs { listen_addr, .. }),
             ..
@@ -263,6 +302,8 @@ mod tests {
         for args in [
             vec!["--max-connections", "0"],
             vec!["--setup-timeout-secs", "0"],
+            vec!["--pool-max-age-secs", "0"],
+            vec!["--pool-refill-concurrency", "0"],
             vec!["--tls-private-key-path", "key.pem"],
             vec!["--tls-certificate-path", "cert.pem"],
             vec!["--allow-self-signed", "--tls-ca-certificate", "ca.pem"],
@@ -278,6 +319,35 @@ mod tests {
         }
         assert!(
             parse_connection_limit(&(tokio::sync::Semaphore::MAX_PERMITS + 1).to_string()).is_err()
+        );
+        let invalid = Cli::try_parse_from([
+            "tunnel",
+            "tcp-tunnel-client",
+            "localhost",
+            "--pool-size",
+            "2",
+            "--max-connections",
+            "1",
+            "--allowed-remote-attestation-type",
+            "none",
+        ])
+        .unwrap();
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("Pool size")
+        );
+        assert!(
+            Cli::try_parse_from([
+                "tunnel",
+                "tcp-tunnel-server",
+                "localhost:443",
+                "--pool-size",
+                "1",
+            ])
+            .is_err()
         );
     }
 
