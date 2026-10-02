@@ -9,6 +9,9 @@ use crate::tls;
 
 use crate::target::{InvalidTarget, normalize_target};
 
+mod pool;
+pub use pool::WarmPoolOptions;
+
 use std::{future::Future, io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use attested_tls::{
@@ -17,7 +20,7 @@ use attested_tls::{
     attestation::{AttestationGenerator, AttestationVerifier},
 };
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::Semaphore,
     task::JoinSet,
@@ -33,7 +36,7 @@ const APPLICATION_PROTOCOL: &[u8] = b"tcp-tunnel";
 pub struct TunnelOptions {
     /// Timeout for connections establishment, TLS handshake and attestation exchange
     pub setup_timeout: Duration,
-    /// Counts both connections being established and established connections.
+    /// Counts establishing, established, and unused pooled connections.
     pub max_connections: NonZeroUsize,
     /// Timeout for closing connections during graceful shutdown.
     pub shutdown_grace: Duration,
@@ -68,6 +71,23 @@ impl TunnelOptions {
 pub struct TunnelClient(Tunnel);
 
 impl TunnelClient {
+    /// Configure background preparation of unused connections. No connections
+    /// are opened until serving starts; zero retains on-demand-only behavior.
+    pub fn with_pool(mut self, options: WarmPoolOptions) -> Result<Self, TunnelError> {
+        if options.size > self.0.options.max_connections.get() {
+            return Err(TunnelError::Configuration(
+                "pool size must not exceed the connection limit",
+            ));
+        }
+        if options.max_age.is_zero() {
+            return Err(TunnelError::Configuration(
+                "pool maximum age must be positive",
+            ));
+        }
+        self.0.pool_options = options;
+        Ok(self)
+    }
+
     /// If `startup_check` is true, verify an upstream connection within
     /// `options.setup_timeout` and close it before returning. This checks TLS,
     /// attestation, and ALPN, not final target reachability. The server may open
@@ -301,6 +321,7 @@ struct Tunnel {
     /// Attested TLS client or server
     endpoint: Endpoint,
     options: TunnelOptions,
+    pool_options: WarmPoolOptions,
 }
 
 impl Tunnel {
@@ -322,6 +343,7 @@ impl Tunnel {
             target,
             endpoint,
             options,
+            pool_options: WarmPoolOptions::default(),
         })
     }
 
@@ -332,9 +354,35 @@ impl Tunnel {
             target,
             endpoint,
             options,
+            pool_options,
         } = self;
 
         let slots = Arc::new(Semaphore::new(options.max_connections.get()));
+
+        let mut pool = match &endpoint {
+            Endpoint::Client(client) if pool_options.size > 0 => {
+                let client = client.clone();
+                let target = target.clone();
+                Some(pool::Pool::new(
+                    pool_options,
+                    options.setup_timeout,
+                    slots.clone(),
+                    move || {
+                        let client = client.clone();
+                        let target = target.clone();
+                        async move {
+                            let mut stream = connect_upstream(&client, &target).await?;
+                            stream
+                                .flush()
+                                .await
+                                .map_err(io_error("flush prepared tunnel"))?;
+                            Ok::<_, TunnelError>(stream)
+                        }
+                    },
+                ))
+            }
+            _ => None,
+        };
 
         // JoinSet aborts all children when this serving future is dropped.
         let mut tasks = JoinSet::new();
@@ -368,9 +416,22 @@ impl Tunnel {
                         }
                     };
 
-                    let Ok(permit) = slots.clone().try_acquire_owned() else {
-                        tracing::warn!(%peer, "Connection limit reached; closing new connection");
-                        continue;
+                    let accepted_at = tokio::time::Instant::now();
+                    let (acquisition, permit) = match &mut pool {
+                        Some(pool) => match pool.acquire().await {
+                            Some(acquisition) => (Some(acquisition), None),
+                            None => {
+                                tracing::warn!(%peer, "Connection limit reached; closing new connection");
+                                continue;
+                            }
+                        },
+                        None => match slots.clone().try_acquire_owned() {
+                            Ok(permit) => (None, Some(permit)),
+                            Err(_) => {
+                                tracing::warn!(%peer, "Connection limit reached; closing new connection");
+                                continue;
+                            }
+                        },
                     };
 
                     let endpoint = endpoint.clone();
@@ -379,16 +440,22 @@ impl Tunnel {
                     tasks.spawn(async move {
                         let _permit = permit;
                         let result = async {
-                            let (mut local, mut remote) = tokio::time::timeout(
-                                options.setup_timeout, endpoint.setup(inbound, &target),
-                            ).await.map_err(|_| TunnelError::SetupTimeout)??;
-                            tracing::debug!("Tunnel established");
-
-                            let (sent, received) = tokio::io::copy_bidirectional(&mut local, &mut remote)
-                                .await.map_err(io_error("forwarding"))?;
-
-                            tracing::debug!(sent, received, "Tunnel closed");
-                            Ok::<(), TunnelError>(())
+                            if let Some(acquisition) = acquisition {
+                                inbound.set_nodelay(true).map_err(io_error("configure inbound TCP"))?;
+                                let remaining = options.setup_timeout.saturating_sub(accepted_at.elapsed());
+                                let remote = tokio::time::timeout(remaining, acquisition.connect())
+                                    .await.map_err(|_| TunnelError::SetupTimeout)?
+                                    .map_err(|error| match error {
+                                        pool::Error::Connect(error) => error,
+                                        pool::Error::Timeout => TunnelError::SetupTimeout,
+                                    })?;
+                                forward(inbound, remote).await
+                            } else {
+                                let (local, remote) = tokio::time::timeout(
+                                    options.setup_timeout, endpoint.setup(inbound, &target),
+                                ).await.map_err(|_| TunnelError::SetupTimeout)??;
+                                forward(local, remote).await
+                            }
                         }.await;
 
                         if let Err(error) = result {
@@ -396,10 +463,20 @@ impl Tunnel {
                         }
                     }.instrument(span));
                 }
+                // Source admission has priority over speculative refill.
+                _ = async {
+                    match &mut pool {
+                        Some(pool) => pool.maintain().await,
+                        None => std::future::pending().await,
+                    }
+                } => unreachable!("pool maintenance never completes"),
             }
         }
 
         drop(listener);
+        // Acquisitions already belong to source tasks. Only unassigned work is
+        // canceled here; no idle connections linger during graceful draining.
+        drop(pool);
 
         tracing::info!(connections = tasks.len(), "Draining tunnels");
         if tokio::time::timeout(options.shutdown_grace, async {
@@ -416,6 +493,18 @@ impl Tunnel {
         }
         Ok(())
     }
+}
+
+async fn forward(
+    mut local: TcpStream,
+    mut remote: impl AsyncRead + AsyncWrite + Unpin,
+) -> Result<(), TunnelError> {
+    tracing::debug!("Tunnel established");
+    let (sent, received) = tokio::io::copy_bidirectional(&mut local, &mut remote)
+        .await
+        .map_err(io_error("forwarding"))?;
+    tracing::debug!(sent, received, "Tunnel closed");
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
