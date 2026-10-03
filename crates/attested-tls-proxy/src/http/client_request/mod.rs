@@ -4,6 +4,7 @@ pub(crate) mod response_idle;
 #[cfg(test)]
 mod tests;
 mod upload;
+use crate::measurements::MeasurementHeaders;
 use std::{
     num::NonZeroUsize,
     pin::Pin,

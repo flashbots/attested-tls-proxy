@@ -608,7 +608,7 @@ dependencies = [
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#a3ac8e0b444a398d76a91e5105d43f0214a16b02"
 dependencies = [
  "anyhow",
  "attest-measure",
@@ -681,6 +681,7 @@ dependencies = [
  "bytes",
  "clap",
  "h2",
+ "hex",
  "http",
  "http-body-util",
  "hyper",
@@ -1121,17 +1122,20 @@ dependencies = [
 
 [[package]]
 name = "cc-eventlog"
-version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+version = "0.6.0"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4699c48ea3a7e568dff4f8792421299f27d50758#4699c48ea3a7e568dff4f8792421299f27d50758"
 dependencies = [
  "anyhow",
  "digest 0.10.7",
+ "dstack-types",
  "ez-hash",
  "fs-err",
  "hex",
+ "or-panic",
  "parity-scale-codec",
  "serde",
  "serde-human-bytes",
+ "serde_jcs",
  "serde_json",
  "sha2",
 ]
@@ -1169,6 +1173,33 @@ dependencies = [
  "num-traits",
  "serde",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "ciborium"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
+dependencies = [
+ "ciborium-io",
+ "ciborium-ll",
+ "serde",
+]
+
+[[package]]
+name = "ciborium-io"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
+
+[[package]]
+name = "ciborium-ll"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
+dependencies = [
+ "ciborium-io",
+ "half",
 ]
 
 [[package]]
@@ -1695,6 +1726,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-types"
+version = "0.6.0"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4699c48ea3a7e568dff4f8792421299f27d50758#4699c48ea3a7e568dff4f8792421299f27d50758"
+dependencies = [
+ "ciborium",
+ "hex",
+ "or-panic",
+ "parity-scale-codec",
+ "serde",
+ "serde-human-bytes",
+ "serde_jcs",
+ "serde_json",
+ "serde_with",
+ "sha2",
+ "sha3",
+ "size-parser",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2197,6 +2247,17 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "half"
+version = "2.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
+dependencies = [
+ "cfg-if",
+ "crunchy",
+ "zerocopy",
 ]
 
 [[package]]
@@ -3068,7 +3129,7 @@ dependencies = [
 [[package]]
 name = "mock-tdx"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#a3ac8e0b444a398d76a91e5105d43f0214a16b02"
 dependencies = [
  "axum",
  "dcap-qvl",
@@ -3384,6 +3445,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "or-panic"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "596a79faf55e869e7bc0c2162cf2f18a54d4d1112876bceae587ad954fcbd574"
+
+[[package]]
 name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3480,7 +3547,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?branch=main#084ebec490abc605054923811dad9735310087d4"
+source = "git+https://github.com/flashbots/attested-tls?branch=main#a3ac8e0b444a398d76a91e5105d43f0214a16b02"
 dependencies = [
  "anyhow",
  "dcap-qvl",
@@ -3762,7 +3829,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.108",
@@ -4385,6 +4452,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
+name = "ryu-js"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6518fc26bced4d53678a22d6e423e9d8716377def84545fe328236e3af070e7f"
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4610,6 +4683,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_jcs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3a60f3fda61525e439ef6d67422118f11e986566997d9021c56867ad814a0aa"
+dependencies = [
+ "ryu-js",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4801,6 +4885,16 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "size-parser"
+version = "0.6.0"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4699c48ea3a7e568dff4f8792421299f27d50758#4699c48ea3a7e568dff4f8792421299f27d50758"
+dependencies = [
+ "anyhow",
+ "serde",
+ "thiserror 2.0.17",
+]
 
 [[package]]
 name = "slab"
@@ -5007,8 +5101,8 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "tdx-attest"
-version = "0.5.8"
-source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4f602dddc0542cd34da031c90ac0b3a560f316ed#4f602dddc0542cd34da031c90ac0b3a560f316ed"
+version = "0.6.0"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=4699c48ea3a7e568dff4f8792421299f27d50758#4699c48ea3a7e568dff4f8792421299f27d50758"
 dependencies = [
  "anyhow",
  "cc-eventlog",
