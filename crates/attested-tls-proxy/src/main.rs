@@ -1,7 +1,7 @@
 use anyhow::{anyhow, ensure};
 use attested_tls::attestation::measurements::MultiMeasurements;
 use attested_tls_proxy::measurements::MeasurementHeaders;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::TypedValueParser};
 use std::{
     fs::File,
     net::{IpAddr, SocketAddr},
@@ -45,6 +45,16 @@ struct Cli {
     /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
     #[arg(long, global = true)]
     pccs_url: Option<String>,
+    /// Intel PCS subscription key to use when verifying DCAP attestations
+    #[arg(
+        long,
+        global = true,
+        env = "INTEL_PCS_SUBSCRIPTION_KEY",
+        hide_env_values = true,
+        value_parser = clap::builder::StringValueParser::new().map(|key| key.trim().to_owned()),
+        conflicts_with = "pccs_url"
+    )]
+    intel_pcs_subscription_key: Option<String>,
     /// Log debug messages
     #[arg(long, global = true)]
     log_debug: bool,
@@ -249,6 +259,10 @@ async fn main() -> anyhow::Result<()> {
         .with_override_azure_outdated_tcb(cli.override_azure_outdated_tcb);
     if let Some(pccs_url) = cli.pccs_url {
         attestation_verifier_builder = attestation_verifier_builder.with_pccs_url(pccs_url);
+    }
+    if let Some(key) = cli.intel_pcs_subscription_key {
+        attestation_verifier_builder =
+            attestation_verifier_builder.with_intel_pcs_subscription_key(key);
     }
     let attestation_verifier = attestation_verifier_builder.build();
 
