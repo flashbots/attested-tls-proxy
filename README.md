@@ -75,6 +75,7 @@ These are the attestation type names used in the HTTP headers, and the measureme
 ### Other CLI Options
 
 - `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.
+- `--intel-pcs-subscription-key <KEY>` (or `INTEL_PCS_SUBSCRIPTION_KEY`) supplies an API key for Intel PCS when verifying DCAP attestations. The CLI flag takes precedence over the environment variable. This global option is mutually exclusive with `--pccs-url`.
 - `client`, `get-tls-cert`, and `attested-get` accept `--allow-self-signed` to permit a self-signed remote TLS certificate.
 - `client` and `server` accept `--listen-addr-healthcheck` to start a separate HTTP health-check listener.
 - `client --request-timeout-secs` sets the deadline from receipt of request headers through queueing, upload, and receipt of response headers (default: 60 seconds). Expired requests receive HTTP 504 and are not retried. If a response has already started, an unfinished upload is canceled at the deadline; its response status cannot be changed. Response bodies can continue streaming after that deadline once the upload completes.
