@@ -1,5 +1,6 @@
 use anyhow::{anyhow, ensure};
 use attested_tls::attestation::measurements::MultiMeasurements;
+use attested_tls_proxy::measurements::MeasurementHeaders;
 use clap::{Parser, Subcommand};
 use std::{
     fs::File,
@@ -18,7 +19,7 @@ use attested_tls_proxy::{
     attested_tls::{
         TlsCertAndKey,
         attestation::{
-            AttestationType, AttestationVerifier, PccsMode, measurements::MeasurementPolicy,
+            AttestationType, AttestationVerifier, CachePolicy, measurements::MeasurementPolicy,
         },
     },
     file_server::attested_file_server,
@@ -243,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut attestation_verifier_builder = AttestationVerifier::builder(measurement_policy)
-        .with_pccs_mode(PccsMode::Lazy)
+        .with_cache_policy(CachePolicy::OnDemand)
         .with_dump_dcap_quotes(cli.log_dcap_quote)
         .with_override_azure_outdated_tcb(cli.override_azure_outdated_tcb);
     if let Some(pccs_url) = cli.pccs_url {
