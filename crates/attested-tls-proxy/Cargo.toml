@@ -40,6 +40,7 @@ pin-project-lite = "0.2.16"
 pccs = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 tdx-quote = { version = "0.0.5", features = ["mock"] }
 attested-tls = { path = "../attested-tls", features = ["test-helpers", "mock"] }

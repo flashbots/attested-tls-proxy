@@ -60,6 +60,9 @@ enum CliCommand {
 
 impl Cli {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        if let CliCommand::TcpTunnelClient(args) = &self.command {
+            args.validate()?;
+        }
         ensure!(
             self.allowed_remote_attestation_type.is_some() != self.measurements_file.is_some(),
             "Exactly one of --measurements-file or --allowed-remote-attestation-type must be provided"
