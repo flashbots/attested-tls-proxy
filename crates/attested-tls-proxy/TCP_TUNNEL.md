@@ -164,7 +164,7 @@ client.serve_until(async {
 Dropping a `serve_until` future aborts its connection tasks. For graceful shutdown,
 resolve the supplied shutdown future and await completion instead. Embedding
 applications own runtime shutdown, including outstanding blocking attestation
-work. The shared `attested_tls_proxy::tls` module provides TLS configuration helpers, including self-signed
+work. The shared `attested_tls::tls` module provides TLS configuration helpers, including self-signed
 verification that retains client credentials.
 
 Both client constructors accept a `startup_check` boolean before `options`.

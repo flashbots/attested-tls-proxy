@@ -32,7 +32,8 @@ pub async fn attested_get(
     remote_certificate: Option<CertificateDer<'static>>,
     allow_self_signed: bool,
 ) -> Result<reqwest::Response, ProxyError> {
-    let client_config = crate::tls::client_config(None, remote_certificate, allow_self_signed)?;
+    let client_config =
+        attested_tls::tls::client_config(None, remote_certificate, allow_self_signed)?;
     let proxy_client = ProxyClient::new_with_tls_config(
         client_config,
         "127.0.0.1:0".to_string(),

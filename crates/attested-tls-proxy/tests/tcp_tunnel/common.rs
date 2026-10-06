@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use attested_tls::attestation::{AttestationGenerator, AttestationVerifier};
-use attested_tls_proxy::self_signed::generate_self_signed_cert;
+use attested_tls::self_signed::generate_self_signed_cert;
 use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelError, TunnelOptions, TunnelServer};
 use std::{future::Future, net::SocketAddr, time::Duration};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};

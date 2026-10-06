@@ -3,7 +3,7 @@ use crate::target::{InvalidTarget, normalize_target};
 pub mod attested_get;
 pub mod file_server;
 pub mod health_check;
-use crate::tls;
+use attested_tls::tls;
 
 pub use attested_tls;
 pub use attested_tls::attestation;

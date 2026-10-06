@@ -18,9 +18,7 @@ pub(super) fn load_tls_cert_and_key_server(
             return Err(anyhow!("Certificate chain provided but no private key"));
         }
         tracing::warn!("No TLS ceritifcate provided - generating self-signed");
-        Ok(attested_tls_proxy::self_signed::generate_self_signed_cert(
-            ip,
-        )?)
+        Ok(attested_tls::self_signed::generate_self_signed_cert(ip)?)
     }
 }
 

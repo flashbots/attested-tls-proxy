@@ -1,8 +1,8 @@
-//! Shared TLS 1.3 configuration for HTTP proxies and TCP tunnels.
-use std::sync::Arc;
+//! TLS 1.3 configuration helpers for attested TLS.
+use std::{net::IpAddr, sync::Arc};
 
-use crate::self_signed::SkipServerVerification;
-use attested_tls::{AttestedTlsError, TlsCertAndKey};
+use crate::self_signed::{SkipServerVerification, generate_self_signed_cert};
+use crate::{AttestedTlsError, TlsCertAndKey};
 use tokio_rustls::rustls::{
     self, ClientConfig, RootCertStore, ServerConfig, pki_types::CertificateDer,
     server::WebPkiClientVerifier,
@@ -40,8 +40,8 @@ pub fn client_config(
 }
 
 /// Build a TLS 1.3 server configuration. Optional client certificate authentication
-/// uses public roots. For private client CAs, supply a custom ServerConfig through
-/// the HTTP proxy or TCP tunnel's `new_with_tls_config` constructor.
+/// uses public roots. For private client CAs, supply a custom ServerConfig to
+/// [`crate::AttestedTlsServer::new_with_tls_config`].
 pub fn server_config(
     identity: &TlsCertAndKey,
     client_auth: bool,
@@ -54,4 +54,16 @@ pub fn server_config(
         builder.with_no_client_auth()
     };
     Ok(builder.with_single_cert(identity.cert_chain.clone(), identity.key.clone_key())?)
+}
+
+/// Generate a self-signed certificate for the given IP address and build a TLS 1.3
+/// server configuration. Returns the configuration and its certificate chain.
+/// Client authentication uses the same public roots as [`server_config`].
+pub fn self_signed_server_config(
+    ip_address: IpAddr,
+    client_auth: bool,
+) -> Result<(ServerConfig, Vec<CertificateDer<'static>>), AttestedTlsError> {
+    let identity = generate_self_signed_cert(ip_address)?;
+    let config = server_config(&identity, client_auth)?;
+    Ok((config, identity.cert_chain))
 }

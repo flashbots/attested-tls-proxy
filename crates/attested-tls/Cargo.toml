@@ -11,7 +11,7 @@ keywords = ["attested-TLS", "CVM", "TDX"]
 tokio = { workspace = true, features = ["full"] }
 tokio-rustls.workspace = true
 sha2 = "0.10.9"
-x509-parser.workspace = true
+x509-parser = { workspace = true, features = ["verify"] }
 thiserror.workspace = true
 webpki-roots.workspace = true
 http.workspace = true
@@ -34,16 +34,15 @@ hyper-util = { workspace = true, features = ["tokio"], optional = true }
 bytes = { workspace = true, optional = true }
 http-body-util = { workspace = true, optional = true }
 
-# Used by test helpers
-rcgen = { workspace = true, optional = true }
+# Used for self-signed certificates and test helpers
+rcgen.workspace = true
 
 [dev-dependencies]
-rcgen.workspace = true
 tempfile.workspace = true
 attestation = { git = "https://github.com/flashbots/attested-tls", branch = "main", features = ["mock"] }
 
 [features]
-default = ["ws", "rpc"]
+default = []
 
 # Adds support for Microsoft Azure attestation generation and verification
 azure = ["attestation/azure"]
@@ -65,6 +64,6 @@ rpc = [
 ]
 
 # Exposes helper functions for testing - do not enable in production as this allows dangerous configuration
-test-helpers = ["rcgen", "attestation/mock"]
+test-helpers = ["attestation/mock"]
 
 mock = ["attestation/mock"]

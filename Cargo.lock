@@ -702,8 +702,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "webpki-roots 1.0.4",
- "x509-parser",
 ]
 
 [[package]]

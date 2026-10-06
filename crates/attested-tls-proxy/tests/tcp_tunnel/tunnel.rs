@@ -1,5 +1,5 @@
-use attested_tls_proxy::self_signed::generate_self_signed_cert;
-use attested_tls_proxy::tls;
+use attested_tls::self_signed::generate_self_signed_cert;
+use attested_tls::tls;
 
 use super::common::*;
 use attested_tls::{
