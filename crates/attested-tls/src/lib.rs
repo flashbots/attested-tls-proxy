@@ -647,7 +647,7 @@ mod tests {
     use super::*;
 
     use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
-    use attestation::{PccsMode, measurements::MeasurementPolicy};
+    use attestation::{CachePolicy, measurements::MeasurementPolicy};
     use tokio::net::TcpListener;
 
     #[tokio::test]
@@ -815,7 +815,7 @@ mod tests {
         .unwrap();
 
         let attestation_verifier = AttestationVerifier::builder(measurement_policy)
-            .with_pccs_mode(PccsMode::None)
+            .with_cache_policy(CachePolicy::Passthrough)
             .build();
 
         let client = AttestedTlsClient::new_with_tls_config(

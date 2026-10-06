@@ -1,5 +1,6 @@
 //! HTTP and TCP proxies over attested TLS.
 pub mod http;
+pub mod measurements;
 pub mod self_signed;
 mod target;
 pub mod tcp_tunnel;
