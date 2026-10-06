@@ -38,6 +38,11 @@ http-body-util = { workspace = true, optional = true }
 rcgen.workspace = true
 
 [dev-dependencies]
+bytes.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "server", "http2"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+tokio-rustls = { workspace = true, features = ["aws_lc_rs"] }
 tempfile.workspace = true
 attestation = { git = "https://github.com/flashbots/attested-tls", branch = "main", features = ["mock"] }
 
