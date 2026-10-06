@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use attested_tls::attestation::{
-    AttestationType, AttestationVerifier, PccsMode, measurements::MeasurementPolicy,
+    AttestationType, AttestationVerifier, CachePolicy, measurements::MeasurementPolicy,
 };
 
 pub(super) async fn build_verifier(
@@ -38,7 +38,7 @@ pub(super) async fn build_verifier(
     };
 
     let mut attestation_verifier_builder = AttestationVerifier::builder(measurement_policy)
-        .with_pccs_mode(PccsMode::Lazy)
+        .with_cache_policy(CachePolicy::OnDemand)
         .with_dump_dcap_quotes(log_dcap_quote)
         .with_override_azure_outdated_tcb(override_azure_outdated_tcb);
     if let Some(pccs_url) = pccs_url {

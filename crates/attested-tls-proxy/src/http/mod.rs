@@ -3,6 +3,7 @@ use crate::target::{InvalidTarget, normalize_target};
 pub mod attested_get;
 pub mod file_server;
 pub mod health_check;
+use crate::measurements::MeasurementHeaders;
 use attested_tls::tls;
 
 pub use attested_tls;
@@ -785,7 +786,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::http::{
-        attestation::{PccsMode, measurements::MeasurementPolicy},
+        attestation::{CachePolicy, measurements::MeasurementPolicy},
         attested_tls::get_tls_cert_with_config,
     };
 
@@ -1446,7 +1447,7 @@ mod tests {
         .unwrap();
 
         let attestation_verifier = AttestationVerifier::builder(measurement_policy)
-            .with_pccs_mode(PccsMode::None)
+            .with_cache_policy(CachePolicy::Passthrough)
             .build();
 
         let proxy_client_result = ProxyClient::new_with_tls_config(

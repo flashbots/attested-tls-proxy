@@ -10,6 +10,7 @@ use attested_tls_proxy::{
     attested_get::{attested_get, split_target_and_path},
     file_server::attested_file_server,
     get_tls_cert, health_check,
+    measurements::MeasurementHeaders,
 };
 use clap::Args;
 use std::{

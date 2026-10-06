@@ -1,5 +1,6 @@
 //! HTTP and TCP proxies over attested TLS.
 pub mod http;
+pub mod measurements;
 mod target;
 pub mod tcp_tunnel;
 pub use target::InvalidTarget;
