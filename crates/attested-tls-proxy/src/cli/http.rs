@@ -115,7 +115,7 @@ impl ClientArgs {
         let client_attestation_generator =
             AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)?;
 
-        let client_tls_config = attested_tls_proxy::tls::client_config(
+        let client_tls_config = attested_tls::tls::client_config(
             tls_cert_and_chain.as_ref(),
             remote_tls_cert,
             allow_self_signed,

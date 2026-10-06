@@ -129,6 +129,9 @@ Omit `--features azure` on systems without the TPM dependencies described below.
 To install from a local checkout, use `cargo install --path crates/attested-tls-proxy --locked`.
 Docker and Compose commands also run from the repository root.
 
+The `attested-tls` library's `ws` and `rpc` features are opt-in. To include their
+tests, add `attested-tls/ws,attested-tls/rpc` to the test command's feature list.
+
 ## Dependencies and feature flags
 
 The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix `tpm2-tss`. This dependency is currently not packaged for MacOS, meaning currently it is not possible to compile or run with the `azure` feature on MacOS.

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
+use attested_tls::self_signed::generate_self_signed_cert;
 use attested_tls_proxy::{
-    AttestationGenerator, ProxyServer, attestation::AttestationVerifier,
-    attested_get::attested_get, self_signed::generate_self_signed_cert,
+    AttestationGenerator, ProxyServer, attestation::AttestationVerifier, attested_get::attested_get,
 };
 use axum::{Router, routing::get};
 use tokio::{net::TcpListener, process::Command, time::timeout};

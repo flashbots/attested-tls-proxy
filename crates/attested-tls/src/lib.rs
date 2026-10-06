@@ -1,4 +1,6 @@
 //! Attested TLS protocol server and client
+pub mod self_signed;
+pub mod tls;
 #[cfg(feature = "ws")]
 pub mod websockets;
 
@@ -17,17 +19,13 @@ use attestation::{
 use parity_scale_codec::{Decode, Encode};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio_rustls::rustls::{
-    self,
-    server::{VerifierBuilderError, WebPkiClientVerifier},
-};
+use tokio_rustls::rustls::{self, server::VerifierBuilderError};
 use x509_parser::parse_x509_certificate;
 
 use std::num::TryFromIntError;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinError;
-use tokio_rustls::rustls::RootCertStore;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio_rustls::{
     TlsAcceptor, TlsConnector,
@@ -82,19 +80,7 @@ impl AttestedTlsServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, AttestedTlsError> {
-        let server_config = if client_auth {
-            let root_store =
-                RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
-
-            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_client_cert_verifier(verifier)
-                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
-        } else {
-            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
-        };
+        let server_config = tls::server_config(&cert_and_key, client_auth)?;
 
         Self::new_with_tls_config(
             cert_and_key.cert_chain,
@@ -258,29 +244,7 @@ impl AttestedTlsClient {
         attestation_verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
     ) -> Result<Self, AttestedTlsError> {
-        // If a remote CA cert was given, use it as the root store, otherwise use webpki_roots
-        let root_store = match remote_certificate {
-            Some(remote_certificate) => {
-                let mut root_store = RootCertStore::empty();
-                root_store.add(remote_certificate)?;
-                root_store
-            }
-            None => RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
-        };
-
-        // Setup TLS client configuration, with or without client auth
-        let client_config = if let Some(ref cert_and_key) = cert_and_key {
-            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(root_store)
-                .with_client_auth_cert(
-                    cert_and_key.cert_chain.clone(),
-                    cert_and_key.key.clone_key(),
-                )?
-        } else {
-            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(root_store)
-                .with_no_client_auth()
-        };
+        let client_config = tls::client_config(cert_and_key.as_ref(), remote_certificate, false)?;
 
         Self::new_with_tls_config(
             client_config,
@@ -516,6 +480,8 @@ pub enum AttestedTlsError {
     Rustls(#[from] tokio_rustls::rustls::Error),
     #[error("Verifier builder: {0}")]
     VerifierBuilder(#[from] VerifierBuilderError),
+    #[error("Certificate generation: {0}")]
+    CertificateGeneration(#[from] rcgen::Error),
     #[error("IO: {0}")]
     Io(#[from] std::io::Error),
     #[error("Attestation: {0}")]
