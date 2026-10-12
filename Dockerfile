@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     perl make \
     && rm -rf /var/lib/apt/lists/*
 
+RUN cargo install cargo-auditable@0.7.7 --locked
+
 WORKDIR /app
 COPY . .
 
@@ -26,9 +28,9 @@ RUN build_features="$FEATURES"; \
         fi; \
     fi; \
     if [ -n "$build_features" ]; then \
-        cargo build -p attested-tls-proxy --locked --release --no-default-features --features "$build_features"; \
+        cargo auditable build -p attested-tls-proxy --locked --release --no-default-features --features "$build_features"; \
     else \
-        cargo build -p attested-tls-proxy --locked --release --no-default-features; \
+        cargo auditable build -p attested-tls-proxy --locked --release --no-default-features; \
     fi
 
 # Runtime stage
