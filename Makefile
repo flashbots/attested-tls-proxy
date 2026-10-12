@@ -70,9 +70,13 @@ else
     BUILD_ENV =
 endif
 
+.PHONY: install-cargo-auditable
+install-cargo-auditable:
+	@command -v cargo-auditable >/dev/null 2>&1 || cargo install cargo-auditable@0.7.7 --locked
+
 .PHONY: build
-build: ## Build (release version)
-	$(BUILD_ENV) cargo build -p attested-tls-proxy $(FEATURE_ARGS) --locked $(if $(BUILD_TARGET),--target $(BUILD_TARGET)) --profile $(BUILD_PROFILE)
+build: install-cargo-auditable ## Build (release version)
+	$(BUILD_ENV) cargo auditable build -p attested-tls-proxy $(FEATURE_ARGS) --locked $(if $(BUILD_TARGET),--target $(BUILD_TARGET)) --profile $(BUILD_PROFILE)
 
 .PHONY: build-dev
 build-dev: ## Build (debug version)
