@@ -33,6 +33,8 @@ This works as follows:
 
 One or both of the proxy-client and proxy-server may be running in a confidential environment and provide attestations which will be verified by the remote party. Verification is configured by a measurements file, and attestation generation is configured by specifying an attestation type when starting the proxy client or server.
 
+Each HTTP proxy connection setup attempt has a 60-second deadline covering TCP connection, TLS, attestation, and HTTP setup. A startup timeout returns an error and reconnection attempts that time out retry with exponential backoff. The HTTP proxy server also closes incoming connections whose TLS handshake and attestation exchange do not complete within 60 seconds. These setup deadlines do not limit the lifetime of established connections.
+
 ### Measurements File
 
 Accepted measurements for the remote party can be specified in a JSON document loaded from a local file or URL. It contains an array of objects, each of which specifies an accepted attestation type and set of measurement values or OS image hashes.
