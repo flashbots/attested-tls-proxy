@@ -25,19 +25,52 @@ attested-tls = { path = "../attested-tls", features = ["ws", "rpc"] }
 
 ## Protocol Specification
 
-A TLS 1.3 handshake is made between server and client. The protocol name `flashbots-ratls/1` is included in ALPN. Future versions of the protocol may add additional protocol names which increment the number given after the slash, but backwards compatibility will be provided through also specifying `flashbots-ratls/1`.
+A TLS 1.3 handshake is made between server and client. Both peers advertise
+`flashbots-ratls/2` followed by `flashbots-ratls/1` in ALPN. Application protocols
+are appended with `+`, for example `flashbots-ratls/2+h2` or
+`flashbots-ratls/2+tcp-tunnel`. The negotiated version selects the exchange
+encoding. A v1-only peer continues to use the original format.
 
 ### Attestation Exchange
 
-Immediately after the TLS handshake, an attestation exchange is made. The server first provides an attestation message (even if it has the `none` attestation type). The client verifies, if verification is successful it also provides an attestation message and otherwise closes the connection. If the server cannot verify the client's attestation, it closes the connection.
+The exchange has two messages, followed immediately by application traffic:
 
-Attestation exchange messages are formatted as follows:
-- A 4 byte length prefix - a big endian encoded unsigned 32 bit integer
-- A SCALE (Simple Concatenated Aggregate Little-Endian) encoded [struct in the attestation crate](https://github.com/flashbots/attested-tls/blob/main/crates/attestation/src/lib.rs) with the following fields:
-  - `attestation_type` - a string with one of the attestation types (described above) including `none`.
-  - `attestation` - the actual attestation data. In the case of DCAP this is a binary quote report. In the case of `none` this is an empty byte array.
+1. The server sends its attestation, including when it presents no evidence.
+2. The client verifies the server's attestation and sends its own attestation.
+3. The server verifies the client's attestation. There is no final acknowledgement;
+   server-side verification failures close the connection.
 
-SCALE is used by parity/substrate and was chosen because it is simple and actually matches the formatting used in TDX quotes. So it was already used as a dependency (via the [`dcap-qvl`](https://docs.rs/dcap-qvl) crate).
+Each message has a four-byte big-endian unsigned length prefix, followed by at
+most 64 KiB of SCALE-encoded payload:
+
+- **V1:** `AttestationExchangeMessage`, unchanged. The message contains
+  `attestation_evidence: Option<AttestationEvidence>`; `None` means no attestation.
+- **V2:** `Result<AttestationExchangeMessage, AttestationExchangeError>`.
+  `Ok` contains the same attestation message. `Err` replaces that peer's normal
+  attestation message and always terminates the exchange, even if verification
+  policy allows no attestation.
+
+`AttestationExchangeError` is defined in `attested-tls`, separately from the
+attestation dependency's local error type. Its SCALE variants have fixed indexes:
+
+- `GenerationFailed(String)` (index 0): the server or client could not generate
+  its attestation, including failure of the generation task.
+- `VerificationFailed(String)` (index 1): the client rejected the server's
+  attestation. This occupies the client's existing reply slot.
+
+The SCALE `Result` tag is 0 for `Ok` and 1 for `Err`. Error strings contain the
+local error's display text, truncated at a UTF-8 boundary to at most 2 KiB.
+Received error strings over this limit and malformed v2 payloads are rejected.
+A received error surfaces as `AttestedTlsError::RemoteAttestation`; it does not
+trigger another error reply.
+
+Error transmission and flushing are best-effort, with a one-second deadline.
+The failing endpoint retains its original local error if reporting fails or
+expires. Enclosing setup deadlines still apply. V1 failures retain the original
+behavior of returning the local error and closing the connection.
+
+SCALE is used by parity/substrate and was chosen because it is simple and
+already used by attestation dependencies.
 
 ### Attestation Generation and Verification
 

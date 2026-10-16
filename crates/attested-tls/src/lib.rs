@@ -16,7 +16,7 @@ use attestation::{
     AttestationError, AttestationExchangeMessage, AttestationGenerator, AttestationType,
     AttestationVerifier, measurements::MultiMeasurements,
 };
-use parity_scale_codec::{Decode, Encode};
+use parity_scale_codec::{Decode, DecodeAll, Encode};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_rustls::rustls::{self, server::VerifierBuilderError};
@@ -35,12 +35,141 @@ use tokio_rustls::{
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility.
 /// When adding more supported versions, note that ordering is important. ALPN will pick the first
 /// protocol which both parties support - so newer supported versions should come first.
-pub const SUPPORTED_ALPN_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"flashbots-ratls/1"];
+pub const SUPPORTED_ALPN_PROTOCOL_VERSIONS: [&[u8]; 2] =
+    [b"flashbots-ratls/2", b"flashbots-ratls/1"];
 
 /// The label used when exporting key material from a TLS session
 pub(crate) const EXPORTER_LABEL: &[u8; 24] = b"EXPORTER-Channel-Binding";
 /// Maximum allowed attestation frame length in bytes (64 KiB)
 const MAX_ATTESTATION_LEN_BYTES: usize = 64 * 1024;
+
+/// A diagnostic sent by a v2 peer instead of its attestation. Receiving either
+/// variant always terminates the exchange, including under no-attestation policies.
+#[derive(Clone, Debug, PartialEq, Eq, Error, Encode, Decode)]
+pub enum AttestationExchangeError {
+    #[codec(index = 0)]
+    #[error("Generation failed: {0}")]
+    GenerationFailed(String),
+    #[codec(index = 1)]
+    #[error("Verification failed: {0}")]
+    VerificationFailed(String),
+}
+
+/// SCALE payload used by the v2 exchange, inside the existing length prefix.
+pub type AttestationExchangeResult = Result<AttestationExchangeMessage, AttestationExchangeError>;
+
+const MAX_EXCHANGE_ERROR_BYTES: usize = 2 * 1024;
+const ERROR_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExchangeVersion {
+    V1,
+    V2,
+}
+
+impl ExchangeVersion {
+    fn from_alpn(protocol: Option<&[u8]>) -> Result<Self, AttestedTlsError> {
+        let name = protocol.ok_or(AttestedTlsError::AlpnFailed)?;
+        let version = name.split(|byte| *byte == b'+').next().unwrap();
+        match version {
+            b"flashbots-ratls/1" => Ok(Self::V1),
+            b"flashbots-ratls/2" => Ok(Self::V2),
+            _ => Err(AttestedTlsError::AlpnFailed),
+        }
+    }
+
+    async fn read(
+        self,
+        stream: &mut (impl AsyncRead + Unpin),
+    ) -> Result<AttestationExchangeMessage, AttestedTlsError> {
+        let bytes = read_length_prefixed_attestation(stream).await?;
+        match self {
+            Self::V1 => Ok(AttestationExchangeMessage::decode(&mut &bytes[..])?),
+            Self::V2 => match AttestationExchangeResult::decode_all(&mut &bytes[..])? {
+                Ok(message) => Ok(message),
+                Err(error) => {
+                    let (AttestationExchangeError::GenerationFailed(message)
+                    | AttestationExchangeError::VerificationFailed(message)) = &error;
+                    if message.len() > MAX_EXCHANGE_ERROR_BYTES {
+                        return Err(parity_scale_codec::Error::from(
+                            "Remote error message exceeds 2 KiB",
+                        )
+                        .into());
+                    }
+                    Err(error.into())
+                }
+            },
+        }
+    }
+
+    async fn write(
+        self,
+        stream: &mut (impl AsyncWrite + Unpin),
+        message: AttestationExchangeResult,
+    ) -> Result<(), AttestedTlsError> {
+        let bytes = match self {
+            Self::V1 => message?.encode(),
+            Self::V2 => message.encode(),
+        };
+        stream.write_all(&checked_length_prefix(&bytes)?).await?;
+        stream.write_all(&bytes).await?;
+        Ok(())
+    }
+
+    async fn report_error(
+        self,
+        stream: &mut (impl AsyncWrite + Unpin),
+        mut error: AttestationExchangeError,
+    ) {
+        if self == Self::V1 {
+            return;
+        }
+        let (AttestationExchangeError::GenerationFailed(message)
+        | AttestationExchangeError::VerificationFailed(message)) = &mut error;
+        let mut end = message.len().min(MAX_EXCHANGE_ERROR_BYTES);
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+        let result = tokio::time::timeout(ERROR_SEND_TIMEOUT, async {
+            self.write(stream, Err(error)).await?;
+            stream.flush().await?;
+            Ok::<_, AttestedTlsError>(())
+        })
+        .await;
+        if !matches!(result, Ok(Ok(()))) {
+            tracing::warn!(?result, "Could not send attestation error to peer");
+        }
+    }
+}
+
+async fn generate_and_send(
+    stream: &mut (impl AsyncWrite + Unpin),
+    version: ExchangeVersion,
+    generator: AttestationGenerator,
+    input_data: [u8; 64],
+) -> Result<(), AttestedTlsError> {
+    let generated = if generator.attestation_type == AttestationType::None {
+        Ok(AttestationExchangeMessage::without_attestation())
+    } else {
+        tokio::task::spawn_blocking(move || generator.generate_attestation(input_data))
+            .await
+            .map_err(AttestedTlsError::from)
+            .and_then(|result| result.map_err(Into::into))
+    };
+    match generated {
+        Ok(message) => version.write(stream, Ok(message)).await,
+        Err(error) => {
+            version
+                .report_error(
+                    stream,
+                    AttestationExchangeError::GenerationFailed(error.to_string()),
+                )
+                .await;
+            Err(error)
+        }
+    }
+}
 
 /// TLS Credentials
 pub struct TlsCertAndKey {
@@ -143,9 +272,7 @@ impl AttestedTlsServer {
         }
 
         // Ensure that we agreed a protocol
-        let _negotiated_protocol = connection
-            .alpn_protocol()
-            .ok_or(AttestedTlsError::AlpnFailed)?;
+        let version = ExchangeVersion::from_alpn(connection.alpn_protocol())?;
 
         // Compute an exporter unique to the session
         let mut exporter = [0u8; 32];
@@ -160,27 +287,15 @@ impl AttestedTlsServer {
         // Get the TLS certficate chain of the client, if there is one
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
-        // If we are in a CVM, generate an attestation off the async runtime thread.
-        let attestation = {
-            let attestation_generator = self.attestation_generator.clone();
-            tokio::task::spawn_blocking(move || {
-                attestation_generator.generate_attestation(input_data)
-            })
-            .await
-            .map_err(AttestedTlsError::from)??
-            .encode()
-        };
+        generate_and_send(
+            &mut tls_stream,
+            version,
+            self.attestation_generator.clone(),
+            input_data,
+        )
+        .await?;
 
-        // Write our attestation to the channel, with length prefix
-        let attestation_length_prefix = checked_length_prefix(&attestation)?;
-        tls_stream.write_all(&attestation_length_prefix).await?;
-        tls_stream.write_all(&attestation).await?;
-
-        // Now read a length-prefixed attestation from the remote peer
-        // In the case of no client attestation this will be zero bytes
-        let buf = read_length_prefixed_attestation(&mut tls_stream).await?;
-
-        let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
+        let remote_attestation_message = version.read(&mut tls_stream).await?;
         let remote_attestation_type = remote_attestation_message.attestation_type();
 
         // Validate every exchange, including policies that only accept no attestation,
@@ -314,9 +429,7 @@ impl AttestedTlsClient {
         }
 
         // Ensure that we agreed a protocol
-        let _negotiated_protocol = server_connection
-            .alpn_protocol()
-            .ok_or(AttestedTlsError::AlpnFailed)?;
+        let version = ExchangeVersion::from_alpn(server_connection.alpn_protocol())?;
 
         // Compute an exporter unique to the channel
         let mut exporter = [0u8; 32];
@@ -334,37 +447,35 @@ impl AttestedTlsClient {
 
         let remote_input_data = compute_report_input(Some(&remote_cert_chain), exporter)?;
 
-        // Read a length prefixed attestation from the proxy-server
-        let buf = read_length_prefixed_attestation(&mut tls_stream).await?;
-
-        let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
+        let remote_attestation_message = version.read(&mut tls_stream).await?;
         let remote_attestation_type = remote_attestation_message.attestation_type();
 
-        // Verify the remote attestation against our accepted measurements
-        let measurements = self
+        // A client verification failure occupies the client's existing reply slot.
+        let measurements = match self
             .attestation_verifier
             .verify_attestation(remote_attestation_message, remote_input_data)
-            .await?
-            .map(|verified| verified.measurements);
-
-        // If we are in a CVM, provide an attestation
-        let attestation = if self.attestation_generator.attestation_type != AttestationType::None {
-            let local_input_data = compute_report_input(self.cert_chain.as_deref(), exporter)?;
-            let attestation_generator = self.attestation_generator.clone();
-            tokio::task::spawn_blocking(move || {
-                attestation_generator.generate_attestation(local_input_data)
-            })
             .await
-            .map_err(AttestedTlsError::from)??
-            .encode()
-        } else {
-            AttestationExchangeMessage::without_attestation().encode()
+        {
+            Ok(verified) => verified.map(|verified| verified.measurements),
+            Err(error) => {
+                version
+                    .report_error(
+                        &mut tls_stream,
+                        AttestationExchangeError::VerificationFailed(error.to_string()),
+                    )
+                    .await;
+                return Err(error.into());
+            }
         };
 
-        // Send our attestation (or zero bytes) prefixed with length
-        let attestation_length_prefix = checked_length_prefix(&attestation)?;
-        tls_stream.write_all(&attestation_length_prefix).await?;
-        tls_stream.write_all(&attestation).await?;
+        let input_data = compute_report_input(self.cert_chain.as_deref(), exporter)?;
+        generate_and_send(
+            &mut tls_stream,
+            version,
+            self.attestation_generator.clone(),
+            input_data,
+        )
+        .await?;
 
         Ok((tls_stream, measurements, remote_attestation_type))
     }
@@ -474,6 +585,8 @@ fn get_pki_hash_from_certificate_chain(
 /// An error when running an attested TLS client or server
 #[derive(Error, Debug)]
 pub enum AttestedTlsError {
+    #[error("Remote attestation failed: {0}")]
+    RemoteAttestation(#[from] AttestationExchangeError),
     #[error("Failed to get server ceritifcate")]
     NoCertificate,
     #[error("TLS: {0}")]
@@ -716,10 +829,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let server_addr = listener.local_addr().unwrap();
 
-        tokio::spawn(async move {
+        let server_task = tokio::spawn(async move {
             let (tcp_stream, _) = listener.accept().await.unwrap();
-            let (_stream, _measurements, _attestation_type) =
-                server.handle_connection(tcp_stream).await.unwrap();
+            assert!(matches!(
+                server.handle_connection(tcp_stream).await,
+                Err(AttestedTlsError::RemoteAttestation(
+                    AttestationExchangeError::VerificationFailed(_)
+                ))
+            ));
         });
 
         let client = AttestedTlsClient::new_with_tls_config(
@@ -736,6 +853,7 @@ mod tests {
             client_result.unwrap_err(),
             AttestedTlsError::Attestation(AttestationError::AttestationTypeNotAccepted)
         ));
+        server_task.await.unwrap();
     }
 
     // Negative test - server does not provide attestation but client requires it
@@ -756,10 +874,14 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let server_addr = listener.local_addr().unwrap();
 
-        tokio::spawn(async move {
+        let server_task = tokio::spawn(async move {
             let (tcp_stream, _) = listener.accept().await.unwrap();
-            let (_stream, _measurements, _attestation_type) =
-                server.handle_connection(tcp_stream).await.unwrap();
+            assert!(matches!(
+                server.handle_connection(tcp_stream).await,
+                Err(AttestedTlsError::RemoteAttestation(
+                    AttestationExchangeError::VerificationFailed(_)
+                ))
+            ));
         });
 
         let measurement_policy = MeasurementPolicy::from_json_bytes(
@@ -798,6 +920,7 @@ mod tests {
             client_result.unwrap_err(),
             AttestedTlsError::Attestation(AttestationError::MeasurementsNotAccepted)
         ));
+        server_task.await.unwrap();
     }
 
     #[test]
@@ -864,5 +987,328 @@ mod tests {
                 max: MAX_ATTESTATION_LEN_BYTES
             } if length == MAX_ATTESTATION_LEN_BYTES + 1
         ));
+    }
+
+    fn exchange_pair(
+        server_generator: AttestationGenerator,
+        client_generator: AttestationGenerator,
+        client_verifier: AttestationVerifier,
+        server_v1: bool,
+        client_v1: bool,
+        application: Option<&[u8]>,
+    ) -> (AttestedTlsServer, AttestedTlsClient) {
+        let (certs, key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (mut server_config, mut client_config) = generate_tls_config(certs.clone(), key);
+        let protocols: Vec<Vec<u8>> = application.into_iter().map(<[u8]>::to_vec).collect();
+        server_config.alpn_protocols = protocols.clone();
+        client_config.alpn_protocols = protocols;
+        let mut server = AttestedTlsServer::new_with_tls_config(
+            certs,
+            server_config.clone(),
+            server_generator,
+            AttestationVerifier::expect_none(),
+        )
+        .unwrap();
+        let mut client = AttestedTlsClient::new_with_tls_config(
+            client_config.clone(),
+            client_generator,
+            client_verifier,
+            None,
+        )
+        .unwrap();
+        // Reproduce a v1-only peer's TLS advertisement, without adding a public
+        // configuration switch solely for compatibility tests.
+        let legacy_protocol = match application {
+            Some(app) => [b"flashbots-ratls/1".as_slice(), b"+", app].concat(),
+            None => b"flashbots-ratls/1".to_vec(),
+        };
+        if server_v1 {
+            server_config.alpn_protocols = vec![legacy_protocol.clone()];
+            server.acceptor = TlsAcceptor::from(Arc::new(server_config));
+        }
+        if client_v1 {
+            client_config.alpn_protocols = vec![legacy_protocol];
+            client.connector = TlsConnector::from(Arc::new(client_config));
+        }
+        (server, client)
+    }
+
+    fn failing_generator() -> AttestationGenerator {
+        // Port zero cannot serve the dummy provider, so this fails independently
+        // of host hardware or whether Azure support was compiled in.
+        AttestationGenerator::new(AttestationType::DcapTdx, Some("127.0.0.1:0".into())).unwrap()
+    }
+
+    #[test]
+    fn alpn_prefers_v2_and_preserves_application_protocols() {
+        assert_eq!(
+            map_alpn_protocols(vec![b"h2".to_vec(), b"http/1.1".to_vec()]),
+            vec![
+                b"flashbots-ratls/2+h2".to_vec(),
+                b"flashbots-ratls/2+http/1.1".to_vec(),
+                b"flashbots-ratls/1+h2".to_vec(),
+                b"flashbots-ratls/1+http/1.1".to_vec(),
+                b"flashbots-ratls/2".to_vec(),
+                b"flashbots-ratls/1".to_vec(),
+            ]
+        );
+        for protocol in [
+            None,
+            Some(b"h2".as_slice()),
+            Some(b"flashbots-ratls/20".as_slice()),
+        ] {
+            assert!(matches!(
+                ExchangeVersion::from_alpn(protocol),
+                Err(AttestedTlsError::AlpnFailed)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn exchange_versions_negotiate_and_leave_application_data_untouched() {
+        for app in [
+            None,
+            Some(b"h2".as_slice()),
+            Some(b"http/1.1".as_slice()),
+            Some(b"tcp-tunnel".as_slice()),
+        ] {
+            for (server_v1, client_v1) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let (server, client) = exchange_pair(
+                    AttestationGenerator::with_no_attestation(),
+                    AttestationGenerator::with_no_attestation(),
+                    AttestationVerifier::expect_none(),
+                    server_v1,
+                    client_v1,
+                    app,
+                );
+                let (server_io, client_io) = tokio::io::duplex(128 * 1024);
+                let (server_result, client_result) =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                        tokio::join!(
+                            server.handle_connection(server_io),
+                            client.connect("127.0.0.1", client_io)
+                        )
+                    })
+                    .await
+                    .unwrap();
+                let (mut server_stream, _, _) = server_result.unwrap();
+                let (mut client_stream, _, _) = client_result.unwrap();
+                let expected = if server_v1 || client_v1 {
+                    ExchangeVersion::V1
+                } else {
+                    ExchangeVersion::V2
+                };
+                assert_eq!(
+                    ExchangeVersion::from_alpn(server_stream.get_ref().1.alpn_protocol()).unwrap(),
+                    expected
+                );
+                assert_eq!(
+                    server_stream.get_ref().1.alpn_protocol(),
+                    client_stream.get_ref().1.alpn_protocol()
+                );
+                if let Some(app) = app {
+                    assert!(
+                        server_stream
+                            .get_ref()
+                            .1
+                            .alpn_protocol()
+                            .unwrap()
+                            .ends_with(app)
+                    );
+                }
+                client_stream
+                    .write_all(b"client application")
+                    .await
+                    .unwrap();
+                let mut bytes = [0; 18];
+                server_stream.read_exact(&mut bytes).await.unwrap();
+                assert_eq!(&bytes, b"client application");
+                server_stream
+                    .write_all(b"server application")
+                    .await
+                    .unwrap();
+                client_stream.read_exact(&mut bytes).await.unwrap();
+                assert_eq!(&bytes, b"server application");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_reports_generation_and_client_verification_errors() {
+        for failure in [
+            "server generation",
+            "client generation",
+            "client verification",
+        ] {
+            let (server, client) = exchange_pair(
+                if failure == "server generation" {
+                    failing_generator()
+                } else {
+                    AttestationGenerator::with_no_attestation()
+                },
+                if failure == "client generation" {
+                    failing_generator()
+                } else {
+                    AttestationGenerator::with_no_attestation()
+                },
+                if failure == "client verification" {
+                    AttestationVerifier::mock()
+                } else {
+                    AttestationVerifier::expect_none()
+                },
+                false,
+                false,
+                None,
+            );
+            let (server_io, client_io) = tokio::io::duplex(128 * 1024);
+            let (server_result, client_result) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    tokio::join!(
+                        server.handle_connection(server_io),
+                        client.connect("127.0.0.1", client_io)
+                    )
+                })
+                .await
+                .unwrap();
+            let server_error = server_result.unwrap_err();
+            let client_error = client_result.unwrap_err();
+            let (local, remote) = if failure == "server generation" {
+                (server_error, client_error)
+            } else {
+                (client_error, server_error)
+            };
+            if failure == "client verification" {
+                assert!(matches!(
+                    local,
+                    AttestedTlsError::Attestation(AttestationError::AttestationTypeNotAccepted)
+                ));
+                assert!(
+                    matches!(remote, AttestedTlsError::RemoteAttestation(AttestationExchangeError::VerificationFailed(ref message)) if message == "Attestation type not accepted")
+                );
+            } else {
+                let message = local.to_string();
+                assert!(matches!(
+                    local,
+                    AttestedTlsError::Attestation(AttestationError::AttestationProvider(_))
+                ));
+                assert!(
+                    matches!(remote, AttestedTlsError::RemoteAttestation(AttestationExchangeError::GenerationFailed(ref received)) if received == &message)
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn v1_generation_failure_keeps_legacy_close_behavior() {
+        let (server, client) = exchange_pair(
+            failing_generator(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            false,
+            true,
+            None,
+        );
+        let (server_io, client_io) = tokio::io::duplex(128 * 1024);
+        let (server_result, client_result) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(
+                    server.handle_connection(server_io),
+                    client.connect("127.0.0.1", client_io)
+                )
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            server_result,
+            Err(AttestedTlsError::Attestation(
+                AttestationError::AttestationProvider(_)
+            ))
+        ));
+        assert!(matches!(client_result, Err(AttestedTlsError::Io(_))));
+    }
+
+    #[tokio::test]
+    async fn exchange_wire_bytes_are_stable() {
+        for (version, expected) in [
+            (ExchangeVersion::V1, vec![0, 0, 0, 1, 0]),
+            (ExchangeVersion::V2, vec![0, 0, 0, 2, 0, 0]),
+        ] {
+            let (mut tx, mut rx) = tokio::io::duplex(64);
+            version
+                .write(
+                    &mut tx,
+                    Ok(AttestationExchangeMessage::without_attestation()),
+                )
+                .await
+                .unwrap();
+            let mut actual = vec![0; expected.len()];
+            rx.read_exact(&mut actual).await.unwrap();
+            assert_eq!(actual, expected);
+        }
+        for (error, tag) in [
+            (AttestationExchangeError::GenerationFailed("a".into()), 0),
+            (AttestationExchangeError::VerificationFailed("a".into()), 1),
+        ] {
+            let result: AttestationExchangeResult = Err(error);
+            assert_eq!(result.encode(), vec![1, tag, 4, b'a']);
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_rejects_malformed_and_oversized_error_payloads() {
+        let oversized: AttestationExchangeResult = Err(AttestationExchangeError::GenerationFailed(
+            "x".repeat(MAX_EXCHANGE_ERROR_BYTES + 1),
+        ));
+        for bytes in [vec![], vec![2], vec![0], vec![0, 0, 9], oversized.encode()] {
+            let (mut tx, mut rx) = tokio::io::duplex(4096);
+            tx.write_all(&length_prefix(&bytes)).await.unwrap();
+            tx.write_all(&bytes).await.unwrap();
+            assert!(matches!(
+                ExchangeVersion::V2.read(&mut rx).await,
+                Err(AttestedTlsError::Serialization(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn error_messages_are_capped_at_a_utf8_boundary() {
+        let (mut tx, mut rx) = tokio::io::duplex(4096);
+        ExchangeVersion::V2
+            .report_error(
+                &mut tx,
+                AttestationExchangeError::GenerationFailed("€".repeat(1000)),
+            )
+            .await;
+        let error = ExchangeVersion::V2.read(&mut rx).await.unwrap_err();
+        assert!(
+            matches!(error, AttestedTlsError::RemoteAttestation(AttestationExchangeError::GenerationFailed(ref message))
+            if message.len() == 2046 && message.chars().all(|c| c == '€'))
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_or_blocked_error_writes_preserve_generation_error() {
+        for broken_pipe in [false, true] {
+            let (mut tx, rx) = tokio::io::duplex(1);
+            let _peer = if broken_pipe {
+                drop(rx);
+                None
+            } else {
+                Some(rx)
+            };
+            let error = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                generate_and_send(&mut tx, ExchangeVersion::V2, failing_generator(), [0; 64]),
+            )
+            .await
+            .expect("error reporting must have a deadline")
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                AttestedTlsError::Attestation(AttestationError::AttestationProvider(_))
+            ));
+        }
     }
 }

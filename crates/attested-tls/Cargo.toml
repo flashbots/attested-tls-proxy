@@ -17,7 +17,7 @@ webpki-roots.workspace = true
 http.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-parity-scale-codec = "3.7.5"
+parity-scale-codec = { version = "3.7.5", features = ["derive"] }
 attestation = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
 
 # Used for websocket support

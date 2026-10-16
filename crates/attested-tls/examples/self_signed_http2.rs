@@ -33,7 +33,7 @@ async fn main() -> Result<(), Error> {
     let (mut config, cert_chain) = self_signed_server_config(address.ip(), false)?;
 
     // Supply the application protocol as http2. AttestedTlsServer maps it to
-    // `flashbots-ratls/1+h2` and also advertises its bare protocol fallback.
+    // `flashbots-ratls/2+h2` (with v1 compatibility) and also advertises its bare protocol fallback.
     config.alpn_protocols = vec![b"h2".to_vec()];
 
     let server = AttestedTlsServer::new_with_tls_config(
@@ -64,7 +64,12 @@ async fn serve_connection(server: AttestedTlsServer, socket: TcpStream) -> Resul
         server.handle_connection(socket).await?;
 
     // Enforce http2
-    if stream.get_ref().1.alpn_protocol() != Some(b"flashbots-ratls/1+h2".as_slice()) {
+    if !attested_tls::SUPPORTED_ALPN_PROTOCOL_VERSIONS
+        .iter()
+        .any(|version| {
+            stream.get_ref().1.alpn_protocol() == Some([*version, b"+h2"].concat().as_slice())
+        })
+    {
         return Err("client did not negotiate HTTP/2".into());
     }
 
