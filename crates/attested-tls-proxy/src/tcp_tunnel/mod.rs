@@ -449,6 +449,7 @@ mod tests {
     #[test]
     fn protocols_are_unambiguous() {
         assert!(require_tunnel_protocol(Some(b"flashbots-ratls/1+tcp-tunnel")).is_ok());
+        assert!(require_tunnel_protocol(Some(b"flashbots-ratls/2+tcp-tunnel")).is_ok());
         for protocol in [
             None,
             Some(b"flashbots-ratls/1".as_slice()),
