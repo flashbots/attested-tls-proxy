@@ -10,6 +10,8 @@ pub mod attested_rpc;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
 
+mod quote_work;
+
 pub use attestation;
 
 use attestation::{
@@ -17,6 +19,7 @@ use attestation::{
     AttestationVerifier, measurements::MultiMeasurements,
 };
 use parity_scale_codec::{Decode, Encode};
+use quote_work::QuoteWork;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_rustls::rustls::{self, server::VerifierBuilderError};
@@ -50,9 +53,12 @@ pub struct TlsCertAndKey {
     pub key: PrivateKeyDer<'static>,
 }
 
-/// A TLS server which makes an attestation exchange following the TLS handshake
+/// A TLS server which makes an attestation exchange following the TLS handshake.
+/// Quote generation is limited to 16 outstanding jobs across this server and its clones, including
+/// work whose connection has timed out or been canceled.
 #[derive(Clone)]
 pub struct AttestedTlsServer {
+    quote_work: QuoteWork,
     /// Quote generation type to use (including none)
     attestation_generator: AttestationGenerator,
     /// Verifier for remote attestation (including none)
@@ -107,6 +113,7 @@ impl AttestedTlsServer {
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
 
         Ok(Self {
+            quote_work: QuoteWork::default(),
             attestation_generator,
             attestation_verifier,
             acceptor,
@@ -163,12 +170,11 @@ impl AttestedTlsServer {
         // If we are in a CVM, generate an attestation off the async runtime thread.
         let attestation = {
             let attestation_generator = self.attestation_generator.clone();
-            tokio::task::spawn_blocking(move || {
-                attestation_generator.generate_attestation(input_data)
-            })
-            .await
-            .map_err(AttestedTlsError::from)??
-            .encode()
+            self.quote_work
+                .run(move || attestation_generator.generate_attestation(input_data))
+                .await
+                .map_err(AttestedTlsError::from)??
+                .encode()
         };
 
         // Write our attestation to the channel, with length prefix
@@ -213,9 +219,12 @@ impl AttestedTlsServer {
     }
 }
 
-/// A proxy client which forwards http traffic to a proxy-server
+/// A proxy client which forwards http traffic to a proxy-server.
+/// Quote generation is limited to 16 outstanding jobs across this client and its clones, including
+/// work whose connection has timed out or been canceled.
 #[derive(Clone)]
 pub struct AttestedTlsClient {
+    quote_work: QuoteWork,
     /// The connector for making TLS connections with out configuration
     connector: TlsConnector,
     /// Quote generation type to use (including none)
@@ -274,6 +283,7 @@ impl AttestedTlsClient {
         let connector = TlsConnector::from(Arc::new(client_config));
 
         Ok(Self {
+            quote_work: QuoteWork::default(),
             connector,
             attestation_generator,
             attestation_verifier,
@@ -351,12 +361,11 @@ impl AttestedTlsClient {
         let attestation = if self.attestation_generator.attestation_type != AttestationType::None {
             let local_input_data = compute_report_input(self.cert_chain.as_deref(), exporter)?;
             let attestation_generator = self.attestation_generator.clone();
-            tokio::task::spawn_blocking(move || {
-                attestation_generator.generate_attestation(local_input_data)
-            })
-            .await
-            .map_err(AttestedTlsError::from)??
-            .encode()
+            self.quote_work
+                .run(move || attestation_generator.generate_attestation(local_input_data))
+                .await
+                .map_err(AttestedTlsError::from)??
+                .encode()
         } else {
             AttestationExchangeMessage::without_attestation().encode()
         };
