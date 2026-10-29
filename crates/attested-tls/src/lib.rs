@@ -1,4 +1,6 @@
 //! Attested TLS protocol server and client
+pub mod self_signed;
+pub mod tls;
 #[cfg(feature = "ws")]
 pub mod websockets;
 
@@ -8,6 +10,8 @@ pub mod attested_rpc;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
 
+mod quote_work;
+
 pub use attestation;
 
 use attestation::{
@@ -15,19 +19,16 @@ use attestation::{
     AttestationVerifier, measurements::MultiMeasurements,
 };
 use parity_scale_codec::{Decode, Encode};
+use quote_work::QuoteWork;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio_rustls::rustls::{
-    self,
-    server::{VerifierBuilderError, WebPkiClientVerifier},
-};
+use tokio_rustls::rustls::{self, server::VerifierBuilderError};
 use x509_parser::parse_x509_certificate;
 
 use std::num::TryFromIntError;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinError;
-use tokio_rustls::rustls::RootCertStore;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio_rustls::{
     TlsAcceptor, TlsConnector,
@@ -52,9 +53,12 @@ pub struct TlsCertAndKey {
     pub key: PrivateKeyDer<'static>,
 }
 
-/// A TLS server which makes an attestation exchange following the TLS handshake
+/// A TLS server which makes an attestation exchange following the TLS handshake.
+/// Quote generation is limited to 16 outstanding jobs across this server and its clones, including
+/// work whose connection has timed out or been canceled.
 #[derive(Clone)]
 pub struct AttestedTlsServer {
+    quote_work: QuoteWork,
     /// Quote generation type to use (including none)
     attestation_generator: AttestationGenerator,
     /// Verifier for remote attestation (including none)
@@ -82,19 +86,7 @@ impl AttestedTlsServer {
         attestation_verifier: AttestationVerifier,
         client_auth: bool,
     ) -> Result<Self, AttestedTlsError> {
-        let server_config = if client_auth {
-            let root_store =
-                RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let verifier = WebPkiClientVerifier::builder(Arc::new(root_store)).build()?;
-
-            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_client_cert_verifier(verifier)
-                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
-        } else {
-            ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(cert_and_key.cert_chain.clone(), cert_and_key.key)?
-        };
+        let server_config = tls::server_config(&cert_and_key, client_auth)?;
 
         Self::new_with_tls_config(
             cert_and_key.cert_chain,
@@ -121,6 +113,7 @@ impl AttestedTlsServer {
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
 
         Ok(Self {
+            quote_work: QuoteWork::default(),
             attestation_generator,
             attestation_verifier,
             acceptor,
@@ -177,12 +170,11 @@ impl AttestedTlsServer {
         // If we are in a CVM, generate an attestation off the async runtime thread.
         let attestation = {
             let attestation_generator = self.attestation_generator.clone();
-            tokio::task::spawn_blocking(move || {
-                attestation_generator.generate_attestation(input_data)
-            })
-            .await
-            .map_err(AttestedTlsError::from)??
-            .encode()
+            self.quote_work
+                .run(move || attestation_generator.generate_attestation(input_data))
+                .await
+                .map_err(AttestedTlsError::from)??
+                .encode()
         };
 
         // Write our attestation to the channel, with length prefix
@@ -227,9 +219,12 @@ impl AttestedTlsServer {
     }
 }
 
-/// A proxy client which forwards http traffic to a proxy-server
+/// A proxy client which forwards http traffic to a proxy-server.
+/// Quote generation is limited to 16 outstanding jobs across this client and its clones, including
+/// work whose connection has timed out or been canceled.
 #[derive(Clone)]
 pub struct AttestedTlsClient {
+    quote_work: QuoteWork,
     /// The connector for making TLS connections with out configuration
     connector: TlsConnector,
     /// Quote generation type to use (including none)
@@ -258,29 +253,7 @@ impl AttestedTlsClient {
         attestation_verifier: AttestationVerifier,
         remote_certificate: Option<CertificateDer<'static>>,
     ) -> Result<Self, AttestedTlsError> {
-        // If a remote CA cert was given, use it as the root store, otherwise use webpki_roots
-        let root_store = match remote_certificate {
-            Some(remote_certificate) => {
-                let mut root_store = RootCertStore::empty();
-                root_store.add(remote_certificate)?;
-                root_store
-            }
-            None => RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
-        };
-
-        // Setup TLS client configuration, with or without client auth
-        let client_config = if let Some(ref cert_and_key) = cert_and_key {
-            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(root_store)
-                .with_client_auth_cert(
-                    cert_and_key.cert_chain.clone(),
-                    cert_and_key.key.clone_key(),
-                )?
-        } else {
-            ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(root_store)
-                .with_no_client_auth()
-        };
+        let client_config = tls::client_config(cert_and_key.as_ref(), remote_certificate, false)?;
 
         Self::new_with_tls_config(
             client_config,
@@ -310,6 +283,7 @@ impl AttestedTlsClient {
         let connector = TlsConnector::from(Arc::new(client_config));
 
         Ok(Self {
+            quote_work: QuoteWork::default(),
             connector,
             attestation_generator,
             attestation_verifier,
@@ -387,12 +361,11 @@ impl AttestedTlsClient {
         let attestation = if self.attestation_generator.attestation_type != AttestationType::None {
             let local_input_data = compute_report_input(self.cert_chain.as_deref(), exporter)?;
             let attestation_generator = self.attestation_generator.clone();
-            tokio::task::spawn_blocking(move || {
-                attestation_generator.generate_attestation(local_input_data)
-            })
-            .await
-            .map_err(AttestedTlsError::from)??
-            .encode()
+            self.quote_work
+                .run(move || attestation_generator.generate_attestation(local_input_data))
+                .await
+                .map_err(AttestedTlsError::from)??
+                .encode()
         } else {
             AttestationExchangeMessage::without_attestation().encode()
         };
@@ -516,6 +489,8 @@ pub enum AttestedTlsError {
     Rustls(#[from] tokio_rustls::rustls::Error),
     #[error("Verifier builder: {0}")]
     VerifierBuilder(#[from] VerifierBuilderError),
+    #[error("Certificate generation: {0}")]
+    CertificateGeneration(#[from] rcgen::Error),
     #[error("IO: {0}")]
     Io(#[from] std::io::Error),
     #[error("Attestation: {0}")]
@@ -580,6 +555,11 @@ where
 pub(crate) fn server_name_from_host(
     host: &str,
 ) -> Result<ServerName<'static>, tokio_rustls::rustls::pki_types::InvalidDnsNameError> {
+    // A scope ID selects the local network interface, not the TLS peer identity.
+    if let Ok(std::net::SocketAddr::V6(address)) = host.parse() {
+        return ServerName::try_from(address.ip().to_string());
+    }
+
     // If host contains ':', try to split off the port.
     let host_part = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
 
@@ -629,6 +609,16 @@ fn map_alpn_protocols(existing_protocols: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scoped_ipv6_tls_identity_excludes_scope_id() {
+        for target in ["[fe80::1%3]:443", "[fe80::1%0]:8443", "[fe80::1]:443"] {
+            assert_eq!(
+                super::server_name_from_host(target).unwrap(),
+                tokio_rustls::rustls::pki_types::ServerName::try_from("fe80::1").unwrap(),
+            );
+        }
+    }
+
     use super::*;
 
     use crate::test_helpers::{generate_certificate_chain, generate_tls_config};

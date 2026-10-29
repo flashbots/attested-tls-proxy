@@ -6,9 +6,9 @@ use tokio_rustls::rustls::{
 };
 use x509_parser::prelude::{FromDer, X509Certificate};
 
-use crate::attested_tls::{AttestedTlsError, TlsCertAndKey};
+use crate::{AttestedTlsError, TlsCertAndKey};
 
-/// Generate a self signed certifcate
+/// Generate a self-signed certificate
 pub fn generate_self_signed_cert(ip_address: IpAddr) -> Result<TlsCertAndKey, rcgen::Error> {
     let keypair = rcgen::KeyPair::generate()?;
     let mut params = rcgen::CertificateParams::default();
@@ -20,21 +20,6 @@ pub fn generate_self_signed_cert(ip_address: IpAddr) -> Result<TlsCertAndKey, rc
     Ok(TlsCertAndKey {
         cert_chain: vec![cert.der().clone()],
         key: PrivatePkcs8KeyDer::from(keypair.serialize_der()).into(),
-    })
-}
-
-/// Accept self-signed remote certificates and optionally authenticate with a client identity.
-pub fn client_tls_config_allow_self_signed(
-    identity: Option<&TlsCertAndKey>,
-) -> Result<rustls::ClientConfig, AttestedTlsError> {
-    let builder = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(SkipServerVerification::new()?);
-    Ok(match identity {
-        Some(identity) => {
-            builder.with_client_auth_cert(identity.cert_chain.clone(), identity.key.clone_key())?
-        }
-        None => builder.with_no_client_auth(),
     })
 }
 
@@ -207,10 +192,9 @@ impl rustls::server::danger::ClientCertVerifier for SkipClientVerification {
 mod tests {
     use super::*;
     use crate::{
-        AttestationGenerator,
+        AttestationGenerator, AttestedTlsClient, AttestedTlsServer,
         attestation::{AttestationType, AttestationVerifier},
-        attested_tls::{AttestedTlsClient, AttestedTlsServer},
-        http::test_helpers::{generate_certificate_chain, generate_tls_config},
+        test_helpers::{generate_certificate_chain, generate_tls_config},
     };
     use tokio::net::TcpListener;
     use tokio_rustls::rustls::pki_types::ServerName;
@@ -219,18 +203,12 @@ mod tests {
     async fn self_signed_server_attestation() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-        let cert_and_key = generate_self_signed_cert("127.0.0.1".parse().unwrap()).unwrap();
-
-        let server_config = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(
-                cert_and_key.cert_chain.clone().to_vec(),
-                cert_and_key.key.clone_key(),
-            )
-            .unwrap();
+        let (server_config, cert_chain) =
+            crate::tls::self_signed_server_config("127.0.0.1".parse().unwrap(), false).unwrap();
+        let server_certificate = cert_chain[0].clone();
 
         let server = AttestedTlsServer::new_with_tls_config(
-            cert_and_key.cert_chain,
+            cert_chain,
             server_config.into(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
@@ -246,7 +224,8 @@ mod tests {
                 server.handle_connection(tcp_stream).await.unwrap();
         });
 
-        let client_config = client_tls_config_allow_self_signed(None).unwrap();
+        let client_config =
+            crate::tls::client_config(None, Some(server_certificate), false).unwrap();
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config.into(),
@@ -304,7 +283,7 @@ mod tests {
         });
 
         // Inner TLS config
-        let client_config = client_tls_config_allow_self_signed(None).unwrap();
+        let client_config = crate::tls::client_config(None, None, true).unwrap();
 
         let client = AttestedTlsClient::new_with_tls_config(
             client_config.into(),

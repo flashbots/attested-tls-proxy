@@ -14,6 +14,15 @@ It uses session binding through exported key material from the TLS session. This
 
 Attestation may be provided by either the server, or the client, or both.
 
+## Optional features
+
+No features are enabled by default. Enable `ws` for the `websockets` module or
+`rpc` for the `attested_rpc` module in your Cargo dependency:
+
+```toml
+attested-tls = { path = "../attested-tls", features = ["ws", "rpc"] }
+```
+
 ## Protocol Specification
 
 A TLS 1.3 handshake is made between server and client. The protocol name `flashbots-ratls/1` is included in ALPN. Future versions of the protocol may add additional protocol names which increment the number given after the slash, but backwards compatibility will be provided through also specifying `flashbots-ratls/1`.
