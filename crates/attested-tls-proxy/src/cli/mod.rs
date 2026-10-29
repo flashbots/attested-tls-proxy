@@ -4,7 +4,7 @@ mod pem;
 mod tcp_tunnel;
 
 use anyhow::ensure;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::TypedValueParser};
 
 const GIT_REV: &str = match option_env!("GIT_REV") {
     Some(rev) => rev,
@@ -25,6 +25,16 @@ pub(crate) struct Cli {
     /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
     #[arg(long, global = true)]
     pccs_url: Option<String>,
+    /// Intel PCS subscription key to use when verifying DCAP attestations
+    #[arg(
+        long,
+        global = true,
+        env = "INTEL_PCS_SUBSCRIPTION_KEY",
+        hide_env_values = true,
+        value_parser = clap::builder::StringValueParser::new().map(|key| key.trim().to_owned()),
+        conflicts_with = "pccs_url"
+    )]
+    intel_pcs_subscription_key: Option<String>,
     /// Log debug messages
     #[arg(long, global = true)]
     pub(crate) log_debug: bool,
@@ -73,6 +83,7 @@ impl Cli {
             self.measurements_file,
             self.allowed_remote_attestation_type,
             self.pccs_url,
+            self.intel_pcs_subscription_key,
             self.log_dcap_quote,
             self.override_azure_outdated_tcb,
         )

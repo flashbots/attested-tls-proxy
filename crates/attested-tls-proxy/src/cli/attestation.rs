@@ -7,6 +7,7 @@ pub(super) async fn build_verifier(
     measurements_file: Option<String>,
     allowed_remote_attestation_type: Option<String>,
     pccs_url: Option<String>,
+    intel_pcs_subscription_key: Option<String>,
     log_dcap_quote: bool,
     override_azure_outdated_tcb: bool,
 ) -> anyhow::Result<AttestationVerifier> {
@@ -43,6 +44,10 @@ pub(super) async fn build_verifier(
         .with_override_azure_outdated_tcb(override_azure_outdated_tcb);
     if let Some(pccs_url) = pccs_url {
         attestation_verifier_builder = attestation_verifier_builder.with_pccs_url(pccs_url);
+    }
+    if let Some(key) = intel_pcs_subscription_key {
+        attestation_verifier_builder =
+            attestation_verifier_builder.with_intel_pcs_subscription_key(key);
     }
     Ok(attestation_verifier_builder.build())
 }
