@@ -18,7 +18,7 @@ http.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 parity-scale-codec = "3.7.5"
-attestation = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
+attestation = { git = "https://github.com/flashbots/attested-tls", rev = "ca2a75d3de428543947cf1272b425c5ca2c534d3" }
 
 # Used for websocket support
 tokio-tungstenite = { version = "0.28.0", optional = true }
@@ -44,7 +44,7 @@ hyper = { workspace = true, features = ["client", "server", "http2"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 tokio-rustls = { workspace = true, features = ["aws_lc_rs"] }
 tempfile.workspace = true
-attestation = { git = "https://github.com/flashbots/attested-tls", branch = "main", features = ["mock"] }
+attestation = { git = "https://github.com/flashbots/attested-tls", rev = "ca2a75d3de428543947cf1272b425c5ca2c534d3", features = ["mock"] }
 
 [features]
 default = []

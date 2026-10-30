@@ -34,7 +34,7 @@ tracing-subscriber.workspace = true
 axum = "0.8.8"
 tower-http = { version = "0.6.7", features = ["fs"] }
 pin-project-lite = "0.2.16"
-pccs = { git = "https://github.com/flashbots/attested-tls", branch = "main" }
+pccs = { git = "https://github.com/flashbots/attested-tls", rev = "ca2a75d3de428543947cf1272b425c5ca2c534d3" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
