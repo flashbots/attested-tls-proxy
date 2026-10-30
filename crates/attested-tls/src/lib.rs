@@ -456,7 +456,7 @@ pub async fn get_tls_cert_with_config(
 pub fn compute_report_input(
     cert_chain: Option<&[CertificateDer<'_>]>,
     exporter: [u8; 32],
-) -> Result<[u8; 64], AttestationError> {
+) -> Result<[u8; 64], AttestedTlsError> {
     let mut quote_input = [0u8; 64];
     if let Some(cert_chain) = cert_chain {
         let pki_hash = get_pki_hash_from_certificate_chain(cert_chain)?;
@@ -469,8 +469,8 @@ pub fn compute_report_input(
 /// Given a certificate chain, get the [Sha256] hash of the public key of the leaf certificate
 fn get_pki_hash_from_certificate_chain(
     cert_chain: &[CertificateDer<'_>],
-) -> Result<[u8; 32], AttestationError> {
-    let leaf_certificate = cert_chain.first().ok_or(AttestationError::NoCertificate)?;
+) -> Result<[u8; 32], AttestedTlsError> {
+    let leaf_certificate = cert_chain.first().ok_or(AttestedTlsError::NoCertificate)?;
     let (_, cert) = parse_x509_certificate(leaf_certificate.as_ref())?;
     let public_key = &cert.tbs_certificate.subject_pki;
     let key_bytes = public_key.subject_public_key.as_ref();
@@ -485,6 +485,8 @@ fn get_pki_hash_from_certificate_chain(
 pub enum AttestedTlsError {
     #[error("Failed to get server ceritifcate")]
     NoCertificate,
+    #[error("X509 parse: {0}")]
+    X509Parse(#[from] x509_parser::asn1_rs::Err<x509_parser::error::X509Error>),
     #[error("TLS: {0}")]
     Rustls(#[from] tokio_rustls::rustls::Error),
     #[error("Verifier builder: {0}")]
@@ -624,6 +626,19 @@ mod tests {
     use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
     use attestation::{CachePolicy, measurements::MeasurementPolicy};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn report_input_rejects_empty_and_malformed_certificate_chains() {
+        assert!(matches!(
+            compute_report_input(Some(&[]), [0; 32]),
+            Err(AttestedTlsError::NoCertificate)
+        ));
+        let cert_chain = [CertificateDer::from(vec![0])];
+        assert!(matches!(
+            compute_report_input(Some(&cert_chain), [0; 32]),
+            Err(AttestedTlsError::X509Parse(_))
+        ));
+    }
 
     #[tokio::test]
     async fn server_attestation() {
