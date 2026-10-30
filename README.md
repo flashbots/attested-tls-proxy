@@ -80,6 +80,13 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `azure-tdx` - TDX on Azure, with vTPM attestation
 - `dcap-tdx` - DCAP TDX (platform not specified)
 
+The HTTP and TCP tunnel client/server commands default to `auto` when the local
+attestation type is omitted. If no supported attestation platform is detected,
+startup fails. To run without local attestation, explicitly pass
+`--client-attestation-type none` or `--server-attestation-type none` (or set the
+corresponding `CLIENT_ATTESTATION_TYPE` / `SERVER_ATTESTATION_TYPE` environment
+variable to `none`). This is separate from the remote verification policy.
+
 ### Other CLI Options
 
 - `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.
@@ -264,6 +271,7 @@ docker run --rm \
 docker run --rm attested-tls-proxy client \
   --listen-addr 0.0.0.0:8080 \
   target-server:443 \
+  --client-attestation-type none \
   --allowed-remote-attestation-type none
 ```
 
@@ -273,7 +281,10 @@ use the target container's name instead of `host.docker.internal`.
 
 ### Testing with Docker Compose
 
-A `docker-compose.yml` is provided to test the full proxy chain:
+A `docker-compose.yml` is provided for local testing of the full proxy chain.
+It uses test certificates and explicitly disables local attestation on both
+proxies, testing TLS forwarding without attestation. For a CVM deployment,
+configure local attestation and remote verification policies for your platform.
 
 1. **Generate test certificates:**
    ```bash

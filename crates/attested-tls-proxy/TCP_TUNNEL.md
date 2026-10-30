@@ -84,7 +84,7 @@ settings follow the [HTTP proxy CLI](../../README.md#measurements-file).
 | Client `--tls-ca-certificate` | Trust the first PEM certificate instead of public roots. |
 | Client `--allow-self-signed` | Accept a self-signed server certificate; still verify attestation. Cannot combine with `--tls-ca-certificate`. Preserves any supplied client identity. |
 | Server `--client-auth` | Require a TLS client certificate authenticated against public roots. Private client CAs can be configured through the Rust API. |
-| `--client-attestation-type` / `--server-attestation-type` | Automatic local detection when omitted. |
+| `--client-attestation-type` / `--server-attestation-type` | Automatic local detection when omitted or set to `auto`; startup fails if no supported platform is detected. Set `none` explicitly to run without local attestation. |
 | `--pccs-url`, `--dev-dummy-dcap` | Same meaning as in the HTTP proxy. |
 | `--log-debug`, `--log-json`, `--log-dcap-quote` | Debug logs, structured logs, or DCAP quote dumps in `quotes/`. Logs go to stderr; the default level is info. Payload bytes are never logged. |
 | `--override-azure-outdated-tcb` | Same Azure verification override as in the HTTP proxy. |
