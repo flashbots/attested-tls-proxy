@@ -80,6 +80,13 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `azure-tdx` - TDX on Azure, with vTPM attestation
 - `dcap-tdx` - DCAP TDX (platform not specified)
 
+The HTTP and TCP tunnel client/server commands default to `auto` when the local
+attestation type is omitted. If no supported attestation platform is detected,
+startup fails. To run without local attestation, explicitly pass
+`--client-attestation-type none` or `--server-attestation-type none` (or set the
+corresponding `CLIENT_ATTESTATION_TYPE` / `SERVER_ATTESTATION_TYPE` environment
+variable to `none`). This is separate from the remote verification policy.
+
 ### Other CLI Options
 
 - `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.
