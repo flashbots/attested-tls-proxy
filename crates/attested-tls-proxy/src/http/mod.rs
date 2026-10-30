@@ -55,6 +55,9 @@ static X_REAL_IP: HeaderName = HeaderName::from_static("x-real-ip");
 /// The longest time in seconds to wait between reconnection attempts
 const SERVER_RECONNECT_MAX_BACKOFF_SECS: u64 = 120;
 
+/// Deadline for a complete outgoing setup or incoming TLS/attestation exchange.
+const CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_secs(60);
+
 const KEEP_ALIVE_INTERVAL: u64 = 30;
 const KEEP_ALIVE_TIMEOUT: u64 = 10;
 
@@ -169,8 +172,13 @@ impl ProxyServer {
         let attested_tls_server = self.attested_tls_server.clone();
 
         let join_handle = tokio::spawn(async move {
-            match attested_tls_server.handle_connection(inbound).await {
-                Ok((tls_stream, measurements, attestation_type)) => {
+            match tokio::time::timeout(
+                CONNECTION_SETUP_TIMEOUT,
+                attested_tls_server.handle_connection(inbound),
+            )
+            .await
+            {
+                Ok(Ok((tls_stream, measurements, attestation_type))) => {
                     if let Err(err) = Self::handle_connection(
                         tls_stream,
                         measurements,
@@ -184,8 +192,11 @@ impl ProxyServer {
                         warn!("Failed to handle connection: {err}");
                     }
                 }
-                Err(err) => {
+                Ok(Err(err)) => {
                     warn!("Attestation exchange failed: {err}");
+                }
+                Err(_) => {
+                    warn!(%client_addr, "Incoming TLS/attestation setup timed out");
                 }
             }
         });
@@ -650,29 +661,34 @@ impl ProxyClient {
         ),
         ProxyError,
     > {
-        let (tls_stream, measurements, remote_attestation_type) = inner.connect_tcp(target).await?;
-        debug!("[proxy-client] Connected to proxy server with measurements: {measurements:?}");
+        tokio::time::timeout(CONNECTION_SETUP_TIMEOUT, async {
+            let (tls_stream, measurements, remote_attestation_type) =
+                inner.connect_tcp(target).await?;
+            debug!("[proxy-client] Connected to proxy server with measurements: {measurements:?}");
 
-        // The attestation exchange is now complete - setup an HTTP client
-        let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
+            // The attestation exchange is now complete - setup an HTTP client
+            let http_version = HttpVersion::from_negotiated_protocol_client(&tls_stream);
 
-        let outbound_io = TokioIo::new(tls_stream);
-        let (sender, conn) = match http_version {
-            HttpVersion::Http2 => {
-                let (sender, conn) =
-                    client_request::http2::handshake(outbound_io.into_inner()).await?;
-                (sender.into(), conn.into())
-            }
-            HttpVersion::Http1 => {
-                let (sender, conn) = hyper::client::conn::http1::Builder::new()
-                    .handshake::<_, client_request::RequestBody>(outbound_io)
-                    .await?;
-                (sender.into(), conn.into())
-            }
-        };
+            let outbound_io = TokioIo::new(tls_stream);
+            let (sender, conn) = match http_version {
+                HttpVersion::Http2 => {
+                    let (sender, conn) =
+                        client_request::http2::handshake(outbound_io.into_inner()).await?;
+                    (sender.into(), conn.into())
+                }
+                HttpVersion::Http1 => {
+                    let (sender, conn) = hyper::client::conn::http1::Builder::new()
+                        .handshake::<_, client_request::RequestBody>(outbound_io)
+                        .await?;
+                    (sender.into(), conn.into())
+                }
+            };
 
-        // Return the HTTP client, as well as remote measurements
-        Ok((sender, conn, measurements, remote_attestation_type))
+            // Return the HTTP client, as well as remote measurements
+            Ok((sender, conn, measurements, remote_attestation_type))
+        })
+        .await
+        .map_err(|_| ProxyError::SetupTimeout)?
     }
 
     // Handle a request from the source client to the proxy server
@@ -729,6 +745,8 @@ where
 /// An error when running a proxy client or server
 #[derive(Error, Debug)]
 pub enum ProxyError {
+    #[error("Connection setup timed out")]
+    SetupTimeout,
     #[error("Invalid target: {0}")]
     InvalidTarget(#[from] InvalidTarget),
     #[error("Failed to get server ceritifcate")]
@@ -789,6 +807,7 @@ mod tests {
         attestation::{CachePolicy, measurements::MeasurementPolicy},
         attested_tls::get_tls_cert_with_config,
     };
+    use tokio::io::{AsyncRead, AsyncReadExt};
 
     use super::*;
     use test_helpers::{
@@ -1626,5 +1645,156 @@ mod tests {
 
         let res_body = res.text().await.unwrap();
         assert_eq!(res_body, "No measurements");
+    }
+
+    fn tls_configs() -> (Vec<CertificateDer<'static>>, ServerConfig, ClientConfig) {
+        let (certs, key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
+        let (mut server, mut client) = generate_tls_config(certs.clone(), key);
+        server.alpn_protocols = vec![ALPN_H2.to_vec()];
+        client.alpn_protocols = vec![ALPN_H2.to_vec()];
+        (certs, server, client)
+    }
+
+    // Raw TLS peers need the wire ALPN normally added by AttestedTlsClient/Server.
+    fn wire_protocols() -> Vec<Vec<u8>> {
+        attested_tls::SUPPORTED_ALPN_PROTOCOL_VERSIONS
+            .iter()
+            .map(|version| [*version, b"+", ALPN_H2].concat())
+            .collect()
+    }
+
+    async fn assert_closed(mut peer: impl AsyncRead + Unpin) {
+        let mut bytes = Vec::new();
+        let result = tokio::time::timeout(Duration::from_secs(2), peer.read_to_end(&mut bytes))
+            .await
+            .expect("timed-out setup must close its socket");
+        if let Err(error) = result {
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionReset | io::ErrorKind::UnexpectedEof
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_times_out_on_silent_tls_and_attestation_peers() {
+        for complete_tls in [false, true] {
+            let (_, mut server_config, client_config) = tls_configs();
+            server_config.alpn_protocols = wire_protocols();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let target = listener.local_addr().unwrap().to_string();
+            let startup = tokio::spawn(ProxyClient::new_with_tls_config(
+                client_config,
+                "127.0.0.1:0",
+                target,
+                AttestationGenerator::with_no_attestation(),
+                AttestationVerifier::expect_none(),
+                None,
+            ));
+            let (peer, _) = listener.accept().await.unwrap();
+            // Either never answer ClientHello, or finish TLS but never send attestation.
+            let peer: Box<dyn AsyncRead + Unpin> = if complete_tls {
+                Box::new(
+                    tokio_rustls::TlsAcceptor::from(Arc::new(server_config))
+                        .accept(peer)
+                        .await
+                        .unwrap(),
+                )
+            } else {
+                Box::new(peer)
+            };
+            assert!(!startup.is_finished());
+            tokio::time::pause();
+            tokio::time::advance(CONNECTION_SETUP_TIMEOUT).await;
+            let error = tokio::time::timeout(Duration::from_secs(1), startup)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert!(matches!(error, ProxyError::SetupTimeout));
+            tokio::time::resume();
+            assert_closed(peer).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn reconnect_retries_after_setup_timeout() {
+        let (_, _, client_config) = tls_configs();
+        let client = AttestedTlsClient::new_with_tls_config(
+            client_config,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            None,
+        )
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = listener.local_addr().unwrap().to_string();
+        let reconnect = tokio::spawn(async move {
+            ProxyClient::setup_connection_with_backoff(&target, &client, false).await
+        });
+        let (first, _) = listener.accept().await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(CONNECTION_SETUP_TIMEOUT).await;
+        // Let the expired attempt enter its backoff before advancing that delay.
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::time::resume();
+        assert_closed(first).await;
+        let (_second, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .expect("reconnection must retry after a stalled attempt")
+            .unwrap();
+        assert!(!reconnect.is_finished());
+        reconnect.abort();
+        assert!(matches!(reconnect.await, Err(error) if error.is_cancelled()));
+    }
+
+    #[tokio::test]
+    async fn server_times_out_on_silent_tls_and_attestation_peers() {
+        for complete_tls in [false, true] {
+            let (certs, server_config, mut client_config) = tls_configs();
+            client_config.alpn_protocols = wire_protocols();
+            let server = ProxyServer::new_with_tls_config(
+                certs,
+                server_config,
+                "127.0.0.1:0",
+                "127.0.0.1:1".into(),
+                AttestationGenerator::with_no_attestation(),
+                AttestationVerifier::expect_none(),
+            )
+            .await
+            .unwrap();
+            let peer = TcpStream::connect(server.local_addr().unwrap())
+                .await
+                .unwrap();
+            let handler = server.accept().await.unwrap();
+            let peer: Box<dyn AsyncRead + Unpin> = if complete_tls {
+                let mut peer = tokio_rustls::TlsConnector::from(Arc::new(client_config))
+                    .connect(
+                        tokio_rustls::rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap(),
+                        peer,
+                    )
+                    .await
+                    .unwrap();
+                // Wait for the server's attestation, then withhold our own.
+                let length = peer.read_u32().await.unwrap();
+                let mut attestation = vec![0; length as usize];
+                peer.read_exact(&mut attestation).await.unwrap();
+                Box::new(peer)
+            } else {
+                // Ensure the spawned handler has started its setup timer.
+                tokio::task::yield_now().await;
+                Box::new(peer)
+            };
+            assert!(!handler.is_finished());
+            tokio::time::pause();
+            tokio::time::advance(CONNECTION_SETUP_TIMEOUT).await;
+            tokio::time::timeout(Duration::from_secs(1), handler)
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::resume();
+            assert_closed(peer).await;
+        }
     }
 }

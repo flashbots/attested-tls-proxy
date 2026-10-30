@@ -164,7 +164,7 @@ impl AttestedTlsServer {
 
         let input_data = compute_report_input(Some(&self.cert_chain), exporter)?;
 
-        // Get the TLS certficate chain of the client, if there is one
+        // Get the TLS certificate chain of the client, if there is one
         let remote_cert_chain = connection.peer_certificates().map(|c| c.to_owned());
 
         // If we are in a CVM, generate an attestation off the async runtime thread.
