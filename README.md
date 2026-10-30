@@ -271,6 +271,7 @@ docker run --rm \
 docker run --rm attested-tls-proxy client \
   --listen-addr 0.0.0.0:8080 \
   target-server:443 \
+  --client-attestation-type none \
   --allowed-remote-attestation-type none
 ```
 
@@ -280,7 +281,10 @@ use the target container's name instead of `host.docker.internal`.
 
 ### Testing with Docker Compose
 
-A `docker-compose.yml` is provided to test the full proxy chain:
+A `docker-compose.yml` is provided for local testing of the full proxy chain.
+It uses test certificates and explicitly disables local attestation on both
+proxies, testing TLS forwarding without attestation. For a CVM deployment,
+configure local attestation and remote verification policies for your platform.
 
 1. **Generate test certificates:**
    ```bash
