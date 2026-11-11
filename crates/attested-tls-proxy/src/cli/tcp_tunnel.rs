@@ -1,10 +1,7 @@
 use anyhow::{anyhow, ensure};
 use attested_tls::self_signed::generate_self_signed_cert;
 use attested_tls::tls;
-use attested_tls::{
-    TlsCertAndKey,
-    attestation::{AttestationGenerator, AttestationVerifier},
-};
+use attested_tls::{TlsCertAndKey, attestation::AttestationVerifier};
 use attested_tls_proxy::tcp_tunnel::{TunnelClient, TunnelOptions, TunnelServer};
 use clap::Args;
 use std::{
@@ -25,7 +22,8 @@ pub(super) struct ClientArgs {
     limits: Limits,
     #[command(flatten)]
     identity: Identity,
-    /// Local attestation type (defaults to automatic detection)
+    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Set none explicitly to run without local attestation.
     #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
     client_attestation_type: Option<String>,
     /// CA certificate to trust instead of public roots
@@ -46,7 +44,8 @@ pub(super) struct ServerArgs {
     limits: Limits,
     #[command(flatten)]
     identity: Identity,
-    /// Local attestation type (defaults to automatic detection)
+    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Set none explicitly to run without local attestation.
     #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
     server_attestation_type: Option<String>,
     /// Require a client TLS certificate authenticated against public roots
@@ -127,6 +126,12 @@ impl ClientArgs {
             allow_self_signed,
         } = self;
 
+        let generator = super::attestation::build_attestation_generator(
+            client_attestation_type,
+            identity.dev_dummy_dcap.clone(),
+            "--client-attestation-type",
+        )?;
+
         let credentials = identity.load()?;
         let remote_certificate = tls_ca_certificate
             .as_deref()
@@ -135,10 +140,6 @@ impl ClientArgs {
             .and_then(|certs| certs.into_iter().next());
         let config =
             tls::client_config(credentials.as_ref(), remote_certificate, allow_self_signed)?;
-        let generator = AttestationGenerator::new_with_detection(
-            client_attestation_type,
-            identity.dev_dummy_dcap,
-        )?;
         let client = TunnelClient::new_with_tls_config(
             listen_addr,
             target_addr,
@@ -167,6 +168,12 @@ impl ServerArgs {
             client_auth,
         } = self;
 
+        let generator = super::attestation::build_attestation_generator(
+            server_attestation_type,
+            identity.dev_dummy_dcap.clone(),
+            "--server-attestation-type",
+        )?;
+
         let credentials = match identity.load()? {
             Some(credentials) => credentials,
             None => {
@@ -174,10 +181,6 @@ impl ServerArgs {
                 generate_self_signed_cert(listen_addr.ip())?
             }
         };
-        let generator = AttestationGenerator::new_with_detection(
-            server_attestation_type,
-            identity.dev_dummy_dcap,
-        )?;
         let server = TunnelServer::new(
             listen_addr,
             target_addr,

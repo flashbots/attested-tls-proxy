@@ -37,7 +37,8 @@ pub(super) struct ClientArgs {
     /// Maximum in-flight requests, including streaming responses
     #[arg(long, default_value = "64", value_parser = parse_max_in_flight_requests)]
     max_in_flight_requests: NonZeroUsize,
-    /// Type of attestation to present (dafaults to 'auto' for automatic detection)
+    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Set none explicitly to run without local attestation.
     /// If other than None, a TLS key and certicate must also be given
     #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
     client_attestation_type: Option<String>,
@@ -84,6 +85,12 @@ impl ClientArgs {
             .unwrap_or(&target_addr)
             .to_string();
 
+        let client_attestation_generator = super::attestation::build_attestation_generator(
+            client_attestation_type,
+            dev_dummy_dcap,
+            "--client-attestation-type",
+        )?;
+
         if let Some(listen_addr_healthcheck) = listen_addr_healthcheck {
             health_check::server(listen_addr_healthcheck).await?;
         }
@@ -111,9 +118,6 @@ impl ClientArgs {
             ),
             None => None,
         };
-
-        let client_attestation_generator =
-            AttestationGenerator::new_with_detection(client_attestation_type, dev_dummy_dcap)?;
 
         let client_tls_config = attested_tls::tls::client_config(
             tls_cert_and_chain.as_ref(),
@@ -150,7 +154,8 @@ pub(super) struct ServerArgs {
     listen_addr: SocketAddr,
     /// The hostname:port or ip:port of the target service to forward traffic to
     target_addr: String,
-    /// Type of attestation to present (dafaults to 'auto' for automatic detection)
+    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Set none explicitly to run without local attestation.
     /// If other than None, a TLS key and certicate must also be given
     #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
     server_attestation_type: Option<String>,
@@ -186,6 +191,12 @@ impl ServerArgs {
             listen_addr_healthcheck,
         } = self;
 
+        let local_attestation_generator = super::attestation::build_attestation_generator(
+            server_attestation_type,
+            dev_dummy_dcap,
+            "--server-attestation-type",
+        )?;
+
         if let Some(listen_addr_healthcheck) = listen_addr_healthcheck {
             health_check::server(listen_addr_healthcheck).await?;
         }
@@ -195,9 +206,6 @@ impl ServerArgs {
             tls_private_key_path,
             listen_addr.ip(),
         )?;
-
-        let local_attestation_generator =
-            AttestationGenerator::new_with_detection(server_attestation_type, dev_dummy_dcap)?;
 
         let server = ProxyServer::new(
             tls_cert_and_chain,
