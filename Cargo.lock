@@ -608,7 +608,7 @@ dependencies = [
 [[package]]
 name = "attestation"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?rev=ca2a75d3de428543947cf1272b425c5ca2c534d3#ca2a75d3de428543947cf1272b425c5ca2c534d3"
+source = "git+https://github.com/flashbots/attested-tls?rev=3dd81227d592a316537de6db9afb5b0a050f8f94#3dd81227d592a316537de6db9afb5b0a050f8f94"
 dependencies = [
  "anyhow",
  "attest-measure",
@@ -631,6 +631,7 @@ dependencies = [
  "rustls-webpki",
  "serde",
  "serde_json",
+ "socket2 0.6.4",
  "tdx-attest",
  "thiserror 2.0.17",
  "tokio",
@@ -3318,7 +3319,7 @@ dependencies = [
 [[package]]
 name = "mock-tdx"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?rev=ca2a75d3de428543947cf1272b425c5ca2c534d3#ca2a75d3de428543947cf1272b425c5ca2c534d3"
+source = "git+https://github.com/flashbots/attested-tls?rev=3dd81227d592a316537de6db9afb5b0a050f8f94#3dd81227d592a316537de6db9afb5b0a050f8f94"
 dependencies = [
  "axum",
  "dcap-qvl",
@@ -3328,7 +3329,6 @@ dependencies = [
  "rcgen",
  "serde",
  "serde-saphyr",
- "serde_bytes",
  "serde_json",
  "sha2 0.11.1",
  "time",
@@ -3763,7 +3763,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 [[package]]
 name = "pccs"
 version = "0.0.1"
-source = "git+https://github.com/flashbots/attested-tls?rev=ca2a75d3de428543947cf1272b425c5ca2c534d3#ca2a75d3de428543947cf1272b425c5ca2c534d3"
+source = "git+https://github.com/flashbots/attested-tls?rev=3dd81227d592a316537de6db9afb5b0a050f8f94#3dd81227d592a316537de6db9afb5b0a050f8f94"
 dependencies = [
  "anyhow",
  "dcap-qvl",
@@ -3856,9 +3856,9 @@ dependencies = [
 
 [[package]]
 name = "picky-asn1-x509"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c5f20f71a68499ff32310f418a6fad8816eac1a2859ed3f0c5c741389dd6208"
+checksum = "afc9118855ef6387a31b86ceb6e7871cd0149309531df64efc41857b9915b3f5"
 dependencies = [
  "base64 0.21.7",
  "oid",

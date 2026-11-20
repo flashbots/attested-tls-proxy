@@ -3,6 +3,7 @@ use attested_tls::attestation::{
     AttestationGenerator, AttestationType, AttestationVerifier, CachePolicy,
     measurements::MeasurementPolicy,
 };
+use std::path::PathBuf;
 
 pub(super) async fn build_verifier(
     measurements_file: Option<String>,
@@ -56,10 +57,15 @@ pub(super) async fn build_verifier(
 /// Build a local generator, requiring explicit opt-in to run without attestation.
 pub(super) fn build_attestation_generator(
     requested_type: Option<String>,
-    provider_url: Option<String>,
+    provider_socket: Option<PathBuf>,
     type_option: &str,
 ) -> anyhow::Result<AttestationGenerator> {
-    let generator = AttestationGenerator::new_with_detection(requested_type.clone(), provider_url)?;
+    ensure!(
+        provider_socket.is_none() || !matches!(requested_type.as_deref(), None | Some("auto")),
+        "When using --attestation-provider-socket, explicitly set {type_option} (for example, dcap-tdx). Automatic detection is not supported by the provider API."
+    );
+    let generator =
+        AttestationGenerator::new_with_detection(requested_type.clone(), provider_socket)?;
     validate_platform(
         generator.attestation_type,
         requested_type.as_deref(),
@@ -107,22 +113,56 @@ mod tests {
 
     #[test]
     fn explicit_none_is_supported() {
-        let generator =
-            build_attestation_generator(Some("none".into()), None, "--client-attestation-type")
-                .unwrap();
-        assert_eq!(generator.attestation_type, AttestationType::None);
+        for provider in [
+            None,
+            Some(PathBuf::from("/run/attestation-provider/attestation.sock")),
+        ] {
+            let generator = build_attestation_generator(
+                Some("none".into()),
+                provider,
+                "--client-attestation-type",
+            )
+            .unwrap();
+            assert_eq!(generator.attestation_type, AttestationType::None);
+            assert!(
+                generator
+                    .generate_attestation([0; 64])
+                    .unwrap()
+                    .attestation_evidence
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn provider_configuration_is_lazy_and_generation_errors_propagate() {
+        let dir = tempfile::tempdir().unwrap();
+        let generator = build_attestation_generator(
+            Some("dcap-tdx".into()),
+            Some(dir.path().join("missing.sock")),
+            "--client-attestation-type",
+        )
+        .unwrap();
+        assert_eq!(generator.attestation_type, AttestationType::DcapTdx);
+        assert!(matches!(
+            generator.generate_attestation([42; 64]),
+            Err(attested_tls::attestation::AttestationError::AttestationProvider(_))
+        ));
     }
 
     #[test]
     fn upstream_configuration_errors_propagate() {
         for (requested, provider) in [
             (Some("invalid"), None),
-            (None, Some("http://127.0.0.1:1234")),
-            (Some("auto"), Some("http://127.0.0.1:1234")),
-            (Some("dcap-tdx"), Some("not a URL")),
+            (
+                Some("invalid"),
+                Some("/run/attestation-provider/attestation.sock"),
+            ),
+            (Some("dcap-tdx"), Some("relative.sock")),
+            (Some("dcap-tdx"), Some("http://127.0.0.1:1234")),
         ] {
             let requested = requested.map(str::to_owned);
-            let provider = provider.map(str::to_owned);
+            let provider = provider.map(PathBuf::from);
             let expected =
                 AttestationGenerator::new_with_detection(requested.clone(), provider.clone())
                     .unwrap_err();

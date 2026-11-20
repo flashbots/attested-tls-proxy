@@ -87,6 +87,43 @@ startup fails. To run without local attestation, explicitly pass
 corresponding `CLIENT_ATTESTATION_TYPE` / `SERVER_ATTESTATION_TYPE` environment
 variable to `none`). This is separate from the remote verification policy.
 
+### Attestation Provider
+
+`client`, `server`, `tcp-tunnel-client`, `tcp-tunnel-server`, and
+`attested-file-server` accept `--attestation-provider-socket <PATH>` (or
+`ATTESTATION_PROVIDER_SOCKET`) to delegate quote generation and platform metadata
+collection to the local attestation provider service. Use an absolute Unix socket
+path and explicitly set `--client-attestation-type` or `--server-attestation-type`
+to match the provider, for example `dcap-tdx`, `gcp-tdx`, or `azure-tdx`. The
+provider API requires an explicit type and does not support `auto`.
+
+For example, with a provider serving `dcap-tdx` evidence:
+
+```sh
+attested-tls-proxy server 127.0.0.1:8000 \
+  --listen-addr 0.0.0.0:8443 \
+  --attestation-provider-socket /run/attestation-provider/attestation.sock \
+  --server-attestation-type dcap-tdx \
+  --allowed-remote-attestation-type none
+```
+
+The flag takes precedence over the environment variable. When the socket option
+is unset, attestation generation runs in the proxy process. `attested-file-server`
+defaults to `none` without a provider; with a provider it requires an explicit
+type. Explicit `none` disables local attestation, including when a socket is set.
+Provider connections are made when generating evidence, so socket access and
+generation errors surface during connection setup.
+
+The service creates its socket with mode `0660`. Give the proxy access through
+the socket's group and provision the socket directory with that group and mode
+`2750`. For containers, bind-mount the provider directory at the configured path
+and make its group available to the proxy user. See the
+[provider documentation](https://github.com/flashbots/attested-tls/tree/main/crates/attestation-provider-server)
+for the directory ownership and permissions required by the service.
+
+This option replaces `--dev-dummy-dcap`; migrate existing HTTP provider URLs to
+the Unix socket service.
+
 ### Other CLI Options
 
 - `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.

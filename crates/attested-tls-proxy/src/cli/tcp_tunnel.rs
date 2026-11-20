@@ -59,9 +59,10 @@ struct Identity {
     tls_private_key_path: Option<PathBuf>,
     #[arg(long, env = "TLS_CERTIFICATE_PATH", requires = "tls_private_key_path")]
     tls_certificate_path: Option<PathBuf>,
-    /// Dummy attestation service URL (requires local attestation type dummy)
-    #[arg(long)]
-    dev_dummy_dcap: Option<String>,
+    /// Absolute Unix socket path for attestation generation. Requires an explicit
+    /// --client-attestation-type or --server-attestation-type; auto is unsupported.
+    #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
+    attestation_provider_socket: Option<PathBuf>,
 }
 
 impl Identity {
@@ -128,7 +129,7 @@ impl ClientArgs {
 
         let generator = super::attestation::build_attestation_generator(
             client_attestation_type,
-            identity.dev_dummy_dcap.clone(),
+            identity.attestation_provider_socket.clone(),
             "--client-attestation-type",
         )?;
 
@@ -170,7 +171,7 @@ impl ServerArgs {
 
         let generator = super::attestation::build_attestation_generator(
             server_attestation_type,
-            identity.dev_dummy_dcap.clone(),
+            identity.attestation_provider_socket.clone(),
             "--server-attestation-type",
         )?;
 
