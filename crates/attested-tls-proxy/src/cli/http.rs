@@ -35,7 +35,7 @@ pub(super) struct ClientArgs {
     /// Maximum in-flight requests, including streaming responses
     #[arg(long, default_value = "64", value_parser = parse_max_in_flight_requests)]
     max_in_flight_requests: NonZeroUsize,
-    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Local attestation type (defaults to auto: use the provider or detect locally).
     /// Set none explicitly to run without local attestation.
     /// If other than None, a TLS key and certicate must also be given
     #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
@@ -49,8 +49,8 @@ pub(super) struct ClientArgs {
     /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
     #[arg(long)]
     tls_ca_certificate: Option<PathBuf>,
-    /// Absolute Unix socket path for attestation generation. Requires an explicit
-    /// --client-attestation-type; auto is unsupported with a provider.
+    /// Absolute Unix socket path for attestation generation. Uses the provider's
+    /// attestation type by default; --client-attestation-type none disables it.
     #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
     attestation_provider_socket: Option<PathBuf>,
     // Address to listen on for health checks
@@ -152,7 +152,7 @@ pub(super) struct ServerArgs {
     listen_addr: SocketAddr,
     /// The hostname:port or ip:port of the target service to forward traffic to
     target_addr: String,
-    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Local attestation type (defaults to auto: use the provider or detect locally).
     /// Set none explicitly to run without local attestation.
     /// If other than None, a TLS key and certicate must also be given
     #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
@@ -167,8 +167,8 @@ pub(super) struct ServerArgs {
     /// enabled.
     #[arg(long)]
     client_auth: bool,
-    /// Absolute Unix socket path for attestation generation. Requires an explicit
-    /// --server-attestation-type; auto is unsupported with a provider.
+    /// Absolute Unix socket path for attestation generation. Uses the provider's
+    /// attestation type by default; --server-attestation-type none disables it.
     #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
     attestation_provider_socket: Option<PathBuf>,
     // Address to listen on for health checks
@@ -296,8 +296,8 @@ pub(super) struct AttestedFileServerArgs {
     /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
     #[arg(long, env = "TLS_CERTIFICATE_PATH")]
     tls_certificate_path: PathBuf,
-    /// Absolute Unix socket path for attestation generation. Requires an explicit
-    /// --server-attestation-type; auto is unsupported with a provider.
+    /// Absolute Unix socket path for attestation generation. Uses the provider's
+    /// attestation type by default; --server-attestation-type none disables it.
     #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
     attestation_provider_socket: Option<PathBuf>,
 }

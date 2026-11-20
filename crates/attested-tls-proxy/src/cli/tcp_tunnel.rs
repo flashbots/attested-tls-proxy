@@ -22,7 +22,7 @@ pub(super) struct ClientArgs {
     limits: Limits,
     #[command(flatten)]
     identity: Identity,
-    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Local attestation type (defaults to auto: use the provider or detect locally).
     /// Set none explicitly to run without local attestation.
     #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
     client_attestation_type: Option<String>,
@@ -44,7 +44,7 @@ pub(super) struct ServerArgs {
     limits: Limits,
     #[command(flatten)]
     identity: Identity,
-    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Local attestation type (defaults to auto: use the provider or detect locally).
     /// Set none explicitly to run without local attestation.
     #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
     server_attestation_type: Option<String>,
@@ -59,8 +59,8 @@ struct Identity {
     tls_private_key_path: Option<PathBuf>,
     #[arg(long, env = "TLS_CERTIFICATE_PATH", requires = "tls_private_key_path")]
     tls_certificate_path: Option<PathBuf>,
-    /// Absolute Unix socket path for attestation generation. Requires an explicit
-    /// --client-attestation-type or --server-attestation-type; auto is unsupported.
+    /// Absolute Unix socket path for attestation generation. Uses the provider's
+    /// attestation type by default; an explicit local type of none disables it.
     #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
     attestation_provider_socket: Option<PathBuf>,
 }

@@ -84,8 +84,8 @@ settings follow the [HTTP proxy CLI](../../README.md#measurements-file).
 | Client `--tls-ca-certificate` | Trust the first PEM certificate instead of public roots. |
 | Client `--allow-self-signed` | Accept a self-signed server certificate; still verify attestation. Cannot combine with `--tls-ca-certificate`. Preserves any supplied client identity. |
 | Server `--client-auth` | Require a TLS client certificate authenticated against public roots. Private client CAs can be configured through the Rust API. |
-| `--client-attestation-type` / `--server-attestation-type` | Automatic local detection when omitted or set to `auto` without a provider; startup fails if no supported platform is detected. A provider requires an explicit type. Set `none` explicitly to run without local attestation. |
-| `--attestation-provider-socket <PATH>` (`ATTESTATION_PROVIDER_SOCKET`) | Absolute Unix socket path for quote generation and platform metadata collection. Requires an explicit local attestation type matching the provider. See [provider configuration](../../README.md#attestation-provider). |
+| `--client-attestation-type` / `--server-attestation-type` | When omitted or set to `auto`, use the provider if a socket is configured; otherwise detect the local platform and fail startup if none is detected. Set `none` explicitly to run without local attestation. |
+| `--attestation-provider-socket <PATH>` (`ATTESTATION_PROVIDER_SOCKET`) | Absolute Unix socket path for quote generation and platform metadata collection. The provider supplies the actual attestation type. See [provider configuration](../../README.md#attestation-provider). |
 | `--pccs-url` | Same meaning as in the HTTP proxy. |
 | `--log-debug`, `--log-json`, `--log-dcap-quote` | Debug logs, structured logs, or DCAP quote dumps in `quotes/`. Logs go to stderr; the default level is info. Payload bytes are never logged. |
 | `--override-azure-outdated-tcb` | Same Azure verification override as in the HTTP proxy. |

@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 const COMMANDS: [&str; 5] = [
     "client",
@@ -8,7 +8,7 @@ const COMMANDS: [&str; 5] = [
     "attested-file-server",
 ];
 
-fn cli(subcommand: &str) -> Command {
+fn cli(subcommand: &str, credentials: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_attested-tls-proxy"));
     for variable in [
         "ATTESTATION_PROVIDER_SOCKET",
@@ -22,21 +22,21 @@ fn cli(subcommand: &str) -> Command {
     }
     command.args([subcommand, "--allowed-remote-attestation-type", "none"]);
     if subcommand == "attested-file-server" {
-        command.args([
-            ".",
-            "--tls-private-key-path",
-            "missing-key.pem",
-            "--tls-certificate-path",
-            "missing-cert.pem",
-        ]);
+        command.arg(".");
     } else {
         command.arg("127.0.0.1:8000");
     }
     command
+        .arg("--tls-private-key-path")
+        .arg(credentials)
+        .arg("--tls-certificate-path")
+        .arg(credentials);
+    command
 }
 
 #[test]
-fn socket_from_flag_or_environment_requires_an_explicit_type_before_loading_credentials() {
+fn socket_from_flag_or_environment_accepts_omitted_auto_and_none_types() {
+    let credentials = tempfile::NamedTempFile::new().unwrap();
     for subcommand in COMMANDS {
         let type_flag = if subcommand.ends_with("client") {
             "--client-attestation-type"
@@ -44,8 +44,8 @@ fn socket_from_flag_or_environment_requires_an_explicit_type_before_loading_cred
             "--server-attestation-type"
         };
         for from_env in [false, true] {
-            for requested_type in [None, Some("auto")] {
-                let mut command = cli(subcommand);
+            for requested_type in [None, Some("auto"), Some("none")] {
+                let mut command = cli(subcommand, credentials.path());
                 let path = "/run/attestation-provider/attestation.sock";
                 if from_env {
                     command.env("ATTESTATION_PROVIDER_SOCKET", path);
@@ -58,8 +58,15 @@ fn socket_from_flag_or_environment_requires_an_explicit_type_before_loading_cred
                 let output = command.output().unwrap();
                 assert!(!output.status.success());
                 let stderr = String::from_utf8(output.stderr).unwrap();
+                // Getting as far as loading credentials confirms that provider
+                // setup accepted the type without probing the host or socket.
+                let expected = if subcommand.starts_with("tcp-tunnel-") {
+                    "No certificates in"
+                } else {
+                    "No private key found in PEM"
+                };
                 assert!(
-                    stderr.contains(&format!("explicitly set {type_flag}")),
+                    stderr.contains(expected),
                     "{subcommand}, from_env={from_env}, type={requested_type:?}: {stderr}"
                 );
             }
@@ -69,8 +76,9 @@ fn socket_from_flag_or_environment_requires_an_explicit_type_before_loading_cred
 
 #[test]
 fn removed_http_provider_option_is_rejected() {
+    let credentials = tempfile::NamedTempFile::new().unwrap();
     for subcommand in COMMANDS {
-        let output = cli(subcommand)
+        let output = cli(subcommand, credentials.path())
             .args(["--dev-dummy-dcap", "http://127.0.0.1:1234"])
             .output()
             .unwrap();
