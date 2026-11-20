@@ -81,11 +81,47 @@ These are the attestation type names used in the HTTP headers, and the measureme
 - `dcap-tdx` - DCAP TDX (platform not specified)
 
 The HTTP and TCP tunnel client/server commands default to `auto` when the local
-attestation type is omitted. If no supported attestation platform is detected,
-startup fails. To run without local attestation, explicitly pass
+attestation type is omitted. Without a provider, startup fails if no supported
+attestation platform is detected. With a provider socket, the provider supplies
+the attestation and its type. To run without local attestation, explicitly pass
 `--client-attestation-type none` or `--server-attestation-type none` (or set the
 corresponding `CLIENT_ATTESTATION_TYPE` / `SERVER_ATTESTATION_TYPE` environment
 variable to `none`). This is separate from the remote verification policy.
+
+### Attestation Provider
+
+`client`, `server`, `tcp-tunnel-client`, `tcp-tunnel-server`, and
+`attested-file-server` accept `--attestation-provider-socket <PATH>` (or
+`ATTESTATION_PROVIDER_SOCKET`) to delegate quote generation and platform metadata
+collection to the local attestation provider service. Use an absolute Unix socket
+path. When the local attestation type is omitted or set to `auto`, the proxy
+requests evidence from the provider and uses the type carried in that evidence.
+
+For example, with a provider running locally:
+
+```sh
+attested-tls-proxy server 127.0.0.1:8000 \
+  --listen-addr 0.0.0.0:8443 \
+  --attestation-provider-socket /run/attestation-provider/attestation.sock \
+  --allowed-remote-attestation-type none
+```
+
+The flag takes precedence over the environment variable. When the socket option
+is unset, attestation generation runs in the proxy process. `attested-file-server`
+defaults to `none` without a provider and uses the provider when a socket is set.
+Explicit `none` disables local attestation, including when a socket is set.
+Provider connections are made when generating evidence, so socket access and
+generation errors surface during connection setup.
+
+The service creates its socket with mode `0660`. Give the proxy access through
+the socket's group and provision the socket directory with that group and mode
+`2750`. For containers, bind-mount the provider directory at the configured path
+and make its group available to the proxy user. See the
+[provider documentation](https://github.com/flashbots/attested-tls/tree/main/crates/attestation-provider-server)
+for the directory ownership and permissions required by the service.
+
+This option replaces `--dev-dummy-dcap`; migrate existing HTTP provider URLs to
+the Unix socket service.
 
 ### Other CLI Options
 
