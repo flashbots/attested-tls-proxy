@@ -123,6 +123,22 @@ for the directory ownership and permissions required by the service.
 This option replaces `--dev-dummy-dcap`; migrate existing HTTP provider URLs to
 the Unix socket service.
 
+GitHub releases include `attestation-provider-server` as a standalone companion
+binary, alongside the proxy binary, Debian package, and `sha256sums.txt`. The
+provider is built from the exact upstream revision pinned by the `attestation`
+dependency, using upstream's `Cargo.lock`. It includes Azure quote generation in
+the release build and reports its upstream Git revision with `--version`.
+
+Both binaries use the same Docker builder, Rust toolchain, reproducible profile,
+build flags, and commit timestamp. To build the provider locally in an environment
+with the required native libraries, run `make build-attestation-provider FEATURES=azure`
+(Python 3.11 or newer is required for checkout and profile preparation). Make
+invokes Cargo directly for both binaries. To rebuild twice and compare artifact hashes,
+run `scripts/check-reproducibility.sh`; pass `provider-artifacts` to check only
+the provider. `RUST_TOOLCHAIN`, `RUST_IMAGE`, `FEATURES`, `SOURCE_DATE`, and `VERSION`
+can be set to reproduce a particular release's build inputs. The release workflow
+records the Rust version, immutable builder image digest, and timestamp in its job summary.
+
 ### Other CLI Options
 
 - `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.

@@ -1,18 +1,31 @@
 ARG RUST_TOOLCHAIN=1.89.0
-FROM docker.io/rust:$RUST_TOOLCHAIN-trixie AS builder
+ARG RUST_IMAGE=docker.io/rust:${RUST_TOOLCHAIN}-trixie
+FROM ${RUST_IMAGE} AS builder
 
 ARG FEATURES VERSION
+# The Docker context excludes .git; release builds pass the commit timestamp.
+ARG SOURCE_DATE=0
 # Switch to snapshot repository
 RUN sed -i '/^# http/{N;s|^# \(http[^ ]*\)\nURIs: .*|# \1\nURIs: \1|}' /etc/apt/sources.list.d/debian.sources
 RUN apt-get -o Acquire::Check-Valid-Until=false update && \
     apt-get install -y \
         pkg-config clang libclang-dev \
         openssl libssl-dev libtss2-dev \
-        cmake
+        cmake python3
 
 WORKDIR /build
 COPY . .
+
+FROM builder AS proxy-builder
 RUN make build && make build-deb
 
+FROM builder AS provider-builder
+RUN make build-attestation-provider
+
+FROM scratch AS provider-artifacts
+COPY --from=provider-builder /build/target/x86_64-unknown-linux-gnu/reproducible/attestation-provider-server /reproducible/attestation-provider-server
+
 FROM scratch AS artifacts
-COPY --from=builder /build/target/x86_64-unknown-linux-gnu/ /
+COPY --from=proxy-builder /build/target/x86_64-unknown-linux-gnu/reproducible/attested-tls-proxy /reproducible/attested-tls-proxy
+COPY --from=proxy-builder /build/target/debian/ /debian/
+COPY --from=provider-artifacts / /
