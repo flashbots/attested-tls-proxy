@@ -59,12 +59,12 @@ jobs:
         toolchain: stable
 
     - name: Install dependency checks
+      id: install_checks
       run: cargo install --locked cargo-audit@0.22.1 cargo-deny@0.22.0
 
     - name: Run cargo audit
-      # Report all findings without blocking CI on the existing RSA and crypto-bigint advisories.
-      continue-on-error: true
       run: cargo audit --file Cargo.lock
 
     - name: Run cargo deny
+      if: ${{ !cancelled() && steps.install_checks.outcome == 'success' }}
       run: cargo deny --locked --features azure,attested-tls/ws,attested-tls/rpc check bans licenses sources
