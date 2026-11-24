@@ -25,10 +25,16 @@ async fn check_target(listen: &str, host: &str) {
     let server_ip = listener.local_addr().unwrap().ip();
     // A leading zero is removed from the TCP port but must remain in Host.
     let target = format!("{host}:0{}", listener.local_addr().unwrap().port());
+    const DATE: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
     let backend = tokio::spawn(async move {
         let app = Router::new().route(
             "/",
-            get(|headers: HeaderMap| async move { headers["host"].to_str().unwrap().to_owned() }),
+            get(|headers: HeaderMap| async move {
+                (
+                    [(http::header::DATE, DATE)],
+                    headers["host"].to_str().unwrap().to_owned(),
+                )
+            }),
         );
         axum::serve(listener, app).await.unwrap();
     });
@@ -54,6 +60,7 @@ async fn check_target(listen: &str, host: &str) {
         )
         .await
         .unwrap();
+        assert_eq!(response.headers()[http::header::DATE], DATE);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.text().await.unwrap(), target);
     })

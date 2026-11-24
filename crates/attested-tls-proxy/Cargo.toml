@@ -23,6 +23,7 @@ hyper-util = { workspace = true, features = ["tokio"] }
 http-body-util.workspace = true
 bytes.workspace = true
 http.workspace = true
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 serde_json.workspace = true
 hex = "0.4.3"
 serde = "1.0.228"
