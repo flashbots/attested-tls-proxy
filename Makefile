@@ -101,12 +101,21 @@ build-dev: ## Build (debug version)
 install-cargo-deb:
 	@command -v cargo-deb >/dev/null 2>&1 || cargo install cargo-deb@3.6.0 --locked
 
+CARGO_DEB_ARGS = --profile $(BUILD_PROFILE) --no-build --no-dbgsym --no-strip \
+	$(if $(BUILD_TARGET),--target $(BUILD_TARGET)) \
+	$(if $(VERSION),--deb-version "1~$(VERSION)")
+
 .PHONY: build-deb
 build-deb: install-cargo-deb ## Build Debian package
-	$(BUILD_ENV) cargo deb --profile $(BUILD_PROFILE) --no-build --no-dbgsym --no-strip \
-		-p attested-tls-proxy \
-		$(if $(BUILD_TARGET),--target $(BUILD_TARGET)) \
-		$(if $(VERSION),--deb-version "1~$(VERSION)")
+	$(BUILD_ENV) cargo deb -p attested-tls-proxy $(CARGO_DEB_ARGS)
+
+.PHONY: build-attestation-provider-deb
+build-attestation-provider-deb: install-cargo-deb ## Package the previously built provider binary
+	provider_source=$$(python3 scripts/prepare-attestation-provider.py --profile "$(BUILD_PROFILE)" --deb) && \
+		$(BUILD_ENV) CARGO_TARGET_DIR="$(CURDIR)/target" cargo deb \
+			--manifest-path "$$provider_source/crates/attestation-provider-server/Cargo.toml" \
+			-p attestation-provider-server --maintainer "Flashbots Team <devops+ci@flashbots.net>" \
+			--section network $(CARGO_DEB_ARGS)
 
 ##@ Dev
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Build release artifacts twice and require matching hashes. Pass
-# provider-artifacts to check only the standalone provider binary.
+# provider-artifacts to check only the provider binary and Debian package.
 
 set -euo pipefail
 
@@ -28,9 +28,9 @@ for build in 1 2; do
 
     (
         cd "$repro_dir/$build"
-        sha256sum reproducible/attestation-provider-server
+        sha256sum reproducible/attestation-provider-server debian/attestation-provider-server_*.deb
         if [ "$build_stage" = artifacts ]; then
-            sha256sum reproducible/attested-tls-proxy debian/*.deb
+            sha256sum reproducible/attested-tls-proxy debian/attested-tls-proxy_*.deb
         fi
     ) > "$repro_dir/$build.sha256"
 done

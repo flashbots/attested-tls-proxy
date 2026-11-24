@@ -123,10 +123,12 @@ for the directory ownership and permissions required by the service.
 This option replaces `--dev-dummy-dcap`; migrate existing HTTP provider URLs to
 the Unix socket service.
 
-GitHub releases include `attestation-provider-server` as a standalone companion
-binary, alongside the proxy binary, Debian package, and `sha256sums.txt`. The
-provider is built from the exact upstream revision pinned by the `attestation`
-dependency, using upstream's `Cargo.lock`. It includes Azure quote generation in
+GitHub releases include standalone binaries and Debian packages for both
+`attested-tls-proxy` and `attestation-provider-server`. `sha256sums.txt` covers the
+proxy binary and package; `attestation-provider-server-sha256sums.txt` covers the
+provider binary and package. The provider is built from the exact upstream
+revision pinned by the `attestation` dependency, using upstream's `Cargo.lock`.
+It includes Azure quote generation in
 the release build and reports its upstream Git revision with `--version`.
 
 Both binaries use the same Docker builder, Rust toolchain, reproducible profile,
@@ -135,7 +137,14 @@ with the required native libraries, run `make build-attestation-provider FEATURE
 (Python 3.11 or newer is required for checkout and profile preparation). Make
 invokes Cargo directly for both binaries. To rebuild twice and compare artifact hashes,
 run `scripts/check-reproducibility.sh`; pass `provider-artifacts` to check only
-the provider. `RUST_TOOLCHAIN`, `RUST_IMAGE`, `FEATURES`, `SOURCE_DATE`, and `VERSION`
+the provider binary and Debian package. Both packages use the same pinned
+cargo-deb version and commit timestamp, and preserve the compiled binary without
+rebuilding or stripping it. After building the provider locally, run
+`make build-attestation-provider-deb` to package it; set `VERSION` to use the same
+`1~<version>` package version as a release. The package installs the provider at
+`/usr/bin/attestation-provider-server` and declares its native library dependencies.
+It also includes the full license from the pinned upstream revision.
+`RUST_TOOLCHAIN`, `RUST_IMAGE`, `FEATURES`, `SOURCE_DATE`, and `VERSION`
 can be set to reproduce a particular release's build inputs. The release workflow
 records the Rust version, immutable builder image digest, and timestamp in its job summary.
 
