@@ -43,11 +43,7 @@ pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, Prox
 
     tracing::info!("Statically serving {path:?} on {addr}");
 
-    tokio::spawn(async move {
-        if let Err(err) = axum::serve(listener, app).await {
-            tracing::error!("HTTP file server: {err}");
-        }
-    });
+    tokio::spawn(super::serve_router(listener, app));
 
     Ok(addr)
 }
@@ -94,6 +90,12 @@ mod tests {
 
         // Start a static file server
         let target_addr = static_file_server(dir.path().to_path_buf()).await.unwrap();
+
+        let response = reqwest::get(format!("http://{target_addr}/foo.txt"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        crate::http::test_helpers::assert_current_date(response.headers());
 
         // Create TLS configuration
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());

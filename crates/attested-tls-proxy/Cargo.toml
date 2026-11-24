@@ -19,10 +19,11 @@ anyhow.workspace = true
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
 hyper = { workspace = true, features = ["server", "http2"] }
 h2.workspace = true
-hyper-util = { workspace = true, features = ["tokio"] }
+hyper-util = { workspace = true, features = ["tokio", "server-auto", "service"] }
 http-body-util.workspace = true
 bytes.workspace = true
 http.workspace = true
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 serde_json.workspace = true
 hex = "0.4.3"
 serde = "1.0.228"

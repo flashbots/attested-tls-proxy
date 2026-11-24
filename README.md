@@ -170,6 +170,8 @@ As described above, the server will inject measurement data into the request hea
 
 The proxy client and proxy server support HTTP/2 and HTTP/1.1 over their attested-TLS channel, with HTTP/2 preferred. The HTTP protocol is combined with the attested-TLS protocol version in ALPN, producing `flashbots-ratls/1+h2` or `flashbots-ratls/1+http/1.1`. A negotiated `flashbots-ratls/1` value without an HTTP suffix falls back to HTTP/1.1.
 
+The proxy preserves an upstream HTTP `Date` and generates a missing one from the current system time on each response because Hyper’s cached date can stay ahead after the clock steps backward.
+
 ## Repository layout and development
 
 - `crates/attested-tls`: the attested TLS protocol library.

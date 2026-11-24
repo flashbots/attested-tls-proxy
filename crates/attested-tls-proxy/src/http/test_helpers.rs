@@ -150,3 +150,15 @@ pub fn init_tracing() {
             .ok();
     });
 }
+
+/// Check the response's IMF-fixdate at HTTP's one-second resolution.
+pub(crate) fn assert_current_date(headers: &::http::HeaderMap) {
+    let value = headers[::http::header::DATE].to_str().unwrap();
+    let now = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now());
+    assert!(
+        [now, now - chrono::TimeDelta::seconds(1)]
+            .iter()
+            .any(|t| t.format("%a, %d %b %Y %T GMT").to_string() == value),
+        "expected current Date, got {value}"
+    );
+}

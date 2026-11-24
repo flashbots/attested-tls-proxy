@@ -250,6 +250,7 @@ async fn http1_timeout_reconnects_without_replaying_post() {
         .await
         .unwrap();
     assert_eq!(slow.status(), ::http::StatusCode::GATEWAY_TIMEOUT);
+    crate::http::test_helpers::assert_current_date(slow.headers());
     let fast = client
         .get(format!("{}/fast", fixture.url))
         .send()

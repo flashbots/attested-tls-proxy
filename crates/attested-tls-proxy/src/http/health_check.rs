@@ -30,11 +30,7 @@ pub async fn server(listen_addr: SocketAddr) -> anyhow::Result<SocketAddr> {
     let listen_addr = listener.local_addr()?;
     tracing::info!("Starting health check server at {}", listen_addr);
 
-    tokio::spawn(async move {
-        if let Err(err) = axum::serve(listener, app).await {
-            tracing::error!("Health check server closed: {err}");
-        }
-    });
+    tokio::spawn(super::serve_router(listener, app));
 
     Ok(listen_addr)
 }
@@ -46,10 +42,10 @@ mod tests {
     #[tokio::test]
     async fn test_health_check() {
         let addr = server("127.0.0.1:0".parse().unwrap()).await.unwrap();
-
         let response = reqwest::get(format!("http://{addr}")).await.unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::OK);
+        crate::http::test_helpers::assert_current_date(response.headers());
         let body = response.text().await.unwrap();
-        assert_eq!(body, serde_json::to_string(&VersionDetails::new()).unwrap())
+        assert_eq!(body, serde_json::to_string(&VersionDetails::new()).unwrap());
     }
 }
