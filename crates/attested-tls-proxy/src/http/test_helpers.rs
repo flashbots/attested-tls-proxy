@@ -3,6 +3,7 @@ use axum::response::IntoResponse;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::{Arc, Once},
+    time::SystemTime,
 };
 use tokio::net::TcpListener;
 use tokio_rustls::rustls::{
@@ -151,14 +152,17 @@ pub fn init_tracing() {
     });
 }
 
-/// Check the response's IMF-fixdate at HTTP's one-second resolution.
-pub(crate) fn assert_current_date(headers: &::http::HeaderMap) {
+/// Check that the response date falls within the request at HTTP's one-second resolution.
+pub(crate) fn assert_current_date(headers: &::http::HeaderMap, started: SystemTime) {
+    let finished = chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).timestamp();
+    let started = chrono::DateTime::<chrono::Utc>::from(started).timestamp();
     let value = headers[::http::header::DATE].to_str().unwrap();
-    let now = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now());
+    let date = chrono::NaiveDateTime::parse_from_str(value, "%a, %d %b %Y %T GMT")
+        .unwrap()
+        .and_utc()
+        .timestamp();
     assert!(
-        [now, now - chrono::TimeDelta::seconds(1)]
-            .iter()
-            .any(|t| t.format("%a, %d %b %Y %T GMT").to_string() == value),
-        "expected current Date, got {value}"
+        (started..=finished).contains(&date),
+        "Date {value} is outside the request interval ({started}..={finished} Unix seconds)"
     );
 }

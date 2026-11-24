@@ -244,13 +244,14 @@ async fn http1_timeout_reconnects_without_replaying_post() {
         .route("/fast", get(|| async { "fast" }));
     let fixture = proxy(app, ALPN_HTTP11, 2, Duration::from_millis(300)).await;
     let client = http_client();
+    let started = std::time::SystemTime::now();
     let slow = client
         .post(format!("{}/slow", fixture.url))
         .send()
         .await
         .unwrap();
+    crate::http::test_helpers::assert_current_date(slow.headers(), started);
     assert_eq!(slow.status(), ::http::StatusCode::GATEWAY_TIMEOUT);
-    crate::http::test_helpers::assert_current_date(slow.headers());
     let fast = client
         .get(format!("{}/fast", fixture.url))
         .send()

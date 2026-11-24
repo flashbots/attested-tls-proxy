@@ -78,6 +78,7 @@ fn ensure_proxy_alpn_protocols(alpn_protocols: &mut Vec<Vec<u8>>) {
 }
 
 /// Fill a missing Date at response time, including immediately after a backward clock step.
+/// Hyper's automatic Date remains available for errors it sends before calling the service.
 fn with_date<B>(mut response: Response<B>, now: impl FnOnce() -> SystemTime) -> Response<B> {
     response
         .headers_mut()
@@ -90,30 +91,8 @@ fn with_date<B>(mut response: Response<B>, now: impl FnOnce() -> SystemTime) -> 
     response
 }
 
-/// Serve the file and health-check routers with the same Date policy as the proxy.
-async fn serve_router(mut listener: TcpListener, app: axum::Router) {
-    use axum::serve::Listener;
-    use hyper_util::{server::conn::auto::Builder, service::TowerToHyperService};
-
-    let app = app.layer(axum::middleware::map_response(
-        async |response: axum::response::Response| with_date(response, SystemTime::now),
-    ));
-    let mut builder = Builder::new(TokioExecutor);
-    builder.http1().auto_date_header(false);
-    builder.http2().auto_date_header(false);
-    loop {
-        let (stream, _) = Listener::accept(&mut listener).await;
-        let service = TowerToHyperService::new(app.clone());
-        let builder = builder.clone();
-        tokio::spawn(async move {
-            if let Err(err) = builder
-                .serve_connection_with_upgrades(TokioIo::new(stream), service)
-                .await
-            {
-                debug!("HTTP connection failed: {err}");
-            }
-        });
-    }
+async fn add_response_date(response: axum::response::Response) -> axum::response::Response {
+    with_date(response, SystemTime::now)
 }
 
 /// Retrieve the attested remote TLS certificate.
@@ -337,7 +316,6 @@ impl ProxyServer {
         match http_version {
             HttpVersion::Http2 => {
                 hyper::server::conn::http2::Builder::new(TokioExecutor)
-                    .auto_date_header(false)
                     .timer(hyper_util::rt::tokio::TokioTimer::new())
                     .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
                     .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
@@ -346,7 +324,6 @@ impl ProxyServer {
             }
             HttpVersion::Http1 => {
                 hyper::server::conn::http1::Builder::new()
-                    .auto_date_header(false)
                     .timer(hyper_util::rt::tokio::TokioTimer::new())
                     .keep_alive(true)
                     .serve_connection(io, service)
@@ -620,8 +597,7 @@ impl ProxyClient {
             client_request::response_idle::new(inbound, options.response_body_idle_timeout);
 
         // Setup http server and handler
-        let mut http = hyper::server::conn::http1::Builder::new();
-        http.auto_date_header(false);
+        let http = hyper::server::conn::http1::Builder::new();
         let service = service_fn(move |req| {
             let requests_tx = requests_tx.clone();
             let request_slots = request_slots.clone();
