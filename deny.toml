@@ -1,0 +1,28 @@
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+exceptions = [{ crate = "option-ext", allow = ["MPL-2.0"] }]
+
+# The upstream workspace's MIT license covers mock-tdx, whose manifest omits it.
+[[licenses.clarify]]
+crate = "mock-tdx@0.0.1"
+expression = "MIT"
+license-files = [{ path = "../../LICENSE", hash = 0x2e3dde8e }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/Dstack-TEE/dstack.git",
+    "https://github.com/easy-tee/attest.git",
+    "https://github.com/flashbots/attested-tls",
+]
