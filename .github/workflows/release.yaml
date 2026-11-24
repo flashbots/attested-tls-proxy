@@ -85,13 +85,25 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
-      - name: Build reproducible binary with Docker
+      - name: Build reproducible binaries with Docker
         run: |
           RUST_TOOLCHAIN=$(rustc --version | cut -d' ' -f2)
+          RUST_IMAGE=$(docker buildx imagetools inspect "docker.io/rust:${RUST_TOOLCHAIN}-trixie" --format '{{.Name}}@{{.Manifest.Digest}}')
+          SOURCE_DATE=$(git log -1 --pretty=%ct)
+          {
+            echo "### Reproducible build inputs"
+            echo "| Input | Value |"
+            echo "| --- | --- |"
+            printf '| Rust toolchain | `%s` |\n' "$RUST_TOOLCHAIN"
+            printf '| Builder image | `%s` |\n' "$RUST_IMAGE"
+            printf '| SOURCE_DATE_EPOCH | `%s` |\n' "$SOURCE_DATE"
+          } >> "$GITHUB_STEP_SUMMARY"
           docker build \
             --build-arg "RUST_TOOLCHAIN=${RUST_TOOLCHAIN}" \
+            --build-arg "RUST_IMAGE=${RUST_IMAGE}" \
             --build-arg "FEATURES=${{ matrix.features }}" \
             --build-arg "VERSION=${{ needs.extract-version.outputs.VERSION }}" \
+            --build-arg "SOURCE_DATE=${SOURCE_DATE}" \
             -f Dockerfile.build-deb -t atp:release \
             --output type=local,dest=./target .
 
@@ -100,6 +112,13 @@ jobs:
         with:
           name: attested-tls-proxy-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}${{ matrix.features && '-' }}${{ matrix.features }}
           path: target/${{ matrix.configs.profile }}/attested-tls-proxy
+
+      - name: Upload attestation-provider-server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: attestation-provider-server-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}${{ matrix.features && '-' }}${{ matrix.features }}
+          path: target/${{ matrix.configs.profile }}/attestation-provider-server
+          if-no-files-found: error
 
       - name: Upload *.deb package
         uses: actions/upload-artifact@v4
@@ -115,6 +134,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.extract-version.outputs.VERSION }}
+      BUILD_FEATURES: ${{ format('azure{0}', github.event.inputs.features && format(' {0}', github.event.inputs.features) || '') }}
     permissions:
       contents: write
     steps:
@@ -124,13 +144,19 @@ jobs:
       - name: Download attested-tls-proxy artifact
         uses: actions/download-artifact@v5
         with:
-          name: attested-tls-proxy-${{ env.VERSION }}-x86_64-unknown-linux-gnu-azure
+          name: attested-tls-proxy-${{ env.VERSION }}-x86_64-unknown-linux-gnu-${{ env.BUILD_FEATURES }}
           path: artifacts
 
       - name: Download deb package artifact
         uses: actions/download-artifact@v5
         with:
-          name: deb-${{ env.VERSION }}-x86_64-unknown-linux-gnu-azure
+          name: deb-${{ env.VERSION }}-x86_64-unknown-linux-gnu-${{ env.BUILD_FEATURES }}
+          path: artifacts
+
+      - name: Download attestation-provider-server artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: attestation-provider-server-${{ env.VERSION }}-x86_64-unknown-linux-gnu-${{ env.BUILD_FEATURES }}
           path: artifacts
 
       - name: Record artifacts checksums

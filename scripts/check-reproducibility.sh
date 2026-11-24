@@ -1,14 +1,39 @@
 #!/usr/bin/env bash
 
-# Checks reproducibility by running a package build twice and printing hashes of .deb package
+# Build release artifacts twice and require matching hashes. Pass
+# provider-artifacts to check only the standalone provider binary.
 
 set -euo pipefail
 
-rm -rf /tmp/repro1 /tmp/repro2
-mkdir -p /tmp/repro1 /tmp/repro2
+build_stage=${1:-artifacts}
+repro_dir=$(mktemp -d)
+trap 'rm -rf "$repro_dir"' EXIT
 
-docker build -f Dockerfile.build-deb --no-cache --output type=local,dest=/tmp/repro1 .
-docker build -f Dockerfile.build-deb --no-cache --output type=local,dest=/tmp/repro2 .
+rust_toolchain=${RUST_TOOLCHAIN:-$(rustc --version | cut -d' ' -f2)}
+rust_image=${RUST_IMAGE:-$(docker buildx imagetools inspect "docker.io/rust:$rust_toolchain-trixie" --format '{{.Name}}@{{.Manifest.Digest}}')}
+features=${FEATURES-azure}
+source_date=${SOURCE_DATE:-$(git log -1 --pretty=%ct)}
 
-sha256sum /tmp/repro1/debian/*.deb
-sha256sum /tmp/repro2/debian/*.deb
+for build in 1 2; do
+    # Reuse the identical native toolchain while forcing fresh Cargo builds.
+    docker build -f Dockerfile.build-deb \
+        --no-cache-filter proxy-builder --no-cache-filter provider-builder \
+        --target "$build_stage" \
+        --build-arg "RUST_TOOLCHAIN=$rust_toolchain" \
+        --build-arg "RUST_IMAGE=$rust_image" \
+        --build-arg "FEATURES=$features" \
+        --build-arg "VERSION=${VERSION:-}" \
+        --build-arg "SOURCE_DATE=$source_date" \
+        --output "type=local,dest=$repro_dir/$build" .
+
+    (
+        cd "$repro_dir/$build"
+        sha256sum reproducible/attestation-provider-server
+        if [ "$build_stage" = artifacts ]; then
+            sha256sum reproducible/attested-tls-proxy debian/*.deb
+        fi
+    ) > "$repro_dir/$build.sha256"
+done
+
+cat "$repro_dir/1.sha256"
+diff -u "$repro_dir/1.sha256" "$repro_dir/2.sha256"

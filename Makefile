@@ -6,6 +6,9 @@ GIT_TAG ?= $(shell git describe --tags --abbrev=0)
 
 FEATURES ?=
 FEATURE_ARGS = $(if $(strip $(FEATURES)),--features "$(FEATURES)")
+COMMA := ,
+# The provider exposes Azure quote generation through its attestation dependency.
+PROVIDER_FEATURE_ARGS = $(if $(filter azure attested-tls/azure,$(subst $(COMMA), ,$(FEATURES))),--features "attestation/azure-attester")
 
 ##@ Help
 
@@ -70,13 +73,23 @@ else
     BUILD_ENV =
 endif
 
+CARGO_BUILD_ARGS = --locked $(if $(BUILD_TARGET),--target $(BUILD_TARGET)) --profile $(BUILD_PROFILE)
+
 .PHONY: install-cargo-auditable
 install-cargo-auditable:
 	@command -v cargo-auditable >/dev/null 2>&1 || cargo install cargo-auditable@0.7.7 --locked
 
 .PHONY: build
 build: install-cargo-auditable ## Build (release version)
-	$(BUILD_ENV) cargo auditable build -p attested-tls-proxy $(FEATURE_ARGS) --locked $(if $(BUILD_TARGET),--target $(BUILD_TARGET)) --profile $(BUILD_PROFILE)
+	$(BUILD_ENV) cargo auditable build -p attested-tls-proxy $(FEATURE_ARGS) $(CARGO_BUILD_ARGS)
+
+.PHONY: build-attestation-provider
+build-attestation-provider: install-cargo-auditable ## Build the provider from the pinned upstream revision
+	provider_source=$$(python3 scripts/prepare-attestation-provider.py --profile "$(BUILD_PROFILE)") && \
+		$(BUILD_ENV) cargo auditable build -p attestation-provider-server \
+			--manifest-path "$$provider_source/Cargo.toml" --target-dir "$(CURDIR)/target" \
+			--config "$(CURDIR)/target/attestation-provider-profile.toml" \
+			$(PROVIDER_FEATURE_ARGS) $(CARGO_BUILD_ARGS)
 
 .PHONY: build-dev
 build-dev: ## Build (debug version)
@@ -90,7 +103,7 @@ install-cargo-deb:
 
 .PHONY: build-deb
 build-deb: install-cargo-deb ## Build Debian package
-	cargo deb --profile $(BUILD_PROFILE) --no-build --no-dbgsym --no-strip \
+	$(BUILD_ENV) cargo deb --profile $(BUILD_PROFILE) --no-build --no-dbgsym --no-strip \
 		-p attested-tls-proxy \
 		$(if $(BUILD_TARGET),--target $(BUILD_TARGET)) \
 		$(if $(VERSION),--deb-version "1~$(VERSION)")
