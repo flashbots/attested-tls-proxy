@@ -2,11 +2,9 @@ use super::pem::{
     certs_to_pem_string, load_certs_pem, load_tls_cert_and_key, load_tls_cert_and_key_server,
 };
 use anyhow::{anyhow, ensure};
-use attested_tls::attestation::{
-    AttestationType, AttestationVerifier, measurements::MultiMeasurements,
-};
+use attested_tls::attestation::{AttestationVerifier, measurements::MultiMeasurements};
 use attested_tls_proxy::{
-    AttestationGenerator, ProxyClient, ProxyClientOptions, ProxyServer,
+    ProxyClient, ProxyClientOptions, ProxyServer,
     attested_get::{attested_get, split_target_and_path},
     file_server::attested_file_server,
     get_tls_cert, health_check,
@@ -37,7 +35,7 @@ pub(super) struct ClientArgs {
     /// Maximum in-flight requests, including streaming responses
     #[arg(long, default_value = "64", value_parser = parse_max_in_flight_requests)]
     max_in_flight_requests: NonZeroUsize,
-    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Local attestation type (defaults to auto: use the provider or detect locally).
     /// Set none explicitly to run without local attestation.
     /// If other than None, a TLS key and certicate must also be given
     #[arg(long, env = "CLIENT_ATTESTATION_TYPE")]
@@ -51,10 +49,10 @@ pub(super) struct ClientArgs {
     /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
     #[arg(long)]
     tls_ca_certificate: Option<PathBuf>,
-    /// URL of the remote dummy attestation service. Only use with --client-attestation-type
-    /// dummy
-    #[arg(long)]
-    dev_dummy_dcap: Option<String>,
+    /// Absolute Unix socket path for attestation generation. Uses the provider's
+    /// attestation type by default; --client-attestation-type none disables it.
+    #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
+    attestation_provider_socket: Option<PathBuf>,
     // Address to listen on for health checks
     #[arg(long)]
     listen_addr_healthcheck: Option<SocketAddr>,
@@ -75,7 +73,7 @@ impl ClientArgs {
             tls_private_key_path,
             tls_certificate_path,
             tls_ca_certificate,
-            dev_dummy_dcap,
+            attestation_provider_socket,
             listen_addr_healthcheck,
             allow_self_signed,
         } = self;
@@ -87,7 +85,7 @@ impl ClientArgs {
 
         let client_attestation_generator = super::attestation::build_attestation_generator(
             client_attestation_type,
-            dev_dummy_dcap,
+            attestation_provider_socket,
             "--client-attestation-type",
         )?;
 
@@ -154,7 +152,7 @@ pub(super) struct ServerArgs {
     listen_addr: SocketAddr,
     /// The hostname:port or ip:port of the target service to forward traffic to
     target_addr: String,
-    /// Local attestation type (defaults to auto; errors if no platform is detected).
+    /// Local attestation type (defaults to auto: use the provider or detect locally).
     /// Set none explicitly to run without local attestation.
     /// If other than None, a TLS key and certicate must also be given
     #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
@@ -169,10 +167,10 @@ pub(super) struct ServerArgs {
     /// enabled.
     #[arg(long)]
     client_auth: bool,
-    /// URL of the remote dummy attestation service. Only use with --server-attestation-type
-    /// dummy
-    #[arg(long)]
-    dev_dummy_dcap: Option<String>,
+    /// Absolute Unix socket path for attestation generation. Uses the provider's
+    /// attestation type by default; --server-attestation-type none disables it.
+    #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
+    attestation_provider_socket: Option<PathBuf>,
     // Address to listen on for health checks
     #[arg(long)]
     listen_addr_healthcheck: Option<SocketAddr>,
@@ -187,13 +185,13 @@ impl ServerArgs {
             tls_certificate_path,
             client_auth,
             server_attestation_type,
-            dev_dummy_dcap,
+            attestation_provider_socket,
             listen_addr_healthcheck,
         } = self;
 
         let local_attestation_generator = super::attestation::build_attestation_generator(
             server_attestation_type,
-            dev_dummy_dcap,
+            attestation_provider_socket,
             "--server-attestation-type",
         )?;
 
@@ -288,7 +286,7 @@ pub(super) struct AttestedFileServerArgs {
     /// Socket address to listen on
     #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
     listen_addr: SocketAddr,
-    /// Type of attestation to present (dafaults to none)
+    /// Type of attestation to present (defaults to none without a provider)
     /// If other than None, a TLS key and certicate must also be given
     #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
     server_attestation_type: Option<String>,
@@ -298,10 +296,10 @@ pub(super) struct AttestedFileServerArgs {
     /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
     #[arg(long, env = "TLS_CERTIFICATE_PATH")]
     tls_certificate_path: PathBuf,
-    /// URL of the remote dummy attestation service. Only use with --server-attestation-type
-    /// dummy
-    #[arg(long)]
-    dev_dummy_dcap: Option<String>,
+    /// Absolute Unix socket path for attestation generation. Uses the provider's
+    /// attestation type by default; --server-attestation-type none disables it.
+    #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
+    attestation_provider_socket: Option<PathBuf>,
 }
 
 impl AttestedFileServerArgs {
@@ -312,17 +310,21 @@ impl AttestedFileServerArgs {
             server_attestation_type,
             tls_private_key_path,
             tls_certificate_path,
-            dev_dummy_dcap,
+            attestation_provider_socket,
         } = self;
 
-        let tls_cert_and_chain = load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
-
-        let server_attestation_type: AttestationType = serde_json::from_value(
-            serde_json::Value::String(server_attestation_type.unwrap_or("none".to_string())),
+        let server_attestation_type = server_attestation_type.or_else(|| {
+            attestation_provider_socket
+                .is_none()
+                .then(|| "none".to_owned())
+        });
+        let attestation_generator = super::attestation::build_attestation_generator(
+            server_attestation_type,
+            attestation_provider_socket,
+            "--server-attestation-type",
         )?;
 
-        let attestation_generator =
-            AttestationGenerator::new(server_attestation_type, dev_dummy_dcap)?;
+        let tls_cert_and_chain = load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
 
         attested_file_server(
             path_to_serve,

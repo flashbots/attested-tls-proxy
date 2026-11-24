@@ -84,21 +84,24 @@ settings follow the [HTTP proxy CLI](../../README.md#measurements-file).
 | Client `--tls-ca-certificate` | Trust the first PEM certificate instead of public roots. |
 | Client `--allow-self-signed` | Accept a self-signed server certificate; still verify attestation. Cannot combine with `--tls-ca-certificate`. Preserves any supplied client identity. |
 | Server `--client-auth` | Require a TLS client certificate authenticated against public roots. Private client CAs can be configured through the Rust API. |
-| `--client-attestation-type` / `--server-attestation-type` | Automatic local detection when omitted or set to `auto`; startup fails if no supported platform is detected. Set `none` explicitly to run without local attestation. |
-| `--pccs-url`, `--dev-dummy-dcap` | Same meaning as in the HTTP proxy. |
+| `--client-attestation-type` / `--server-attestation-type` | When omitted or set to `auto`, use the provider if a socket is configured; otherwise detect the local platform and fail startup if none is detected. Set `none` explicitly to run without local attestation. |
+| `--attestation-provider-socket <PATH>` (`ATTESTATION_PROVIDER_SOCKET`) | Absolute Unix socket path for quote generation and platform metadata collection. The provider supplies the actual attestation type. See [provider configuration](../../README.md#attestation-provider). |
+| `--pccs-url` | Same meaning as in the HTTP proxy. |
 | `--log-debug`, `--log-json`, `--log-dcap-quote` | Debug logs, structured logs, or DCAP quote dumps in `quotes/`. Logs go to stderr; the default level is info. Payload bytes are never logged. |
 | `--override-azure-outdated-tcb` | Same Azure verification override as in the HTTP proxy. |
 
 The existing environment names are supported: `MEASUREMENTS_FILE`,
 `TLS_PRIVATE_KEY_PATH`, `TLS_CERTIFICATE_PATH`, `CLIENT_ATTESTATION_TYPE`,
-`SERVER_ATTESTATION_TYPE`, and `OVERRIDE_AZURE_OUTDATED_TCB`.
+`SERVER_ATTESTATION_TYPE`, `ATTESTATION_PROVIDER_SOCKET`, and
+`OVERRIDE_AZURE_OUTDATED_TCB`.
 
 Enable Azure support with `--features azure`; this requires the same TPM system
 dependencies as the HTTP proxy. There is no health-check listener in this version.
 
 ## Lifecycle and trust
 
-CLI startup binds the listener without contacting the remote service. Each accepted
+CLI startup binds the listener without contacting the remote service or the local
+attestation provider. Provider access errors surface during connection setup. Each accepted
 connection gets one setup attempt. Failures close that connection and are logged
 with the endpoint and phase; the tunnel does not send HTTP/gRPC error messages.
 It does not retry, reconnect an established stream, or replay application data.
