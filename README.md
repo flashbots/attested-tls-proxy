@@ -191,8 +191,8 @@ Omit `--features azure` on systems without the TPM dependencies described below.
 To install from a local checkout, use `cargo install --path crates/attested-tls-proxy --locked`.
 Docker and Compose commands also run from the repository root.
 
-The `attested-tls` library's `ws` and `rpc` features are opt-in. To include their
-tests, add `attested-tls/ws,attested-tls/rpc` to the test command's feature list.
+To include the `attested-tls` WebSocket tests, add `attested-tls/ws` to the test
+command's feature list.
 
 ## Dependencies and feature flags
 

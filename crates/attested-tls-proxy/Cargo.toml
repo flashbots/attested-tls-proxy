@@ -41,7 +41,6 @@ tokio = { workspace = true, features = ["test-util"] }
 rcgen.workspace = true
 tempfile.workspace = true
 attested-tls = { path = "../attested-tls", features = ["test-helpers", "mock"] }
-jsonrpsee = { version = "0.26.0", features = ["server"] }
 
 [features]
 default = []
