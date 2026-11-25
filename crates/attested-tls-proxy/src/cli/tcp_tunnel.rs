@@ -86,7 +86,7 @@ struct Limits {
     #[arg(long, default_value = "60")]
     setup_timeout_secs: NonZeroU64,
     /// Maximum connections including setup; excess arrivals are closed
-    #[arg(long, default_value = "256", value_parser = parse_connection_limit)]
+    #[arg(long, default_value_t = attested_tls_proxy::DEFAULT_MAX_CONNECTIONS, value_parser = super::parse_semaphore_limit)]
     max_connections: NonZeroUsize,
     /// Time to drain connections at shutdown before closing them (0 closes immediately)
     #[arg(long, default_value = "30")]
@@ -101,17 +101,6 @@ impl From<Limits> for TunnelOptions {
             shutdown_grace: Duration::from_secs(value.shutdown_grace_secs),
         }
     }
-}
-
-fn parse_connection_limit(value: &str) -> Result<NonZeroUsize, String> {
-    let value = value.parse::<NonZeroUsize>().map_err(|e| e.to_string())?;
-    if value.get() > tokio::sync::Semaphore::MAX_PERMITS {
-        return Err(format!(
-            "must not exceed {}",
-            tokio::sync::Semaphore::MAX_PERMITS
-        ));
-    }
-    Ok(value)
 }
 
 impl ClientArgs {
@@ -263,8 +252,10 @@ mod tests {
             panic!("wrong command")
         };
         assert_eq!(listen_addr, "0.0.0.0:0".parse().unwrap());
+        let oversized = (tokio::sync::Semaphore::MAX_PERMITS + 1).to_string();
         for args in [
             vec!["--max-connections", "0"],
+            vec!["--max-connections", &oversized],
             vec!["--setup-timeout-secs", "0"],
             vec!["--tls-private-key-path", "key.pem"],
             vec!["--tls-certificate-path", "cert.pem"],
@@ -279,9 +270,6 @@ mod tests {
                 .is_err()
             );
         }
-        assert!(
-            parse_connection_limit(&(tokio::sync::Semaphore::MAX_PERMITS + 1).to_string()).is_err()
-        );
     }
 
     #[test]

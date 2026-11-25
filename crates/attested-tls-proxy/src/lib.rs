@@ -8,6 +8,10 @@ pub use target::InvalidTarget;
 // Preserve the original HTTP proxy API at the crate root.
 pub use http::*;
 
+/// Default number of concurrent connections on an attested HTTP or TCP tunnel listener.
+pub const DEFAULT_MAX_CONNECTIONS: std::num::NonZeroUsize =
+    std::num::NonZeroUsize::new(256).unwrap();
+
 async fn wait_for_revocation(peer: Option<attested_tls::tls::AllowlistedPeer>) {
     let Some(peer) = peer else {
         return std::future::pending().await;

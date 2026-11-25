@@ -6,7 +6,7 @@ use attested_tls::attestation::{AttestationVerifier, measurements::MultiMeasurem
 use attested_tls_proxy::{
     ProxyClient, ProxyClientOptions, ProxyServer,
     attested_get::{attested_get, split_target_and_path},
-    file_server::attested_file_server,
+    file_server::new_attested_file_server,
     get_tls_cert, health_check,
     measurements::MeasurementHeaders,
 };
@@ -33,7 +33,7 @@ pub(super) struct ClientArgs {
     #[arg(long, default_value = "60")]
     response_body_idle_timeout_secs: NonZeroU64,
     /// Maximum in-flight requests, including streaming responses
-    #[arg(long, default_value = "64", value_parser = parse_max_in_flight_requests)]
+    #[arg(long, default_value = "64", value_parser = super::parse_semaphore_limit)]
     max_in_flight_requests: NonZeroUsize,
     /// Local attestation type (defaults to auto: use the provider or detect locally).
     /// Set none explicitly to run without local attestation.
@@ -150,6 +150,9 @@ pub(super) struct ServerArgs {
     /// Socket address to listen on
     #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
     listen_addr: SocketAddr,
+    /// Maximum concurrent connections, including TLS and attestation setup
+    #[arg(long, default_value_t = attested_tls_proxy::DEFAULT_MAX_CONNECTIONS, value_parser = super::parse_semaphore_limit)]
+    max_connections: NonZeroUsize,
     /// The hostname:port or ip:port of the target service to forward traffic to
     target_addr: String,
     /// Local attestation type (defaults to auto: use the provider or detect locally).
@@ -178,6 +181,7 @@ impl ServerArgs {
     pub(super) async fn run(self, attestation_verifier: AttestationVerifier) -> anyhow::Result<()> {
         let Self {
             listen_addr,
+            max_connections,
             target_addr,
             tls_private_key_path,
             tls_certificate_path,
@@ -213,11 +217,7 @@ impl ServerArgs {
         )
         .await?;
 
-        loop {
-            if let Err(err) = server.accept().await {
-                tracing::error!("Failed to handle connection: {err}");
-            }
-        }
+        server.with_max_connections(max_connections)?.serve().await
     }
 }
 
@@ -286,6 +286,9 @@ pub(super) struct AttestedFileServerArgs {
     /// Socket address to listen on
     #[arg(short, long, default_value = "0.0.0.0:0", env = "LISTEN_ADDR")]
     listen_addr: SocketAddr,
+    /// Maximum concurrent connections, including TLS and attestation setup
+    #[arg(long, default_value_t = attested_tls_proxy::DEFAULT_MAX_CONNECTIONS, value_parser = super::parse_semaphore_limit)]
+    max_connections: NonZeroUsize,
     /// Type of attestation to present (defaults to none without a provider)
     /// If other than None, a TLS key and certicate must also be given
     #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
@@ -308,6 +311,7 @@ impl AttestedFileServerArgs {
             client_auth,
             path_to_serve,
             listen_addr,
+            max_connections,
             server_attestation_type,
             tls_private_key_path,
             tls_certificate_path,
@@ -327,7 +331,7 @@ impl AttestedFileServerArgs {
 
         let tls_cert_and_chain = load_tls_cert_and_key(tls_certificate_path, tls_private_key_path)?;
 
-        attested_file_server(
+        let server = new_attested_file_server(
             path_to_serve,
             tls_cert_and_chain,
             listen_addr,
@@ -336,7 +340,7 @@ impl AttestedFileServerArgs {
             client_auth,
         )
         .await?;
-        Ok(())
+        server.with_max_connections(max_connections)?.serve().await
     }
 }
 
@@ -406,25 +410,44 @@ impl AttestedGetArgs {
     }
 }
 
-/// Parses an admission limit within Tokio's supported semaphore range.
-fn parse_max_in_flight_requests(value: &str) -> Result<NonZeroUsize, String> {
-    let count = value
-        .parse::<NonZeroUsize>()
-        .map_err(|error| error.to_string())?;
-    if count.get() > tokio::sync::Semaphore::MAX_PERMITS {
-        return Err(format!(
-            "must not exceed {}",
-            tokio::sync::Semaphore::MAX_PERMITS,
-        ));
-    }
-    Ok(count)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::{Cli, CliCommand};
     use clap::Parser;
+
+    #[test]
+    fn server_connection_limits() {
+        for mode in ["server", "attested-file-server"] {
+            let args = [
+                "proxy",
+                mode,
+                "target",
+                "--tls-private-key-path",
+                "key",
+                "--tls-certificate-path",
+                "cert",
+            ];
+            for (options, expected) in [(vec![], 256), (vec!["--max-connections", "2"], 2)] {
+                let cli = Cli::try_parse_from(args.into_iter().chain(options)).unwrap();
+                let limit = match cli.command {
+                    CliCommand::Server(args) => args.max_connections,
+                    CliCommand::AttestedFileServer(args) => args.max_connections,
+                    _ => unreachable!(),
+                };
+                assert_eq!(limit.get(), expected);
+            }
+            for invalid in [0, tokio::sync::Semaphore::MAX_PERMITS + 1] {
+                let err = Cli::try_parse_from(
+                    args.into_iter()
+                        .chain(["--max-connections", &invalid.to_string()]),
+                )
+                .unwrap_err();
+                assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+            }
+        }
+    }
+
     /// Checks that CLI parsing rejects invalid limits before starting the proxy.
     #[test]
     fn max_in_flight_requests_validates_semaphore_limit() {

@@ -7,7 +7,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
 use tower_http::services::ServeDir;
 
-/// Setup a static file server serving the given directory, and a proxy server targetting it
+/// Serve a directory over attested TLS with the default connection limit.
 pub async fn attested_file_server(
     path_to_serve: PathBuf,
     cert_and_key: TlsCertAndKey,
@@ -16,9 +16,31 @@ pub async fn attested_file_server(
     attestation_verifier: AttestationVerifier,
     client_auth: impl Into<tls::ClientAuth>,
 ) -> Result<(), ProxyError> {
+    new_attested_file_server(
+        path_to_serve,
+        cert_and_key,
+        listen_addr,
+        attestation_generator,
+        attestation_verifier,
+        client_auth,
+    )
+    .await?
+    .serve()
+    .await
+}
+
+/// Bind an attested proxy listener backed by a local static file server.
+pub async fn new_attested_file_server(
+    path_to_serve: PathBuf,
+    cert_and_key: TlsCertAndKey,
+    listen_addr: impl ToSocketAddrs,
+    attestation_generator: AttestationGenerator,
+    attestation_verifier: AttestationVerifier,
+    client_auth: impl Into<tls::ClientAuth>,
+) -> Result<ProxyServer, ProxyError> {
     let target_addr = static_file_server(path_to_serve).await?;
 
-    let server = ProxyServer::new(
+    ProxyServer::new(
         cert_and_key,
         listen_addr,
         target_addr.to_string(),
@@ -26,13 +48,7 @@ pub async fn attested_file_server(
         attestation_verifier,
         client_auth,
     )
-    .await?;
-
-    loop {
-        if let Err(err) = server.accept().await {
-            tracing::error!("Failed to handle connection: {err}");
-        }
-    }
+    .await
 }
 
 /// Statically serve the given filesystem path over HTTP

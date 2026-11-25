@@ -25,7 +25,7 @@ use hyper::{Response, rt::Executor, service::service_fn};
 use hyper_util::rt::TokioIo;
 use std::{
     net::SocketAddr,
-    num::TryFromIntError,
+    num::{NonZeroUsize, TryFromIntError},
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -121,6 +121,7 @@ pub struct ProxyServer {
     /// The underlying TCP listener
     listener: Arc<TcpListener>,
     target: ForwardTarget,
+    connection_slots: Arc<Semaphore>,
 }
 
 #[derive(Clone)]
@@ -129,6 +130,20 @@ struct ForwardTarget {
     host: String,
     /// The normalized TCP destination.
     addr: String,
+}
+
+async fn retry_accept<T>(mut accept: impl AsyncFnMut() -> Result<T, ProxyError>) -> T {
+    let mut delay = Duration::from_millis(100);
+    loop {
+        match accept().await {
+            Ok(connection) => return connection,
+            Err(error) => {
+                warn!(%error, ?delay, "Accept failed, retrying");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(1));
+            }
+        }
+    }
 }
 
 impl ProxyServer {
@@ -177,6 +192,7 @@ impl ProxyServer {
         Ok(Self {
             attested_tls_server,
             listener: listener.into(),
+            connection_slots: Arc::new(Semaphore::new(crate::DEFAULT_MAX_CONNECTIONS.get())),
             target: ForwardTarget {
                 host: target,
                 addr: target_addr,
@@ -184,15 +200,44 @@ impl ProxyServer {
         })
     }
 
-    /// Accept an incoming connection and handle it in a seperate task
+    /// Set the connection limit before accepting connections.
+    pub fn with_max_connections(mut self, limit: NonZeroUsize) -> Result<Self, ProxyError> {
+        if limit.get() > Semaphore::MAX_PERMITS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "connection limit exceeds Tokio's maximum",
+            )
+            .into());
+        }
+        let slots = Arc::get_mut(&mut self.connection_slots)
+            .ok_or_else(|| io::Error::other("cannot change the limit with active connections"))?;
+        *slots = Semaphore::new(limit.get());
+        Ok(self)
+    }
+
+    /// Serve incoming connections, backing off on listener errors.
+    pub async fn serve(self) -> ! {
+        loop {
+            retry_accept(|| self.accept()).await;
+        }
+    }
+
+    /// Wait for capacity, then accept an incoming connection and handle it in a separate task.
     ///
     /// Returns the handle for the task handling the connection
     pub async fn accept(&self) -> Result<tokio::task::JoinHandle<()>, ProxyError> {
-        let target = self.target.clone();
+        let permit = self
+            .connection_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the server never closes its semaphore");
         let (inbound, client_addr) = self.listener.accept().await?;
+        let target = self.target.clone();
         let attested_tls_server = self.attested_tls_server.clone();
 
         let join_handle = tokio::spawn(async move {
+            let _permit = permit;
             match tokio::time::timeout(
                 CONNECTION_SETUP_TIMEOUT,
                 attested_tls_server.handle_connection(inbound),
@@ -1711,6 +1756,7 @@ mod tests {
         let proxy_server = ProxyServer {
             attested_tls_server,
             listener: listener.into(),
+            connection_slots: Arc::new(Semaphore::new(crate::DEFAULT_MAX_CONNECTIONS.get())),
             target: ForwardTarget {
                 host: target_addr.to_string(),
                 addr: target_addr.to_string(),
@@ -1864,6 +1910,111 @@ mod tests {
         assert!(!reconnect.is_finished());
         reconnect.abort();
         assert!(matches!(reconnect.await, Err(error) if error.is_cancelled()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn accept_errors_back_off_until_success() {
+        let mut attempts = Vec::new();
+        for failures in [6, 1] {
+            let mut remaining = failures;
+            retry_accept(async || {
+                attempts.push(tokio::time::Instant::now());
+                if remaining == 0 {
+                    return Ok(());
+                }
+                remaining -= 1;
+                Err(io::Error::other("injected accept error").into())
+            })
+            .await;
+        }
+        let delays: Vec<_> = attempts
+            .windows(2)
+            .map(|w| (w[1] - w[0]).as_millis())
+            .collect();
+        assert_eq!(delays, [100, 200, 400, 800, 1000, 1000, 0, 100]);
+    }
+
+    #[tokio::test]
+    async fn server_limits_connections_from_accept_through_http() {
+        let (certs, server_config, mut client_config) = tls_configs();
+        client_config.alpn_protocols = vec![ALPN_HTTP11.to_vec()];
+        let server = ProxyServer::new_with_tls_config(
+            certs,
+            server_config,
+            "127.0.0.1:0",
+            example_http_service().await.to_string(),
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+        )
+        .await
+        .unwrap()
+        .with_max_connections(NonZeroUsize::new(2).unwrap())
+        .unwrap();
+        let addr = server.local_addr().unwrap();
+        let client = AttestedTlsClient::new_with_tls_config(
+            client_config,
+            AttestationGenerator::with_no_attestation(),
+            AttestationVerifier::expect_none(),
+            None,
+        )
+        .unwrap();
+
+        let first = TcpStream::connect(addr).await.unwrap();
+        let first_handler = server.accept().await.unwrap();
+        let second = TcpStream::connect(addr).await.unwrap();
+        let second_handler = server.accept().await.unwrap();
+        let third = TcpStream::connect(addr).await.unwrap();
+        let third_accept = server.accept();
+        tokio::pin!(third_accept);
+
+        let short_wait = Duration::from_millis(50);
+        assert!(
+            tokio::time::timeout(short_wait, &mut third_accept)
+                .await
+                .is_err()
+        );
+
+        let target = addr.to_string();
+        let request = async |peer| {
+            let (tls, _, _) = client.connect(&target, peer).await.unwrap();
+            let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+                .await
+                .unwrap();
+            tokio::spawn(connection);
+            let response = sender
+                .send_request(
+                    ::http::Request::get("/")
+                        .header(::http::header::HOST, "localhost")
+                        .body(http_body_util::Empty::<Bytes>::new())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), ::http::StatusCode::OK);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                "No measurements"
+            );
+            sender
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let first = request(first).await;
+            let second = request(second).await;
+            assert!(
+                tokio::time::timeout(short_wait, &mut third_accept)
+                    .await
+                    .is_err()
+            );
+            drop(first);
+            first_handler.await.unwrap();
+            let third_handler = third_accept.await.unwrap();
+            drop(request(third).await);
+            third_handler.await.unwrap();
+            drop(second);
+            second_handler.await.unwrap();
+        })
+        .await
+        .expect("admitted connections must complete");
     }
 
     #[tokio::test]

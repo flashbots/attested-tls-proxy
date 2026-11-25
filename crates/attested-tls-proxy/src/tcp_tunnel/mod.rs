@@ -43,7 +43,7 @@ impl Default for TunnelOptions {
     fn default() -> Self {
         Self {
             setup_timeout: Duration::from_secs(60),
-            max_connections: NonZeroUsize::new(256).unwrap(),
+            max_connections: crate::DEFAULT_MAX_CONNECTIONS,
             shutdown_grace: Duration::from_secs(30),
         }
     }

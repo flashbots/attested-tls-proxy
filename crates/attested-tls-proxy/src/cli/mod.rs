@@ -6,7 +6,7 @@ mod tcp_tunnel;
 use anyhow::ensure;
 use attested_tls::tls::ClientAuth;
 use clap::{Args, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
-use std::path::PathBuf;
+use std::{num::NonZeroUsize, path::PathBuf};
 
 const GIT_REV: &str = match option_env!("GIT_REV") {
     Some(rev) => rev,
@@ -86,6 +86,17 @@ impl From<ClientAuthArgs> for ClientAuth {
             None => args.client_auth.into(),
         }
     }
+}
+
+fn parse_semaphore_limit(value: &str) -> Result<NonZeroUsize, String> {
+    let value = value.parse::<NonZeroUsize>().map_err(|e| e.to_string())?;
+    if value.get() > tokio::sync::Semaphore::MAX_PERMITS {
+        return Err(format!(
+            "must not exceed {}",
+            tokio::sync::Semaphore::MAX_PERMITS
+        ));
+    }
+    Ok(value)
 }
 
 #[derive(Subcommand, Debug, Clone)]
