@@ -11,7 +11,7 @@ trap 'rm -rf "$repro_dir"' EXIT
 
 rust_toolchain=${RUST_TOOLCHAIN:-$(rustc --version | cut -d' ' -f2)}
 rust_image=${RUST_IMAGE:-$(docker buildx imagetools inspect "docker.io/rust:$rust_toolchain-trixie" --format '{{.Name}}@{{.Manifest.Digest}}')}
-features=${FEATURES-azure}
+features=${FEATURES:-}
 source_date=${SOURCE_DATE:-$(git log -1 --pretty=%ct)}
 
 for build in 1 2; do

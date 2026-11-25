@@ -6,9 +6,6 @@ GIT_TAG ?= $(shell git describe --tags --abbrev=0)
 
 FEATURES ?=
 FEATURE_ARGS = $(if $(strip $(FEATURES)),--features "$(FEATURES)")
-COMMA := ,
-# The provider exposes Azure quote generation through its attestation dependency.
-PROVIDER_FEATURE_ARGS = $(if $(filter azure attested-tls/azure,$(subst $(COMMA), ,$(FEATURES))),--features "attestation/azure-attester")
 
 ##@ Help
 
@@ -89,7 +86,7 @@ build-attestation-provider: install-cargo-auditable ## Build the provider from t
 		$(BUILD_ENV) cargo auditable build -p attestation-provider-server \
 			--manifest-path "$$provider_source/Cargo.toml" --target-dir "$(CURDIR)/target" \
 			--config "$(CURDIR)/target/attestation-provider-profile.toml" \
-			$(PROVIDER_FEATURE_ARGS) $(CARGO_BUILD_ARGS)
+			$(CARGO_BUILD_ARGS)
 
 .PHONY: build-dev
 build-dev: ## Build (debug version)

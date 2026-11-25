@@ -88,15 +88,14 @@ settings follow the [HTTP proxy CLI](../../README.md#measurements-file).
 | `--attestation-provider-socket <PATH>` (`ATTESTATION_PROVIDER_SOCKET`) | Absolute Unix socket path for quote generation and platform metadata collection. The provider supplies the actual attestation type. See [provider configuration](../../README.md#attestation-provider). |
 | `--pccs-url` | Same meaning as in the HTTP proxy. |
 | `--log-debug`, `--log-json`, `--log-dcap-quote` | Debug logs, structured logs, or DCAP quote dumps in `quotes/`. Logs go to stderr; the default level is info. Payload bytes are never logged. |
-| `--override-azure-outdated-tcb` | Same Azure verification override as in the HTTP proxy. |
 
 The existing environment names are supported: `MEASUREMENTS_FILE`,
 `TLS_PRIVATE_KEY_PATH`, `TLS_CERTIFICATE_PATH`, `CLIENT_ATTESTATION_TYPE`,
 `SERVER_ATTESTATION_TYPE`, `ATTESTATION_PROVIDER_SOCKET`, and
-`OVERRIDE_AZURE_OUTDATED_TCB`.
+`INTEL_PCS_SUBSCRIPTION_KEY`.
 
-Enable Azure support with `--features azure`; this requires the same TPM system
-dependencies as the HTTP proxy. There is no health-check listener in this version.
+For existing deployments, see [Upgrading from Azure attestation](../../README.md#upgrading-from-azure-attestation).
+There is no health-check listener in this version.
 
 ## Lifecycle and trust
 

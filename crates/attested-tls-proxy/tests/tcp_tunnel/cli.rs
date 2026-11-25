@@ -22,7 +22,6 @@ fn clean_command(program: &str) -> Command {
         "TLS_CERTIFICATE_PATH",
         "CLIENT_ATTESTATION_TYPE",
         "SERVER_ATTESTATION_TYPE",
-        "OVERRIDE_AZURE_OUTDATED_TCB",
     ] {
         command.env_remove(variable);
     }

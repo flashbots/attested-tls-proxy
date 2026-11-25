@@ -43,7 +43,9 @@ This aims to be compatible with the formatting used by `cvm-reverse-proxy`.
 
 Details and examples of the measurements file format are [in the `attestation` crate documentation](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#measurements-file).
 
-Exactly one verification policy must be provided: either `--measurements-file` or `--allowed-remote-attestation-type`. The latter may be `none` for cases where the remote party is not running in a CVM, but that must be explicitly specified.
+Provide exactly one of `--measurements-file` and `--allowed-remote-attestation-type`.
+The latter accepts `dcap-tdx` or `tdx` for both generic DCAP and GCP TDX,
+`gcp-tdx` for GCP TDX only, or `none` to explicitly allow an unattested peer.
 
 As an alternative to specifying measurement values, OS image hashes can be specified. See [portable measurement policies](https://github.com/flashbots/attested-tls/tree/main/crates/attestation#portable-measurement-policies) for details.
 
@@ -72,12 +74,12 @@ Header value: an attestation type given as a string as described below.
 
 ### Attestation Types
 
-These are the attestation type names used in the HTTP headers, and the measurements file, and when specifying a local attestation type with the `--client-attestation-type` or `--server-attestation-type` command line options.
+The HTTP headers and measurements file use the following attestation types. The
+`--client-attestation-type` and `--server-attestation-type` options also accept
+`auto` for local platform detection.
 
-- `auto` - detect attestation type (used only when specifying the local attestation type as a command-line argument)
 - `none` - No attestation provided
 - `gcp-tdx` - DCAP TDX on Google Cloud Platform
-- `azure-tdx` - TDX on Azure, with vTPM attestation
 - `dcap-tdx` - DCAP TDX (platform not specified)
 
 The HTTP and TCP tunnel client/server commands default to `auto` when the local
@@ -88,6 +90,17 @@ the attestation and its type. To run without local attestation, explicitly pass
 corresponding `CLIENT_ATTESTATION_TYPE` / `SERVER_ATTESTATION_TYPE` environment
 variable to `none`). This is separate from the remote verification policy.
 
+### Upgrading from Azure attestation
+
+Azure attestation generation and verification have been removed. Remove every
+`azure-tdx` record from measurements files before upgrading, including files
+that also contain DCAP or GCP records. A file with any Azure record will fail to
+load. Update any `azure-tdx` CLI or environment settings to match the deployed
+platform. Remove the `--override-azure-outdated-tcb` flag,
+`OVERRIDE_AZURE_OUTDATED_TCB` environment variable, and `azure` Cargo feature
+from deployment and build settings. For Docker builds that pass `FEATURES=auto`,
+omit the argument to use the new default.
+
 ### Attestation Provider
 
 `client`, `server`, `tcp-tunnel-client`, `tcp-tunnel-server`, and
@@ -96,6 +109,7 @@ variable to `none`). This is separate from the remote verification policy.
 collection to the local attestation provider service. Use an absolute Unix socket
 path. When the local attestation type is omitted or set to `auto`, the proxy
 requests evidence from the provider and uses the type carried in that evidence.
+The connection fails if the provider returns evidence for an unsupported platform.
 
 For example, with a provider running locally:
 
@@ -128,12 +142,11 @@ GitHub releases include standalone binaries and Debian packages for both
 proxy binary and package; `attestation-provider-server-sha256sums.txt` covers the
 provider binary and package. The provider is built from the exact upstream
 revision pinned by the `attestation` dependency, using upstream's `Cargo.lock`.
-It includes Azure quote generation in
-the release build and reports its upstream Git revision with `--version`.
+It reports its upstream Git revision with `--version`.
 
 Both binaries use the same Docker builder, Rust toolchain, reproducible profile,
-build flags, and commit timestamp. To build the provider locally in an environment
-with the required native libraries, run `make build-attestation-provider FEATURES=azure`
+build flags, and commit timestamp. To build the provider locally, run
+`make build-attestation-provider`
 (Python 3.11 or newer is required for checkout and profile preparation). Make
 invokes Cargo directly for both binaries. To rebuild twice and compare artifact hashes,
 run `scripts/check-reproducibility.sh`; pass `provider-artifacts` to check only
@@ -144,7 +157,7 @@ rebuilding or stripping it. After building the provider locally, run
 `1~<version>` package version as a release. The package installs the provider at
 `/usr/bin/attestation-provider-server` and declares its native library dependencies.
 It also includes the full license from the pinned upstream revision.
-`RUST_TOOLCHAIN`, `RUST_IMAGE`, `FEATURES`, `SOURCE_DATE`, and `VERSION`
+`RUST_TOOLCHAIN`, `RUST_IMAGE`, `SOURCE_DATE`, and `VERSION`
 can be set to reproduce a particular release's build inputs. The release workflow
 records the Rust version, immutable builder image digest, and timestamp in its job summary.
 
@@ -191,23 +204,16 @@ artifacts remain in the root `target/` directory.
 
 ```sh
 cargo build -p attested-tls-proxy --locked
-cargo test --workspace --features azure --all-targets --locked
-cargo clippy --workspace --features azure --locked -- -D warnings
+cargo test --workspace --features attested-tls/ws,attested-tls/rpc --all-targets --locked
+cargo clippy --workspace --features attested-tls/ws,attested-tls/rpc --locked -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Omit `--features azure` on systems without the TPM dependencies described below.
 To install from a local checkout, use `cargo install --path crates/attested-tls-proxy --locked`.
 Docker and Compose commands also run from the repository root.
 
-The `attested-tls` library's `ws` and `rpc` features are opt-in. To include their
-tests, add `attested-tls/ws,attested-tls/rpc` to the test command's feature list.
-
-## Dependencies and feature flags
-
-The `azure` feature, for Microsoft Azure attestation requires [tpm2](https://tpm2-software.github.io) to be installed. On Debian-based systems this is provided by [`libtss2-dev`](https://packages.debian.org/trixie/libtss2-dev), and on nix `tpm2-tss`. This dependency is currently not packaged for MacOS, meaning currently it is not possible to compile or run with the `azure` feature on MacOS.
-
-This feature is disabled by default. Note that without this feature, verification of azure attestations is not possible and azure attestations will be rejected with an error.
+The `attested-tls` library's `ws` and `rpc` features are opt-in and included in
+the test and lint commands above.
 
 ## Trying it out locally (without CVM attestation)
 
@@ -293,19 +299,10 @@ This aims to have a similar command line interface to `cvm-reverse-proxy` but th
 
 ```bash
 docker build -t attested-tls-proxy .
-
-# Without the Azure feature:
-docker build --build-arg FEATURES="" -t attested-tls-proxy .
-
-# With an explicit space-delimited feature list:
-docker build --build-arg FEATURES="azure" -t attested-tls-proxy .
 ```
 
-`FEATURES` specifies the complete Cargo feature list; it does not add to a separate implicit list.
-When omitted, it defaults to `auto`, which enables `azure` on amd64 and disables it on other
-architectures. In particular, Docker builds on ARM Macs automatically compile without Azure/TPM
-support because the TPM libraries cannot be cross-compiled. For production builds with full Azure
-support, use an x86_64 system.
+The optional `FEATURES` build argument takes a space-delimited list of Cargo
+features and defaults to an empty list on every architecture.
 
 ### Running
 

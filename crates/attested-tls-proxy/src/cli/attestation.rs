@@ -11,7 +11,6 @@ pub(super) async fn build_verifier(
     pccs_url: Option<String>,
     intel_pcs_subscription_key: Option<String>,
     log_dcap_quote: bool,
-    override_azure_outdated_tcb: bool,
 ) -> anyhow::Result<AttestationVerifier> {
     if log_dcap_quote {
         tokio::fs::create_dir_all("quotes").await?;
@@ -42,8 +41,7 @@ pub(super) async fn build_verifier(
 
     let mut attestation_verifier_builder = AttestationVerifier::builder(measurement_policy)
         .with_cache_policy(CachePolicy::OnDemand)
-        .with_dump_dcap_quotes(log_dcap_quote)
-        .with_override_azure_outdated_tcb(override_azure_outdated_tcb);
+        .with_dump_dcap_quotes(log_dcap_quote);
     if let Some(pccs_url) = pccs_url {
         attestation_verifier_builder = attestation_verifier_builder.with_pccs_url(pccs_url);
     }
@@ -63,7 +61,7 @@ pub(super) fn build_attestation_generator(
     if provider_socket.is_some() && matches!(requested_type.as_deref(), None | Some("auto")) {
         // The pinned provider API needs a non-None type to enable requests.
         // It only uses this value as an on/off switch: the returned evidence
-        // supplies the actual platform, including GCP and Azure.
+        // supplies the actual platform.
         return Ok(AttestationGenerator::new(
             AttestationType::DcapTdx,
             provider_socket,
@@ -105,11 +103,7 @@ mod tests {
                     .to_string();
                 assert!(error.contains("No supported attestation platform detected"));
                 assert!(error.contains(&format!("{option} none")));
-                for platform in [
-                    AttestationType::DcapTdx,
-                    AttestationType::GcpTdx,
-                    AttestationType::AzureTdx,
-                ] {
+                for platform in [AttestationType::DcapTdx, AttestationType::GcpTdx] {
                     validate_platform(platform, requested, option).unwrap();
                 }
             }
@@ -174,7 +168,7 @@ mod tests {
         let listener = UnixListener::bind(&path).unwrap();
         let cases = [
             (None, AttestationType::GcpTdx),
-            (Some("auto"), AttestationType::AzureTdx),
+            (Some("auto"), AttestationType::DcapTdx),
         ];
         let provider = std::thread::spawn(move || {
             for (_, actual_type) in cases {
@@ -211,7 +205,7 @@ mod tests {
             )
             .unwrap();
             let message = generator.generate_attestation([42; 64]).unwrap();
-            assert_eq!(message.attestation_type(), actual_type);
+            assert_eq!(message.attestation_type().unwrap(), actual_type);
             assert_eq!(message.attestation_evidence.unwrap().quote, [42; 64]);
         }
         provider.join().unwrap();
@@ -238,5 +232,24 @@ mod tests {
                     .unwrap_err();
             assert_eq!(actual.to_string(), expected.to_string());
         }
+    }
+
+    #[tokio::test]
+    async fn verifier_rejects_measurements_file_with_azure_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("measurements.json");
+        tokio::fs::write(
+            &path,
+            r#"[{"attestation_type":"dcap-tdx"},{"attestation_type":"azure-tdx"}]"#,
+        )
+        .await
+        .unwrap();
+
+        let result =
+            build_verifier(Some(path.to_str().unwrap().into()), None, None, None, false).await;
+        let Err(error) = result else {
+            panic!("measurements file with an Azure record was accepted");
+        };
+        assert!(error.to_string().contains("unknown variant `azure-tdx`"));
     }
 }
