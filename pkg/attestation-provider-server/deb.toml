@@ -1,7 +1,0 @@
-[package.metadata.deb]
-license-file = "../../LICENSE"
-assets = [
-    ["target/release/attestation-provider-server", "usr/bin/", "755"],
-    ["README.md", "usr/share/doc/attestation-provider-server/", "644"],
-    ["../../LICENSE", "usr/share/doc/attestation-provider-server/", "644"],
-]

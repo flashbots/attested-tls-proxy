@@ -55,6 +55,9 @@ maintainer = "Flashbots Team <devops+ci@flashbots.net>"
 depends = "$auto"
 section = "network"
 priority = "optional"
+provides = "attestation-provider-server"
+conflicts = "attestation-provider-server"
+replaces = "attestation-provider-server"
 maintainer-scripts = "../../pkg/debian"
 assets = [
     [
@@ -64,8 +67,23 @@ assets = [
         "755",
     ],
     [
+        "target/release/attestation-provider-server",
+        "usr/bin/",
+        "755",
+    ],
+    [
         "../../LICENSE",
         "usr/share/doc/attested-tls-proxy/",
+        "644",
+    ],
+    [
+        "target/release/attestation-provider-docs/LICENSE",
+        "usr/share/doc/attested-tls-proxy/attestation-provider-server/LICENSE",
+        "644",
+    ],
+    [
+        "target/release/attestation-provider-docs/README.md",
+        "usr/share/doc/attested-tls-proxy/attestation-provider-server/README.md",
         "644",
     ],
 ]
