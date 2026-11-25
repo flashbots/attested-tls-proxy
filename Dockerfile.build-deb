@@ -17,16 +17,20 @@ WORKDIR /build
 COPY . .
 
 FROM builder AS proxy-builder
-RUN make build && make build-deb
+RUN make build
 
 FROM builder AS provider-builder
-RUN make build-attestation-provider && make build-attestation-provider-deb
+RUN make build-attestation-provider
+
+FROM proxy-builder AS package-builder
+COPY --from=provider-builder /build/target/x86_64-unknown-linux-gnu/reproducible/attestation-provider-server /build/target/x86_64-unknown-linux-gnu/reproducible/attestation-provider-server
+COPY --from=provider-builder /build/target/x86_64-unknown-linux-gnu/reproducible/attestation-provider-docs/ /build/target/x86_64-unknown-linux-gnu/reproducible/attestation-provider-docs/
+RUN make build-deb
 
 FROM scratch AS provider-artifacts
 COPY --from=provider-builder /build/target/x86_64-unknown-linux-gnu/reproducible/attestation-provider-server /reproducible/attestation-provider-server
-COPY --from=provider-builder /build/target/debian/ /debian/
 
 FROM scratch AS artifacts
 COPY --from=proxy-builder /build/target/x86_64-unknown-linux-gnu/reproducible/attested-tls-proxy /reproducible/attested-tls-proxy
-COPY --from=proxy-builder /build/target/debian/ /debian/
+COPY --from=package-builder /build/target/debian/attested-tls-proxy_*.deb /debian/
 COPY --from=provider-artifacts / /
