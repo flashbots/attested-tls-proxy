@@ -36,7 +36,9 @@ pub async fn attested_file_server(
 
 /// Statically serve the given filesystem path over HTTP
 pub(crate) async fn static_file_server(path: PathBuf) -> Result<SocketAddr, ProxyError> {
-    let app = axum::Router::new().fallback_service(ServeDir::new(&path));
+    let app = axum::Router::new()
+        .fallback_service(ServeDir::new(&path))
+        .layer(axum::middleware::map_response(super::add_response_date));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -94,6 +96,13 @@ mod tests {
 
         // Start a static file server
         let target_addr = static_file_server(dir.path().to_path_buf()).await.unwrap();
+
+        let started = std::time::SystemTime::now();
+        let response = reqwest::get(format!("http://{target_addr}/foo.txt"))
+            .await
+            .unwrap();
+        crate::http::test_helpers::assert_current_date(response.headers(), started);
+        assert_eq!(response.status(), http::StatusCode::OK);
 
         // Create TLS configuration
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());

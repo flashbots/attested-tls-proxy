@@ -17,8 +17,8 @@ def run(*args, cwd):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", default="")
     parser.add_argument("--profile", default="reproducible")
-    parser.add_argument("--deb", action="store_true", help="prepare a source copy with Debian packaging metadata")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent
@@ -61,16 +61,12 @@ def main():
         + "".join(f"{json.dumps(key)} = {json.dumps(value)}\n" for key, value in profile.items())
     )
 
-    if args.deb:
-        # Add release packaging metadata outside the original checkout so it
-        # stays clean for subsequent builds. Recopying restores the original
-        # manifest before adding the metadata on repeated packaging runs.
-        packaging_source = root / "target/attestation-provider-deb-src" / revision
-        shutil.copytree(source, packaging_source, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git", "target"))
-        packaging_manifest = packaging_source / "crates/attestation-provider-server/Cargo.toml"
-        with packaging_manifest.open("a") as file:
-            file.write("\n" + (root / "pkg/attestation-provider-server/deb.toml").read_text())
-        source = packaging_source
+    # Stage the pinned provider's documentation for the combined Debian package.
+    profile_directory = "debug" if args.profile == "dev" else args.profile
+    documentation = root / "target" / args.target / profile_directory / "attestation-provider-docs"
+    documentation.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source / "LICENSE", documentation / "LICENSE")
+    shutil.copyfile(source / "crates/attestation-provider-server/README.md", documentation / "README.md")
 
     print(f"Prepared attestation-provider-server from {dependency['git']} at {revision}", file=sys.stderr)
     print(source)

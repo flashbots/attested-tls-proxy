@@ -108,20 +108,12 @@ jobs:
           path: target/${{ matrix.configs.profile }}/attestation-provider-server
           if-no-files-found: error
 
-      - name: Upload proxy Debian package
+      - name: Upload combined Debian package
         uses: actions/upload-artifact@v4
         with:
           name: deb-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}
           path: target/debian/attested-tls-proxy_*.deb
           if-no-files-found: error
-
-      - name: Upload provider Debian package
-        uses: actions/upload-artifact@v4
-        with:
-          name: attestation-provider-server-deb-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}
-          path: target/debian/attestation-provider-server_*.deb
-          if-no-files-found: error
-
 
   draft-release:
     name: Draft release
@@ -142,7 +134,7 @@ jobs:
           name: attested-tls-proxy-${{ env.VERSION }}-x86_64-unknown-linux-gnu
           path: artifacts
 
-      - name: Download proxy Debian package artifact
+      - name: Download combined Debian package artifact
         uses: actions/download-artifact@v5
         with:
           name: deb-${{ env.VERSION }}-x86_64-unknown-linux-gnu
@@ -154,18 +146,18 @@ jobs:
           name: attestation-provider-server-${{ env.VERSION }}-x86_64-unknown-linux-gnu
           path: artifacts
 
-      - name: Download provider Debian package artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: attestation-provider-server-deb-${{ env.VERSION }}-x86_64-unknown-linux-gnu
-          path: artifacts
-
       - name: Record artifacts checksums
         working-directory: artifacts
         run: |
-          sha256sum attested-tls-proxy attested-tls-proxy_*.deb > sha256sums.txt
-          sha256sum attestation-provider-server attestation-provider-server_*.deb > attestation-provider-server-sha256sums.txt
-          cat sha256sums.txt attestation-provider-server-sha256sums.txt
+          # Match the asset filename GitHub publishes before recording checksums.
+          for package in attested-tls-proxy_*.deb; do
+            release_name="${package//[~]/.}"
+            if [ "$release_name" != "$package" ]; then
+              mv -- "$package" "$release_name"
+            fi
+          done
+          sha256sum attested-tls-proxy attestation-provider-server attested-tls-proxy_*.deb > sha256sums.txt
+          cat sha256sums.txt
 
       - name: Create release draft
         uses: softprops/action-gh-release@v2.0.5

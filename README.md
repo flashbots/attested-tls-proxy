@@ -137,10 +137,10 @@ for the directory ownership and permissions required by the service.
 This option replaces `--dev-dummy-dcap`; migrate existing HTTP provider URLs to
 the Unix socket service.
 
-GitHub releases include standalone binaries and Debian packages for both
-`attested-tls-proxy` and `attestation-provider-server`. `sha256sums.txt` covers the
-proxy binary and package; `attestation-provider-server-sha256sums.txt` covers the
-provider binary and package. The provider is built from the exact upstream
+GitHub releases include standalone `attested-tls-proxy` and
+`attestation-provider-server` binaries and one `attested-tls-proxy` Debian package
+containing both binaries. `sha256sums.txt` covers both binaries and the package.
+The provider is built from the exact upstream
 revision pinned by the `attestation` dependency, using upstream's `Cargo.lock`.
 It reports its upstream Git revision with `--version`.
 
@@ -150,14 +150,18 @@ build flags, and commit timestamp. To build the provider locally, run
 (Python 3.11 or newer is required for checkout and profile preparation). Make
 invokes Cargo directly for both binaries. To rebuild twice and compare artifact hashes,
 run `scripts/check-reproducibility.sh`; pass `provider-artifacts` to check only
-the provider binary and Debian package. Both packages use the same pinned
-cargo-deb version and commit timestamp, and preserve the compiled binary without
-rebuilding or stripping it. After building the provider locally, run
-`make build-attestation-provider-deb` to package it; set `VERSION` to use the same
-`1~<version>` package version as a release. The package installs the provider at
-`/usr/bin/attestation-provider-server` and declares its native library dependencies.
-It also includes the full license from the pinned upstream revision.
-`RUST_TOOLCHAIN`, `RUST_IMAGE`, `SOURCE_DATE`, and `VERSION`
+the provider binary. To build the combined package locally, run
+`make build build-attestation-provider` followed by `make build-deb`. Set
+`VERSION` to use the same `1~<version>` package version as a release.
+Packaging uses the pinned cargo-deb version and commit timestamp and preserves
+both compiled binaries without rebuilding or stripping them. The package installs
+both binaries in `/usr/bin`, declares their native library dependencies, and
+includes the provider's full upstream license and documentation under
+`/usr/share/doc/attested-tls-proxy/attestation-provider-server/`.
+It replaces the former standalone `attestation-provider-server` package on upgrade.
+The proxy and provider continue to run as separate processes with independently
+configured permissions.
+`RUST_TOOLCHAIN`, `RUST_IMAGE`, `FEATURES`, `SOURCE_DATE`, and `VERSION`
 can be set to reproduce a particular release's build inputs. The release workflow
 records the Rust version, immutable builder image digest, and timestamp in its job summary.
 
@@ -191,6 +195,8 @@ Following a successful attestation exchange, the client can make HTTP requests, 
 As described above, the server will inject measurement data into the request headers before forwarding them to the target service, and the client will inject measurement data into the response headers before forwarding them to the source client.
 
 The proxy client and proxy server support HTTP/2 and HTTP/1.1 over their attested-TLS channel, with HTTP/2 preferred. The HTTP protocol is combined with the attested-TLS protocol version in ALPN, producing `flashbots-ratls/1+h2` or `flashbots-ratls/1+http/1.1`. A negotiated `flashbots-ratls/1` value without an HTTP suffix falls back to HTTP/1.1.
+
+The proxy preserves an upstream HTTP `Date` and fills in a missing one from the current system clock so the header reflects backward clock steps immediately. Hyper still sets the `Date` on responses it sends before a request reaches a handler, such as HTTP/1 parse errors.
 
 ## Repository layout and development
 
