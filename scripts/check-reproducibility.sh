@@ -11,13 +11,14 @@ trap 'rm -rf "$repro_dir"' EXIT
 
 rust_toolchain=${RUST_TOOLCHAIN:-$(rustc --version | cut -d' ' -f2)}
 rust_image=${RUST_IMAGE:-$(docker buildx imagetools inspect "docker.io/rust:$rust_toolchain-trixie" --format '{{.Name}}@{{.Manifest.Digest}}')}
-features=${FEATURES-azure}
+features=${FEATURES:-}
 source_date=${SOURCE_DATE:-$(git log -1 --pretty=%ct)}
 
 for build in 1 2; do
     # Reuse the identical native toolchain while forcing fresh Cargo builds.
     docker build -f Dockerfile.build-deb \
         --no-cache-filter proxy-builder --no-cache-filter provider-builder \
+        --no-cache-filter package-builder \
         --target "$build_stage" \
         --build-arg "RUST_TOOLCHAIN=$rust_toolchain" \
         --build-arg "RUST_IMAGE=$rust_image" \
@@ -30,7 +31,7 @@ for build in 1 2; do
         cd "$repro_dir/$build"
         sha256sum reproducible/attestation-provider-server
         if [ "$build_stage" = artifacts ]; then
-            sha256sum reproducible/attested-tls-proxy debian/*.deb
+            sha256sum reproducible/attested-tls-proxy debian/attested-tls-proxy_*.deb
         fi
     ) > "$repro_dir/$build.sha256"
 done

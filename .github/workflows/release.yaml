@@ -21,14 +21,6 @@ on:
         description: "Build Binary"
         required: false
         type: boolean
-      features:
-        default: ''
-        description: "Additional binary compilation features (azure is always enabled)"
-        options:
-          - ''
-          - 'redact-sensitive'
-        required: false
-        type: choice
 
 jobs:
   extract-version:
@@ -56,7 +48,6 @@ jobs:
           echo "| \`GITHUB_REF\`      | \`${GITHUB_REF}\`      |" >> $GITHUB_STEP_SUMMARY
           echo "| \`GITHUB_SHA\`      | \`${GITHUB_SHA}\`      |" >> $GITHUB_STEP_SUMMARY
           echo "| \`VERSION\`         | \`${VERSION}\`         |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`FEATURES\`        | \`${{ format('azure{0}', github.event.inputs.features && format(' {0}', github.event.inputs.features) || '') }}\` |" >> $GITHUB_STEP_SUMMARY
 
   build-binary:
     name: Build binary
@@ -72,8 +63,6 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: warp-ubuntu-latest-x64-32x
             profile: reproducible
-        features:
-          - ${{ format('azure{0}', github.event.inputs.features && format(' {0}', github.event.inputs.features) || '') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -101,7 +90,6 @@ jobs:
           docker build \
             --build-arg "RUST_TOOLCHAIN=${RUST_TOOLCHAIN}" \
             --build-arg "RUST_IMAGE=${RUST_IMAGE}" \
-            --build-arg "FEATURES=${{ matrix.features }}" \
             --build-arg "VERSION=${{ needs.extract-version.outputs.VERSION }}" \
             --build-arg "SOURCE_DATE=${SOURCE_DATE}" \
             -f Dockerfile.build-deb -t atp:release \
@@ -110,22 +98,22 @@ jobs:
       - name: Upload attested-tls-proxy artifact
         uses: actions/upload-artifact@v4
         with:
-          name: attested-tls-proxy-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}${{ matrix.features && '-' }}${{ matrix.features }}
+          name: attested-tls-proxy-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}
           path: target/${{ matrix.configs.profile }}/attested-tls-proxy
 
       - name: Upload attestation-provider-server artifact
         uses: actions/upload-artifact@v4
         with:
-          name: attestation-provider-server-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}${{ matrix.features && '-' }}${{ matrix.features }}
+          name: attestation-provider-server-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}
           path: target/${{ matrix.configs.profile }}/attestation-provider-server
           if-no-files-found: error
 
-      - name: Upload *.deb package
+      - name: Upload combined Debian package
         uses: actions/upload-artifact@v4
         with:
-          name: deb-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}${{ matrix.features && '-' }}${{ matrix.features }}
-          path: target/debian/*.deb
-
+          name: deb-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target }}
+          path: target/debian/attested-tls-proxy_*.deb
+          if-no-files-found: error
 
   draft-release:
     name: Draft release
@@ -134,7 +122,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.extract-version.outputs.VERSION }}
-      BUILD_FEATURES: ${{ format('azure{0}', github.event.inputs.features && format(' {0}', github.event.inputs.features) || '') }}
     permissions:
       contents: write
     steps:
@@ -144,26 +131,32 @@ jobs:
       - name: Download attested-tls-proxy artifact
         uses: actions/download-artifact@v5
         with:
-          name: attested-tls-proxy-${{ env.VERSION }}-x86_64-unknown-linux-gnu-${{ env.BUILD_FEATURES }}
+          name: attested-tls-proxy-${{ env.VERSION }}-x86_64-unknown-linux-gnu
           path: artifacts
 
-      - name: Download deb package artifact
+      - name: Download combined Debian package artifact
         uses: actions/download-artifact@v5
         with:
-          name: deb-${{ env.VERSION }}-x86_64-unknown-linux-gnu-${{ env.BUILD_FEATURES }}
+          name: deb-${{ env.VERSION }}-x86_64-unknown-linux-gnu
           path: artifacts
 
       - name: Download attestation-provider-server artifact
         uses: actions/download-artifact@v5
         with:
-          name: attestation-provider-server-${{ env.VERSION }}-x86_64-unknown-linux-gnu-${{ env.BUILD_FEATURES }}
+          name: attestation-provider-server-${{ env.VERSION }}-x86_64-unknown-linux-gnu
           path: artifacts
 
       - name: Record artifacts checksums
         working-directory: artifacts
         run: |
-          find ./ || true
-          for file in *; do sha256sum "$file" >> sha256sums.txt; done;
+          # Match the asset filename GitHub publishes before recording checksums.
+          for package in attested-tls-proxy_*.deb; do
+            release_name="${package//[~]/.}"
+            if [ "$release_name" != "$package" ]; then
+              mv -- "$package" "$release_name"
+            fi
+          done
+          sha256sum attested-tls-proxy attestation-provider-server attested-tls-proxy_*.deb > sha256sums.txt
           cat sha256sums.txt
 
       - name: Create release draft

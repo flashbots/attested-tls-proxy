@@ -23,6 +23,7 @@ hyper-util = { workspace = true, features = ["tokio"] }
 http-body-util.workspace = true
 bytes.workspace = true
 http.workspace = true
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 serde_json.workspace = true
 hex = "0.4.3"
 serde = "1.0.228"
@@ -34,7 +35,7 @@ tracing-subscriber.workspace = true
 axum = "0.8.8"
 tower-http = { version = "0.6.7", features = ["fs"] }
 pin-project-lite = "0.2.16"
-pccs = { git = "https://github.com/flashbots/attested-tls", rev = "3dd81227d592a316537de6db9afb5b0a050f8f94" }
+pccs = { git = "https://github.com/flashbots/attested-tls", rev = "851f5ccf0b5057eb2b947f25dc8a286599adca8b" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
@@ -42,17 +43,14 @@ rcgen.workspace = true
 tempfile.workspace = true
 attested-tls = { path = "../attested-tls", features = ["test-helpers", "mock"] }
 
-[features]
-default = []
-
-# Adds support for Microsoft Azure attestation generation and verification
-azure = ["attested-tls/azure"]
-
 [package.metadata.deb]
 maintainer = "Flashbots Team <devops+ci@flashbots.net>"
 depends = "$auto"
 section = "network"
 priority = "optional"
+provides = "attestation-provider-server"
+conflicts = "attestation-provider-server"
+replaces = "attestation-provider-server"
 maintainer-scripts = "../../pkg/debian"
 assets = [
     [
@@ -62,8 +60,23 @@ assets = [
         "755",
     ],
     [
+        "target/release/attestation-provider-server",
+        "usr/bin/",
+        "755",
+    ],
+    [
         "../../LICENSE",
         "usr/share/doc/attested-tls-proxy/",
+        "644",
+    ],
+    [
+        "target/release/attestation-provider-docs/LICENSE",
+        "usr/share/doc/attested-tls-proxy/attestation-provider-server/LICENSE",
+        "644",
+    ],
+    [
+        "target/release/attestation-provider-docs/README.md",
+        "usr/share/doc/attested-tls-proxy/attestation-provider-server/README.md",
         "644",
     ],
 ]

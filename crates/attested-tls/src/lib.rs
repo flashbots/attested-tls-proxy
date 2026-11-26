@@ -169,22 +169,16 @@ impl AttestedTlsServer {
             let attestation_generator = self.attestation_generator.clone();
             self.quote_work
                 .run(move || attestation_generator.generate_attestation(input_data))
-                .await
-                .map_err(AttestedTlsError::from)??
-                .encode()
+                .await??
         };
 
-        // Write our attestation to the channel, with length prefix
-        let attestation_length_prefix = checked_length_prefix(&attestation)?;
-        tls_stream.write_all(&attestation_length_prefix).await?;
-        tls_stream.write_all(&attestation).await?;
+        write_attestation(&mut tls_stream, attestation).await?;
 
-        // Now read a length-prefixed attestation from the remote peer
-        // In the case of no client attestation this will be zero bytes
+        // Read the remote peer's length-prefixed attestation message.
         let buf = read_length_prefixed_attestation(&mut tls_stream).await?;
 
         let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
-        let remote_attestation_type = remote_attestation_message.attestation_type();
+        let remote_attestation_type = remote_attestation_message.attestation_type()?;
 
         // Validate every exchange, including policies that only accept no attestation,
         // before exposing the peer's attestation type to callers.
@@ -345,7 +339,7 @@ impl AttestedTlsClient {
         let buf = read_length_prefixed_attestation(&mut tls_stream).await?;
 
         let remote_attestation_message = AttestationExchangeMessage::decode(&mut &buf[..])?;
-        let remote_attestation_type = remote_attestation_message.attestation_type();
+        let remote_attestation_type = remote_attestation_message.attestation_type()?;
 
         // Verify the remote attestation against our accepted measurements
         let measurements = self
@@ -360,17 +354,12 @@ impl AttestedTlsClient {
             let attestation_generator = self.attestation_generator.clone();
             self.quote_work
                 .run(move || attestation_generator.generate_attestation(local_input_data))
-                .await
-                .map_err(AttestedTlsError::from)??
-                .encode()
+                .await??
         } else {
-            AttestationExchangeMessage::without_attestation().encode()
+            AttestationExchangeMessage::without_attestation()
         };
 
-        // Send our attestation (or zero bytes) prefixed with length
-        let attestation_length_prefix = checked_length_prefix(&attestation)?;
-        tls_stream.write_all(&attestation_length_prefix).await?;
-        tls_stream.write_all(&attestation).await?;
+        write_attestation(&mut tls_stream, attestation).await?;
 
         Ok((tls_stream, measurements, remote_attestation_type))
     }
@@ -536,6 +525,18 @@ fn validate_attestation_length(length: usize) -> Result<(), AttestedTlsError> {
     Ok(())
 }
 
+async fn write_attestation<IO: AsyncWrite + Unpin>(
+    io: &mut IO,
+    message: AttestationExchangeMessage,
+) -> Result<(), AttestedTlsError> {
+    // A provider may still return evidence for an unsupported platform.
+    message.attestation_type()?;
+    let encoded = message.encode();
+    io.write_all(&checked_length_prefix(&encoded)?).await?;
+    io.write_all(&encoded).await?;
+    Ok(())
+}
+
 async fn read_length_prefixed_attestation<IO>(io: &mut IO) -> Result<Vec<u8>, AttestedTlsError>
 where
     IO: AsyncRead + Unpin,
@@ -623,6 +624,26 @@ mod tests {
     use crate::test_helpers::{generate_certificate_chain, generate_tls_config};
     use attestation::{CachePolicy, measurements::MeasurementPolicy};
     use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn rejects_azure_evidence_before_sending_it() {
+        let mut platform = attestation::mock_platform_metadata(AttestationType::DcapTdx).unwrap();
+        platform.attestation_type = serde_json::from_str(r#""azure-tdx""#).unwrap();
+        let message = attestation::AttestationEvidence {
+            quote: vec![0],
+            platform,
+        }
+        .into();
+
+        let mut output = Vec::new();
+        assert!(matches!(
+            write_attestation(&mut output, message).await,
+            Err(AttestedTlsError::Attestation(
+                AttestationError::AttestationTypeNotSupported
+            ))
+        ));
+        assert!(output.is_empty());
+    }
 
     #[test]
     fn report_input_rejects_empty_and_malformed_certificate_chains() {

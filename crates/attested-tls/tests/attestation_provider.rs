@@ -48,7 +48,10 @@ fn provider_receives_each_binding_and_returns_assembled_evidence() {
 
     for input in [[42; 64], [73; 64]] {
         let message = generator.generate_attestation(input).unwrap();
-        assert_eq!(message.attestation_type(), AttestationType::DcapTdx);
+        assert_eq!(
+            message.attestation_type().unwrap(),
+            AttestationType::DcapTdx
+        );
         let evidence = message.attestation_evidence.unwrap();
         assert_eq!(evidence.quote, input);
         assert_eq!(

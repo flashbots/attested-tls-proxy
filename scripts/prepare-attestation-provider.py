@@ -4,6 +4,7 @@
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -16,6 +17,7 @@ def run(*args, cwd):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", default="")
     parser.add_argument("--profile", default="reproducible")
     args = parser.parse_args()
 
@@ -58,6 +60,13 @@ def main():
         f"[profile.{json.dumps(args.profile)}]\n"
         + "".join(f"{json.dumps(key)} = {json.dumps(value)}\n" for key, value in profile.items())
     )
+
+    # Stage the pinned provider's documentation for the combined Debian package.
+    profile_directory = "debug" if args.profile == "dev" else args.profile
+    documentation = root / "target" / args.target / profile_directory / "attestation-provider-docs"
+    documentation.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source / "LICENSE", documentation / "LICENSE")
+    shutil.copyfile(source / "crates/attestation-provider-server/README.md", documentation / "README.md")
 
     print(f"Prepared attestation-provider-server from {dependency['git']} at {revision}", file=sys.stderr)
     print(source)

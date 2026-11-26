@@ -13,7 +13,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y pkg-config libtss2-dev
+        sudo apt-get install -y pkg-config
 
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
@@ -39,10 +39,10 @@ jobs:
       run: cargo check -p attested-tls --locked
 
     - name: Run cargo clippy
-      run: cargo clippy --workspace --features azure,attested-tls/ws -- -D warnings
+      run: cargo clippy --workspace --features attested-tls/ws --locked -- -D warnings
 
     - name: Run cargo test
-      run: cargo test --workspace --features azure,attested-tls/ws --all-targets -- --test-threads=1
+      run: cargo test --workspace --features attested-tls/ws --all-targets --locked -- --test-threads=1
 
   dependency_checks:
     runs-on: ubuntu-latest
@@ -67,4 +67,4 @@ jobs:
 
     - name: Run cargo deny
       if: ${{ !cancelled() && steps.install_checks.outcome == 'success' }}
-      run: cargo deny --locked --features azure,attested-tls/ws check bans licenses sources
+      run: cargo deny --locked --features attested-tls/ws check bans licenses sources
