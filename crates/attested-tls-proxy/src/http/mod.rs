@@ -21,7 +21,7 @@ pub(crate) mod test_helpers;
 use ::http::{HeaderMap, HeaderName, HeaderValue};
 use bytes::Bytes;
 use http_body_util::{BodyExt, combinators::BoxBody};
-use hyper::{Response, service::service_fn};
+use hyper::{Response, rt::Executor, service::service_fn};
 use hyper_util::rt::TokioIo;
 use std::{
     net::SocketAddr,
@@ -32,9 +32,9 @@ use std::{
 use thiserror::Error;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use tokio_rustls::rustls::server::VerifierBuilderError;
-use tokio_rustls::rustls::{ClientConfig, ServerConfig, pki_types::CertificateDer};
+use tokio_rustls::rustls::{ClientConfig, pki_types::CertificateDer};
 use tracing::{debug, error, warn};
 
 use crate::http::http_version::{ALPN_H2, ALPN_HTTP11, HttpConnection, HttpSender, HttpVersion};
@@ -120,10 +120,15 @@ pub struct ProxyServer {
     attested_tls_server: AttestedTlsServer,
     /// The underlying TCP listener
     listener: Arc<TcpListener>,
-    /// The address/hostname of the target service we are proxying to
-    target: String,
-    /// Normalized TCP destination; preserve the original target for the Host header.
-    target_addr: String,
+    target: ForwardTarget,
+}
+
+#[derive(Clone)]
+struct ForwardTarget {
+    /// The original target for the Host header.
+    host: String,
+    /// The normalized TCP destination.
+    addr: String,
 }
 
 impl ProxyServer {
@@ -133,42 +138,34 @@ impl ProxyServer {
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
-        client_auth: bool,
+        client_auth: impl Into<tls::ClientAuth>,
     ) -> Result<Self, ProxyError> {
-        let target_addr = normalize_target(&target, None)?;
-        let mut server_config = tls::server_config(&cert_and_key, client_auth)?;
-        ensure_proxy_alpn_protocols(&mut server_config.alpn_protocols);
-
-        let attested_tls_server = AttestedTlsServer::new_with_tls_config(
+        let config = tls::ServerTlsConfig::new(&cert_and_key, client_auth)?;
+        Self::new_with_tls_config(
             cert_and_key.cert_chain,
-            server_config,
+            config,
+            local,
+            target,
             attestation_generator,
             attestation_verifier,
-        )?;
-
-        let listener = TcpListener::bind(local).await?;
-
-        Ok(Self {
-            attested_tls_server,
-            listener: listener.into(),
-            target,
-            target_addr,
-        })
+        )
+        .await
     }
 
     /// Start with preconfigured TLS
     pub async fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
-        mut server_config: ServerConfig,
+        server_config: impl Into<tls::ServerTlsConfig>,
         local: impl ToSocketAddrs,
         target: String,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, ProxyError> {
         let target_addr = normalize_target(&target, None)?;
-        ensure_proxy_alpn_protocols(&mut server_config.alpn_protocols);
+        let mut server_config = server_config.into();
+        ensure_proxy_alpn_protocols(&mut server_config.config.alpn_protocols);
 
-        let attested_tls_server = AttestedTlsServer::new_with_tls_config(
+        let attested_tls_server = AttestedTlsServer::new_with_server_config(
             cert_chain,
             server_config,
             attestation_generator,
@@ -180,8 +177,10 @@ impl ProxyServer {
         Ok(Self {
             attested_tls_server,
             listener: listener.into(),
-            target,
-            target_addr,
+            target: ForwardTarget {
+                host: target,
+                addr: target_addr,
+            },
         })
     }
 
@@ -190,7 +189,6 @@ impl ProxyServer {
     /// Returns the handle for the task handling the connection
     pub async fn accept(&self) -> Result<tokio::task::JoinHandle<()>, ProxyError> {
         let target = self.target.clone();
-        let target_addr = self.target_addr.clone();
         let (inbound, client_addr) = self.listener.accept().await?;
         let attested_tls_server = self.attested_tls_server.clone();
 
@@ -202,13 +200,20 @@ impl ProxyServer {
             .await
             {
                 Ok(Ok((tls_stream, measurements, attestation_type))) => {
+                    let peer = match attested_tls_server.allowlisted_peer(tls_stream.get_ref().1) {
+                        Ok(peer) => peer,
+                        Err(err) => {
+                            warn!("Invalid client key: {err}");
+                            return;
+                        }
+                    };
                     if let Err(err) = Self::handle_connection(
                         tls_stream,
                         measurements,
                         attestation_type,
                         target,
-                        target_addr,
                         client_addr,
+                        peer,
                     )
                     .await
                     {
@@ -237,22 +242,32 @@ impl ProxyServer {
         tls_stream: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
         measurements: Option<MultiMeasurements>,
         remote_attestation_type: AttestationType,
-        target: String,
-        target_addr: String,
+        target: ForwardTarget,
         client_addr: SocketAddr,
+        peer: Option<tls::AllowlistedPeer>,
     ) -> Result<(), ProxyError> {
         debug!("[proxy-server] accepted connection with measurements: {measurements:?}");
 
         let http_version = HttpVersion::from_negotiated_protocol_server(&tls_stream);
 
+        let monitor = crate::wait_for_revocation(peer.clone());
+        let (close_connection, mut revoked) = watch::channel(());
+        let executor = TokioExecutor {
+            revoked: peer.as_ref().map(|_| revoked.clone()),
+        };
+        let request_tasks = executor.clone();
+        let deny_request = close_connection.clone();
         // Setup a request handler
         let service = service_fn(move |mut req| {
             debug!("[proxy-server] Handling request {req:?}");
             let headers = req.headers_mut();
 
             // Add or update the HOST header
-            let old_value = update_header(headers, &::http::header::HOST, &target);
-            debug!("Updating Host header - old value: {old_value:?} new value: {target}",);
+            let old_value = update_header(headers, &::http::header::HOST, &target.host);
+            debug!(
+                "Updating Host header - old value: {old_value:?} new value: {}",
+                target.host
+            );
 
             // Add the x-real-ip header
             let client_ip = client_addr.ip().to_string();
@@ -291,9 +306,21 @@ impl ProxyServer {
                 remote_attestation_type.as_str(),
             );
 
-            let target = target_addr.clone();
+            let target = target.addr.clone();
+            let peer = peer.clone();
+            let deny_request = deny_request.clone();
+            let request_tasks = request_tasks.clone();
             async move {
-                let response = match Self::handle_http_request(req, target).await {
+                if let Some(peer) = peer
+                    && !peer.is_allowed().await
+                {
+                    deny_request.send_replace(());
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "client key revoked",
+                    ));
+                }
+                let response = match Self::handle_http_request(req, target, &request_tasks).await {
                     Ok(res) => {
                         debug!("[proxy-server] Responding {res:?}");
                         res
@@ -305,7 +332,7 @@ impl ProxyServer {
                         resp
                     }
                 };
-                Ok::<_, hyper::Error>(with_date(response, SystemTime::now))
+                Ok(with_date(response, SystemTime::now))
             }
         });
 
@@ -313,22 +340,30 @@ impl ProxyServer {
         let io = TokioIo::new(tls_stream);
 
         // Setup an HTTP server
-        match http_version {
-            HttpVersion::Http2 => {
-                hyper::server::conn::http2::Builder::new(TokioExecutor)
-                    .timer(hyper_util::rt::tokio::TokioTimer::new())
-                    .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
-                    .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
-                    .serve_connection(io, service)
-                    .await?;
+        let serve = async {
+            match http_version {
+                HttpVersion::Http2 => {
+                    hyper::server::conn::http2::Builder::new(executor)
+                        .timer(hyper_util::rt::tokio::TokioTimer::new())
+                        .keep_alive_interval(Some(Duration::from_secs(KEEP_ALIVE_INTERVAL)))
+                        .keep_alive_timeout(Duration::from_secs(KEEP_ALIVE_TIMEOUT))
+                        .serve_connection(io, service)
+                        .await
+                }
+                HttpVersion::Http1 => {
+                    hyper::server::conn::http1::Builder::new()
+                        .timer(hyper_util::rt::tokio::TokioTimer::new())
+                        .keep_alive(true)
+                        .serve_connection(io, service)
+                        .await
+                }
             }
-            HttpVersion::Http1 => {
-                hyper::server::conn::http1::Builder::new()
-                    .timer(hyper_util::rt::tokio::TokioTimer::new())
-                    .keep_alive(true)
-                    .serve_connection(io, service)
-                    .await?;
-            }
+        };
+        tokio::select! {
+            biased;
+            _ = revoked.changed() => {},
+            _ = monitor => { close_connection.send_replace(()); }
+            result = serve => result?,
         }
 
         Ok(())
@@ -338,6 +373,7 @@ impl ProxyServer {
     async fn handle_http_request(
         req: hyper::Request<hyper::body::Incoming>,
         target: String,
+        executor: &TokioExecutor,
     ) -> Result<Response<BoxBody<bytes::Bytes, hyper::Error>>, ProxyError> {
         // Connect to the target server
         let outbound = TcpStream::connect(target).await?;
@@ -346,8 +382,8 @@ impl ProxyServer {
             .handshake::<_, hyper::body::Incoming>(outbound_io)
             .await?;
 
-        // Drive the connection
-        tokio::spawn(async move {
+        // Revocation also closes the backend socket during a streaming upload or response.
+        executor.execute(async move {
             if let Err(e) = conn.await {
                 warn!("Client connection error: {e}");
             }
@@ -809,9 +845,11 @@ impl From<mpsc::error::SendError<PendingRequest>> for ProxyError {
     }
 }
 
-/// An Executor for hyper that uses the tokio runtime
-#[derive(Clone)]
-pub(crate) struct TokioExecutor;
+/// Stop Hyper's spawned stream and forwarding tasks when their connection is revoked.
+#[derive(Clone, Default)]
+pub(crate) struct TokioExecutor {
+    revoked: Option<watch::Receiver<()>>,
+}
 
 // Implement the `hyper::rt::Executor` trait for `TokioExecutor` so that it can be used to spawn
 // tasks in the hyper runtime.
@@ -821,7 +859,17 @@ where
     F::Output: Send + 'static,
 {
     fn execute(&self, fut: F) {
-        tokio::task::spawn(fut);
+        if let Some(mut revoked) = self.revoked.clone() {
+            tokio::spawn(async move {
+                tokio::select! {
+                    biased;
+                    _ = revoked.changed() => {},
+                    _ = fut => {},
+                }
+            });
+        } else {
+            tokio::spawn(fut);
+        }
     }
 }
 
@@ -838,6 +886,7 @@ mod tests {
         example_http_service, generate_certificate_chain, generate_tls_config,
         generate_tls_config_with_client_auth, init_tracing, mock_dcap_measurements,
     };
+    use tokio_rustls::rustls::ServerConfig;
 
     #[test]
     fn generated_dates_follow_a_backward_clock_step() {
@@ -870,6 +919,34 @@ mod tests {
 
     #[tokio::test]
     async fn http_proxy_default_constructors_work() {
+        check_http_proxy(false, None).await;
+    }
+
+    #[tokio::test]
+    async fn http_proxy_accepts_listed_client_key() {
+        use tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer;
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
+        let cert = rcgen::CertificateParams::default()
+            .self_signed(&key)
+            .unwrap();
+        std::fs::write(file.path(), hex::encode(key.public_key_raw())).unwrap();
+        let auth = tls::ClientAuth::KeyAllowlist {
+            path: file.path().to_owned(),
+            open_when_missing: false,
+        };
+        let identity = TlsCertAndKey {
+            cert_chain: vec![cert.der().clone()],
+            key: PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+        };
+        check_http_proxy(auth, Some(identity)).await;
+    }
+
+    async fn check_http_proxy(
+        auth: impl Into<tls::ClientAuth>,
+        client_identity: Option<TlsCertAndKey>,
+    ) {
         let target_addr = example_http_service().await;
 
         let (cert_chain, private_key) = generate_certificate_chain("127.0.0.1".parse().unwrap());
@@ -884,7 +961,7 @@ mod tests {
             target_addr.to_string(),
             AttestationGenerator::new(AttestationType::DcapTdx, None).unwrap(),
             AttestationVerifier::expect_none(),
-            false,
+            auth,
         )
         .await
         .unwrap();
@@ -896,7 +973,7 @@ mod tests {
         });
 
         let proxy_client = ProxyClient::new(
-            None,
+            client_identity,
             "127.0.0.1:0".to_string(),
             proxy_addr.to_string(),
             AttestationGenerator::with_no_attestation(),
@@ -1634,8 +1711,10 @@ mod tests {
         let proxy_server = ProxyServer {
             attested_tls_server,
             listener: listener.into(),
-            target: target_addr.to_string(),
-            target_addr: target_addr.to_string(),
+            target: ForwardTarget {
+                host: target_addr.to_string(),
+                addr: target_addr.to_string(),
+            },
         };
 
         let proxy_addr = proxy_server.local_addr().unwrap();

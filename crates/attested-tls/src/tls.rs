@@ -1,5 +1,10 @@
 //! TLS 1.3 configuration helpers for attested TLS.
-use std::{net::IpAddr, sync::Arc};
+mod client_key_allowlist;
+
+use std::{net::IpAddr, path::PathBuf, sync::Arc};
+
+pub use client_key_allowlist::AllowlistedPeer;
+pub(crate) use client_key_allowlist::ClientKeyAllowlist;
 
 use crate::self_signed::{SkipServerVerification, generate_self_signed_cert};
 use crate::{AttestedTlsError, TlsCertAndKey};
@@ -39,26 +44,91 @@ pub fn client_config(
     })
 }
 
-/// Build a TLS 1.3 server configuration. Optional client certificate authentication
-/// uses public roots. For private client CAs, supply a custom ServerConfig to
-/// [`crate::AttestedTlsServer::new_with_tls_config`].
+/// How a TLS server authenticates clients during the handshake.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ClientAuth {
+    None,
+    WebPki,
+    KeyAllowlist {
+        path: PathBuf,
+        open_when_missing: bool,
+    },
+}
+
+impl From<bool> for ClientAuth {
+    fn from(require_web_pki: bool) -> Self {
+        if require_web_pki {
+            Self::WebPki
+        } else {
+            Self::None
+        }
+    }
+}
+
+/// TLS settings with the policy used to reauthorize established connections.
+pub struct ServerTlsConfig {
+    pub config: ServerConfig,
+    pub(crate) allowlist: Option<Arc<ClientKeyAllowlist>>,
+}
+
+impl From<ServerConfig> for ServerTlsConfig {
+    fn from(config: ServerConfig) -> Self {
+        Self {
+            config,
+            allowlist: None,
+        }
+    }
+}
+
+impl ServerTlsConfig {
+    pub fn new(
+        identity: &TlsCertAndKey,
+        client_auth: impl Into<ClientAuth>,
+    ) -> Result<Self, AttestedTlsError> {
+        let builder = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13]);
+        let auth = client_auth.into();
+        let mut allowlist = None;
+        let builder = match auth {
+            ClientAuth::None => builder.with_no_client_auth(),
+            ClientAuth::WebPki => {
+                let roots =
+                    RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+                builder.with_client_cert_verifier(
+                    WebPkiClientVerifier::builder(Arc::new(roots)).build()?,
+                )
+            }
+            ClientAuth::KeyAllowlist {
+                path,
+                open_when_missing,
+            } => {
+                let policy = Arc::new(ClientKeyAllowlist::new(path, open_when_missing));
+                allowlist = Some(policy.clone());
+                builder.with_client_cert_verifier(policy)
+            }
+        };
+        let mut config =
+            builder.with_single_cert(identity.cert_chain.clone(), identity.key.clone_key())?;
+        if allowlist.is_some() {
+            // Resumed sessions would skip the allowlist check on subsequent connections.
+            config.send_tls13_tickets = 0;
+        }
+        Ok(Self { config, allowlist })
+    }
+}
+
+/// Build a TLS 1.3 server config with optional Web PKI client authentication.
+/// Use [`ServerTlsConfig::new`] for a live key allowlist.
 pub fn server_config(
     identity: &TlsCertAndKey,
     client_auth: bool,
 ) -> Result<ServerConfig, AttestedTlsError> {
-    let builder = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13]);
-    let builder = if client_auth {
-        let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        builder.with_client_cert_verifier(WebPkiClientVerifier::builder(Arc::new(roots)).build()?)
-    } else {
-        builder.with_no_client_auth()
-    };
-    Ok(builder.with_single_cert(identity.cert_chain.clone(), identity.key.clone_key())?)
+    Ok(ServerTlsConfig::new(identity, client_auth)?.config)
 }
 
 /// Generate a self-signed certificate for the given IP address and build a TLS 1.3
 /// server configuration. Returns the configuration and its certificate chain.
-/// Client authentication uses the same public roots as [`server_config`].
+/// Client authentication uses the policy passed to [`server_config`].
 pub fn self_signed_server_config(
     ip_address: IpAddr,
     client_auth: bool,

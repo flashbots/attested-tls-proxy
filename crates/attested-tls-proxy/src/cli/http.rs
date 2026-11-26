@@ -163,10 +163,8 @@ pub(super) struct ServerArgs {
     /// Additional CA certificate to verify against (PEM) Defaults to no additional TLS certs.
     #[arg(long, env = "TLS_CERTIFICATE_PATH")]
     tls_certificate_path: Option<PathBuf>,
-    /// Whether to use client authentication. If the client is running in a CVM this must be
-    /// enabled.
-    #[arg(long)]
-    client_auth: bool,
+    #[command(flatten)]
+    client_auth: super::ClientAuthArgs,
     /// Absolute Unix socket path for attestation generation. Uses the provider's
     /// attestation type by default; --server-attestation-type none disables it.
     #[arg(long, env = "ATTESTATION_PROVIDER_SOCKET")]
@@ -281,6 +279,8 @@ impl GetTlsCertArgs {
 
 #[derive(Args, Debug, Clone)]
 pub(super) struct AttestedFileServerArgs {
+    #[command(flatten)]
+    client_auth: super::ClientAuthArgs,
     /// Filesystem path to statically serve
     path_to_serve: PathBuf,
     /// Socket address to listen on
@@ -305,6 +305,7 @@ pub(super) struct AttestedFileServerArgs {
 impl AttestedFileServerArgs {
     pub(super) async fn run(self, attestation_verifier: AttestationVerifier) -> anyhow::Result<()> {
         let Self {
+            client_auth,
             path_to_serve,
             listen_addr,
             server_attestation_type,
@@ -332,7 +333,7 @@ impl AttestedFileServerArgs {
             listen_addr,
             attestation_generator,
             attestation_verifier,
-            false,
+            client_auth,
         )
         .await?;
         Ok(())

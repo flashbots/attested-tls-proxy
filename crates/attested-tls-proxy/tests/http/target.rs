@@ -49,8 +49,7 @@ async fn check_target(listen: &str, host: &str) {
     .await
     .unwrap();
     let address = server.local_addr().unwrap();
-    let proxy = tokio::spawn(async move { server.accept().await.unwrap() });
-    timeout(Duration::from_secs(5), async {
+    let request = timeout(Duration::from_secs(5), async {
         let response = attested_get(
             format!("{host}:{}", address.port()),
             "/",
@@ -63,11 +62,11 @@ async fn check_target(listen: &str, host: &str) {
         assert_eq!(response.headers()[http::header::DATE], DATE);
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.text().await.unwrap(), target);
-    })
-    .await
-    .unwrap();
-    proxy.await.unwrap().abort();
+    });
+    let (handler, result) = tokio::join!(server.accept(), request);
+    handler.unwrap().abort();
     backend.abort();
+    result.unwrap();
 }
 
 #[tokio::test]

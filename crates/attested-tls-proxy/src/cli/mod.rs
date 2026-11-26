@@ -4,7 +4,9 @@ mod pem;
 mod tcp_tunnel;
 
 use anyhow::ensure;
-use clap::{Parser, Subcommand, builder::TypedValueParser};
+use attested_tls::tls::ClientAuth;
+use clap::{Args, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
+use std::path::PathBuf;
 
 const GIT_REV: &str = match option_env!("GIT_REV") {
     Some(rev) => rev,
@@ -44,6 +46,46 @@ pub(crate) struct Cli {
     /// Log DCAP quotes to folder `quotes/`
     #[arg(long, global = true)]
     log_dcap_quote: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ClientAuthArgs {
+    /// Require a client TLS certificate authenticated against public roots.
+    /// If the client is running in a CVM this must be enabled.
+    #[arg(long, conflicts_with = "client_key_allowlist")]
+    client_auth: bool,
+    /// File of permitted Ed25519 client public keys, read at each TLS handshake
+    #[arg(long, value_name = "FILE")]
+    client_key_allowlist: Option<PathBuf>,
+    /// Missing file policy before the allowlist path is first seen. Later removal always closes access
+    #[arg(
+        long,
+        value_enum,
+        default_value = "closed",
+        requires = "client_key_allowlist"
+    )]
+    client_key_allowlist_when_missing: WhenMissing,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum WhenMissing {
+    Open,
+    Closed,
+}
+
+impl From<ClientAuthArgs> for ClientAuth {
+    fn from(args: ClientAuthArgs) -> Self {
+        match args.client_key_allowlist {
+            Some(path) => Self::KeyAllowlist {
+                path,
+                open_when_missing: matches!(
+                    args.client_key_allowlist_when_missing,
+                    WhenMissing::Open
+                ),
+            },
+            None => args.client_auth.into(),
+        }
+    }
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -92,6 +134,53 @@ impl Cli {
             CliCommand::GetTlsCert(args) => args.run(verifier).await,
             CliCommand::AttestedFileServer(args) => args.run(verifier).await,
             CliCommand::AttestedGet(args) => args.run(verifier).await,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_commands_reject_removed_date_flag() {
+        for mode in ["client", "server", "attested-get", "attested-file-server"] {
+            let err =
+                Cli::try_parse_from(["proxy", mode, "target", "--no-date-header"]).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn server_client_auth_policies_conflict() {
+        for mode in ["server", "tcp-tunnel-server", "attested-file-server"] {
+            let args = [
+                "proxy",
+                mode,
+                "target",
+                "--tls-private-key-path",
+                "key",
+                "--tls-certificate-path",
+                "cert",
+                "--client-key-allowlist",
+                "clients",
+            ];
+            assert!(Cli::try_parse_from(args).is_ok());
+            for mode in ["open", "closed"] {
+                assert!(
+                    Cli::try_parse_from(
+                        args.into_iter()
+                            .chain(["--client-key-allowlist-when-missing", mode])
+                    )
+                    .is_ok()
+                );
+            }
+            let err = Cli::try_parse_from(args.into_iter().chain(["--client-auth"])).unwrap_err();
+            assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
         }
     }
 }

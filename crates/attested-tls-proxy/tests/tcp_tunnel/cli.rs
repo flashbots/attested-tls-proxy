@@ -165,10 +165,38 @@ async fn terminate(child: &mut Child) {
 
 #[tokio::test]
 async fn cli_round_trip_and_sigterm_shutdown() {
+    round_trip(None).await;
+}
+
+#[tokio::test]
+async fn anonymous_tunnel_closes_when_allowlist_appears() {
+    round_trip(Some(false)).await;
+}
+
+#[tokio::test]
+async fn authenticated_tunnel_closes_when_listed_key_is_removed() {
+    round_trip(Some(true)).await;
+}
+
+async fn round_trip(listed: Option<bool>) {
     bounded(async {
+        let dir = tempfile::tempdir().unwrap();
+        let keys_path = dir.path().join("clients");
+        let cert_path = dir.path().join("client.crt");
+        let key_path = dir.path().join("client.key");
+
+        if listed == Some(true) {
+            let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
+            let cert = rcgen::CertificateParams::default()
+                .self_signed(&key)
+                .unwrap();
+            std::fs::write(&keys_path, hex::encode(key.public_key_raw())).unwrap();
+            std::fs::write(&cert_path, cert.pem()).unwrap();
+            std::fs::write(&key_path, key.serialize_pem()).unwrap();
+        }
         let target = listener().await;
         let target_addr = target.local_addr().unwrap().to_string();
-        let (mut server, server_addr) = start(&[
+        let mut server_args = vec![
             "tcp-tunnel-server",
             &target_addr,
             "--listen-addr",
@@ -180,11 +208,20 @@ async fn cli_round_trip_and_sigterm_shutdown() {
             "--shutdown-grace-secs",
             "0",
             "--log-json",
-        ])
-        .await;
-        let (mut client, client_addr) = start(&[
+        ];
+        if listed.is_some() {
+            server_args.extend([
+                "--client-key-allowlist",
+                keys_path.to_str().unwrap(),
+                "--client-key-allowlist-when-missing",
+                "open",
+            ]);
+        }
+        let (mut server, server_addr) = start(&server_args).await;
+        let server_addr = server_addr.to_string();
+        let mut client_args = vec![
             "tcp-tunnel-client",
-            &server_addr.to_string(),
+            &server_addr,
             "--client-attestation-type",
             "none",
             "--allowed-remote-attestation-type",
@@ -193,8 +230,16 @@ async fn cli_round_trip_and_sigterm_shutdown() {
             "--shutdown-grace-secs",
             "0",
             "--log-json",
-        ])
-        .await;
+        ];
+        if listed == Some(true) {
+            client_args.extend([
+                "--tls-certificate-path",
+                cert_path.to_str().unwrap(),
+                "--tls-private-key-path",
+                key_path.to_str().unwrap(),
+            ]);
+        }
+        let (mut client, client_addr) = start(&client_args).await;
         assert!(client_addr.ip().is_loopback());
         let mut source = TcpStream::connect(client_addr).await.unwrap();
         let (mut backend, _) = target.accept().await.unwrap();
@@ -204,6 +249,16 @@ async fn cli_round_trip_and_sigterm_shutdown() {
         backend.write_all(&bytes).await.unwrap();
         source.read_exact(&mut bytes).await.unwrap();
         assert_eq!(&bytes, b"cli smoke test");
+        if listed.is_some() {
+            let replacement = dir.path().join("new");
+            std::fs::write(&replacement, "# no listed keys").unwrap();
+            std::fs::rename(replacement, &keys_path).unwrap();
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(6), source.read(&mut [0; 1]))
+                    .await
+                    .expect("tunnel survived its next allowlist check");
+            assert!(matches!(result, Ok(0) | Err(_)));
+        }
         terminate(&mut server).await;
         assert!(matches!(source.read(&mut [0; 1]).await, Ok(0) | Err(_)));
         terminate(&mut client).await;

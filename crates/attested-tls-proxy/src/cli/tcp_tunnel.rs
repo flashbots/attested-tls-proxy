@@ -48,9 +48,8 @@ pub(super) struct ServerArgs {
     /// Set none explicitly to run without local attestation.
     #[arg(long, env = "SERVER_ATTESTATION_TYPE")]
     server_attestation_type: Option<String>,
-    /// Require a client TLS certificate authenticated against public roots
-    #[arg(long)]
-    client_auth: bool,
+    #[command(flatten)]
+    client_auth: super::ClientAuthArgs,
 }
 
 #[derive(Debug, Clone, Args)]

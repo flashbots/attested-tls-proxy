@@ -2,6 +2,7 @@
 use crate::http::{
     AttestationGenerator, AttestationVerifier, ProxyError, ProxyServer, TlsCertAndKey,
 };
+use attested_tls::tls;
 use std::{net::SocketAddr, path::PathBuf};
 use tokio::net::ToSocketAddrs;
 use tower_http::services::ServeDir;
@@ -13,7 +14,7 @@ pub async fn attested_file_server(
     listen_addr: impl ToSocketAddrs,
     attestation_generator: AttestationGenerator,
     attestation_verifier: AttestationVerifier,
-    client_auth: bool,
+    client_auth: impl Into<tls::ClientAuth>,
 ) -> Result<(), ProxyError> {
     let target_addr = static_file_server(path_to_serve).await?;
 

@@ -126,7 +126,7 @@ async fn sender_for_test(http2: bool) -> (crate::http::http_version::HttpSender,
     });
     let sender = if http2 {
         tasks.spawn(async move {
-            let _ = hyper::server::conn::http2::Builder::new(crate::http::TokioExecutor)
+            let _ = hyper::server::conn::http2::Builder::new(crate::http::TokioExecutor::default())
                 .serve_connection(TokioIo::new(server), service)
                 .await;
         });

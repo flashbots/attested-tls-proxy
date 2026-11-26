@@ -19,7 +19,7 @@ anyhow.workspace = true
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
 hyper = { workspace = true, features = ["server", "http2"] }
 h2.workspace = true
-hyper-util = { workspace = true, features = ["tokio"] }
+hyper-util = { workspace = true, features = ["tokio", "server-auto", "service"] }
 http-body-util.workspace = true
 bytes.workspace = true
 http.workspace = true

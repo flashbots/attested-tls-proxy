@@ -22,7 +22,7 @@ use tokio::{
     sync::Semaphore,
     task::JoinSet,
 };
-use tokio_rustls::rustls::{ClientConfig, ServerConfig, pki_types::CertificateDer};
+use tokio_rustls::rustls::{ClientConfig, pki_types::CertificateDer};
 use tracing::Instrument;
 
 const APPLICATION_PROTOCOL: &[u8] = b"tcp-tunnel";
@@ -160,10 +160,10 @@ impl TunnelServer {
         identity: TlsCertAndKey,
         generator: AttestationGenerator,
         verifier: AttestationVerifier,
-        client_auth: bool,
+        client_auth: impl Into<tls::ClientAuth>,
         options: TunnelOptions,
     ) -> Result<Self, TunnelError> {
-        let config = tls::server_config(&identity, client_auth)?;
+        let config = tls::ServerTlsConfig::new(&identity, client_auth)?;
         Self::new_with_tls_config(
             listen,
             target,
@@ -181,15 +181,16 @@ impl TunnelServer {
     pub async fn new_with_tls_config(
         listen: impl ToSocketAddrs,
         target: String,
-        mut config: ServerConfig,
+        config: impl Into<tls::ServerTlsConfig>,
         generator: AttestationGenerator,
         verifier: AttestationVerifier,
         cert_chain: Vec<CertificateDer<'static>>,
         options: TunnelOptions,
     ) -> Result<Self, TunnelError> {
-        config.alpn_protocols = vec![APPLICATION_PROTOCOL.to_vec()];
+        let mut config = config.into();
+        config.config.alpn_protocols = vec![APPLICATION_PROTOCOL.to_vec()];
         let inner =
-            AttestedTlsServer::new_with_tls_config(cert_chain, config, generator, verifier)?;
+            AttestedTlsServer::new_with_server_config(cert_chain, config, generator, verifier)?;
         Ok(Self(
             Tunnel::bind(
                 listen,
@@ -226,7 +227,14 @@ impl Endpoint {
         &self,
         inbound: TcpStream,
         target: &str,
-    ) -> Result<(TcpStream, tokio_rustls::TlsStream<TcpStream>), TunnelError> {
+    ) -> Result<
+        (
+            TcpStream,
+            tokio_rustls::TlsStream<TcpStream>,
+            Option<tls::AllowlistedPeer>,
+        ),
+        TunnelError,
+    > {
         // Disable Nagle's algorithm to reduce latency
         inbound
             .set_nodelay(true)
@@ -235,7 +243,7 @@ impl Endpoint {
         match self {
             Self::Client(client) => {
                 let stream = connect_upstream(client, target).await?;
-                Ok((inbound, stream.into()))
+                Ok((inbound, stream.into(), None))
             }
             Self::Server(server) => {
                 // Do TLS handshake and attestation exchange on inbound connection
@@ -243,6 +251,10 @@ impl Endpoint {
 
                 // Ensure correct negotiated application protocol
                 require_tunnel_protocol(stream.get_ref().1.alpn_protocol())?;
+
+                let peer = server
+                    .allowlisted_peer(stream.get_ref().1)
+                    .map_err(AttestedTlsError::from)?;
 
                 // Open connection to target service
                 let target = TcpStream::connect(target)
@@ -253,7 +265,7 @@ impl Endpoint {
                     .set_nodelay(true)
                     .map_err(io_error("configure target TCP"))?;
 
-                Ok((target, stream.into()))
+                Ok((target, stream.into(), peer))
             }
         }
     }
@@ -379,13 +391,21 @@ impl Tunnel {
                     tasks.spawn(async move {
                         let _permit = permit;
                         let result = async {
-                            let (mut local, mut remote) = tokio::time::timeout(
+                            let (mut local, mut remote, peer) = tokio::time::timeout(
                                 options.setup_timeout, endpoint.setup(inbound, &target),
                             ).await.map_err(|_| TunnelError::SetupTimeout)??;
                             tracing::debug!("Tunnel established");
 
-                            let (sent, received) = tokio::io::copy_bidirectional(&mut local, &mut remote)
-                                .await.map_err(io_error("forwarding"))?;
+                            let forward = tokio::io::copy_bidirectional(&mut local, &mut remote);
+                            let result = tokio::select! {
+                                biased;
+                                _ = crate::wait_for_revocation(peer) => {
+                                    tracing::info!("Closing tunnel after client key revocation");
+                                    return Ok(());
+                                }
+                                result = forward => result,
+                            };
+                            let (sent, received) = result.map_err(io_error("forwarding"))?;
 
                             tracing::debug!(sent, received, "Tunnel closed");
                             Ok::<(), TunnelError>(())

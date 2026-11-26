@@ -10,6 +10,8 @@ keywords = ["attested-TLS", "CVM", "TDX"]
 [dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-rustls.workspace = true
+ed25519-dalek = { version = "2.2.0", default-features = false }
+hex = "0.4.3"
 sha2 = "0.10.9"
 x509-parser = { workspace = true, features = ["verify"] }
 thiserror.workspace = true
@@ -36,6 +38,9 @@ http-body-util = { workspace = true, optional = true }
 
 # Used for self-signed certificates and test helpers
 rcgen.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 bytes.workspace = true

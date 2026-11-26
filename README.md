@@ -165,6 +165,45 @@ configured permissions.
 can be set to reproduce a particular release's build inputs. The release workflow
 records the Rust version, immutable builder image digest, and timestamp in its job summary.
 
+### Client key allowlist
+
+On `server`, `tcp-tunnel-server`, and `attested-file-server`, use
+`--client-key-allowlist <FILE>` to authenticate clients by Ed25519 public key
+during the TLS 1.3 handshake. This option is mutually exclusive with
+`--client-auth`, which verifies client certificates against public CA roots.
+
+Use a regular file of at most 64 KiB. Put one raw 32-byte Ed25519 public key
+per line, encoded as exactly 64 lowercase hex digits. Blank lines and
+whole-line `#` comments are allowed. An empty list, a malformed line anywhere
+in the file, or a read error denies all clients. **Replace the file atomically** by writing
+the complete new list to a temporary file in the same directory and renaming it
+over the configured path.
+
+While the file exists, a client must present a certificate containing a listed
+key and prove possession of its private key. On `client` or `tcp-tunnel-client`,
+pass the PEM private key with `--tls-private-key-path` and a PEM self-signed
+certificate over that same Ed25519 key with `--tls-certificate-path`.
+
+With `--client-key-allowlist-when-missing closed` (the default), a missing file
+refuses every handshake. With `open`, a missing file permits anonymous TLS
+until the running server first observes the allowlist path, even if the file is
+malformed or unreadable. During that initial open period the server sends no
+certificate request, even to a client configured to send its own attestation.
+Once the server has seen the path, removing it denies access until a valid
+list is restored or the process restarts.
+
+The server checks the allowlist during the TLS handshake, at the start of each
+HTTP/1 or HTTP/2 request, and every five seconds on open HTTP connections. A
+failed check closes the connection and cuts off any uploads or responses still
+streaming. The TCP tunnel server checks at tunnel start and every five seconds
+while forwarding. Revocation can take up to five seconds to stop traffic,
+including when the allowlist changes as the tunnel starts.
+
+On Unix the server caches parsed keys by
+device, inode, modification time, and length. Rustls handshake callbacks perform
+synchronous file checks with reads bounded to 64 KiB plus one byte to detect
+growth. HTTP and tunnel rechecks run on blocking workers.
+
 ### Other CLI Options
 
 - `--pccs-url` selects the PCCS used to retrieve collateral when verifying DCAP attestations. It defaults to Intel PCS.

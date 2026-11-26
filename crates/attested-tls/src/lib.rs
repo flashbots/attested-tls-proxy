@@ -30,10 +30,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::task::JoinError;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use tokio_rustls::{
-    TlsAcceptor, TlsConnector,
-    rustls::{ClientConfig, ServerConfig},
-};
+use tokio_rustls::{TlsAcceptor, TlsConnector, rustls::ClientConfig};
 
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility.
 /// When adding more supported versions, note that ordering is important. ALPN will pick the first
@@ -67,6 +64,7 @@ pub struct AttestedTlsServer {
     cert_chain: Vec<CertificateDer<'static>>,
     /// For accepting TLS connections
     acceptor: TlsAcceptor,
+    allowlist: Option<Arc<tls::ClientKeyAllowlist>>,
 }
 
 impl std::fmt::Debug for AttestedTlsServer {
@@ -84,11 +82,11 @@ impl AttestedTlsServer {
         cert_and_key: TlsCertAndKey,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
-        client_auth: bool,
+        client_auth: impl Into<tls::ClientAuth>,
     ) -> Result<Self, AttestedTlsError> {
-        let server_config = tls::server_config(&cert_and_key, client_auth)?;
+        let server_config = tls::ServerTlsConfig::new(&cert_and_key, client_auth)?;
 
-        Self::new_with_tls_config(
+        Self::new_with_server_config(
             cert_and_key.cert_chain,
             server_config,
             attestation_generator,
@@ -101,12 +99,31 @@ impl AttestedTlsServer {
     /// This allows dangerous configuration
     pub fn new_with_tls_config(
         cert_chain: Vec<CertificateDer<'static>>,
-        mut server_config: ServerConfig,
+        server_config: rustls::ServerConfig,
+        attestation_generator: AttestationGenerator,
+        attestation_verifier: AttestationVerifier,
+    ) -> Result<Self, AttestedTlsError> {
+        Self::new_with_server_config(
+            cert_chain,
+            server_config.into(),
+            attestation_generator,
+            attestation_verifier,
+        )
+    }
+
+    /// Use TLS settings that carry the live authorization policy for this listener.
+    pub fn new_with_server_config(
+        cert_chain: Vec<CertificateDer<'static>>,
+        server_config: tls::ServerTlsConfig,
         attestation_generator: AttestationGenerator,
         attestation_verifier: AttestationVerifier,
     ) -> Result<Self, AttestedTlsError> {
         #[cfg(feature = "mock")]
         tracing::warn!("AttestedTlsServer instantiated in MOCK mode - do NOT use in production");
+        let tls::ServerTlsConfig {
+            config: mut server_config,
+            allowlist,
+        } = server_config;
         // Ensure protocol version compatibility
         server_config.alpn_protocols = map_alpn_protocols(server_config.alpn_protocols);
 
@@ -117,8 +134,26 @@ impl AttestedTlsServer {
             attestation_generator,
             attestation_verifier,
             acceptor,
+            allowlist,
             cert_chain,
         })
+    }
+
+    /// Bind the authenticated peer's leaf key to this server's live allowlist, if configured.
+    pub fn allowlisted_peer(
+        &self,
+        connection: &rustls::CommonState,
+    ) -> Result<Option<tls::AllowlistedPeer>, rustls::Error> {
+        self.allowlist
+            .as_ref()
+            .map(|policy| {
+                policy.peer(
+                    connection
+                        .peer_certificates()
+                        .and_then(|chain| chain.first()),
+                )
+            })
+            .transpose()
     }
 
     /// Handle an incoming connection from an [AttestedTlsClient]
