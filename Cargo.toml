@@ -24,6 +24,12 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 webpki-roots = "1.0.4"
 x509-parser = "0.18.0"
 
+# attestation still pins an older attest commit. Cargo requires a distinct
+# source URL for a patch, so use GitHub's www alias for the same repository.
+[patch."https://github.com/easy-tee/attest.git"]
+attest-measure = { git = "https://www.github.com/easy-tee/attest.git", rev = "908547e79786ced75bcfe1d6551b418a8430f913" }
+attest-types = { git = "https://www.github.com/easy-tee/attest.git", rev = "908547e79786ced75bcfe1d6551b418a8430f913" }
+
 [profile.reproducible]
 inherits = "release"
 lto = "thin"
