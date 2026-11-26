@@ -33,9 +33,7 @@ Immediately after the TLS handshake, an attestation exchange is made. The server
 
 Attestation exchange messages are formatted as follows:
 - A 4 byte length prefix - a big endian encoded unsigned 32 bit integer
-- A SCALE (Simple Concatenated Aggregate Little-Endian) encoded [struct in the attestation crate](https://github.com/flashbots/attested-tls/blob/main/crates/attestation/src/lib.rs) with the following fields:
-  - `attestation_type` - a string with one of the attestation types (described above) including `none`.
-  - `attestation` - the actual attestation data. In the case of DCAP this is a binary quote report. In the case of `none` this is an empty byte array.
+- A SCALE (Simple Concatenated Aggregate Little-Endian) encoded [`AttestationExchangeMessage`](https://github.com/flashbots/attested-tls/blob/851f5ccf0b5057eb2b947f25dc8a286599adca8b/crates/attestation/src/lib.rs#L59). Its optional `attestation_evidence` contains a DCAP quote and platform metadata for `dcap-tdx` or `gcp-tdx`. An absent value represents `none`.
 
 SCALE is used by parity/substrate and was chosen because it is simple and actually matches the formatting used in TDX quotes. So it was already used as a dependency (via the [`dcap-qvl`](https://docs.rs/dcap-qvl) crate).
 

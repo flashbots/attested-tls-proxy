@@ -10,7 +10,7 @@ RUN sed -i '/^# http/{N;s|^# \(http[^ ]*\)\nURIs: .*|# \1\nURIs: \1|}' /etc/apt/
 RUN apt-get -o Acquire::Check-Valid-Until=false update && \
     apt-get install -y \
         pkg-config clang libclang-dev \
-        openssl libssl-dev libtss2-dev \
+        openssl libssl-dev \
         cmake python3
 
 WORKDIR /build

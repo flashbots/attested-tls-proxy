@@ -19,7 +19,7 @@ pub(crate) struct Cli {
     /// Path to file, or URL, containing JSON measurements to be enforced on the remote party
     #[arg(long, global = true, env = "MEASUREMENTS_FILE")]
     measurements_file: Option<String>,
-    /// If no measurements file is specified, a single attestion type to allow
+    /// Allowed attestation type when no measurements file is specified, or tdx for DCAP and GCP
     #[arg(long, global = true)]
     allowed_remote_attestation_type: Option<String>,
     /// The URL of a PCCS to use when verifying DCAP attestations. Defaults to Intel PCS.
@@ -44,9 +44,6 @@ pub(crate) struct Cli {
     /// Log DCAP quotes to folder `quotes/`
     #[arg(long, global = true)]
     log_dcap_quote: bool,
-    /// Overrides Azure outdated TCB info
-    #[arg(long, global = true, env = "OVERRIDE_AZURE_OUTDATED_TCB")]
-    override_azure_outdated_tcb: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -85,7 +82,6 @@ impl Cli {
             self.pccs_url,
             self.intel_pcs_subscription_key,
             self.log_dcap_quote,
-            self.override_azure_outdated_tcb,
         )
         .await?;
         match self.command {

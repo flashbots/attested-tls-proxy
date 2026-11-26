@@ -22,10 +22,6 @@ impl MeasurementHeaders for MultiMeasurements {
                 .enumerate()
                 .map(|(index, value)| (index.to_string(), hex::encode(value)))
                 .collect(),
-            Self::Azure(m) => m
-                .iter()
-                .map(|(index, value)| (index.to_string(), hex::encode(value)))
-                .collect(),
             Self::NoAttestation => HashMap::new(),
         };
         Ok(HeaderValue::from_str(&serde_json::to_string(&values)?)?)
@@ -49,12 +45,6 @@ impl MeasurementHeaders for MultiMeasurements {
         let values: HashMap<u8, String> = serde_json::from_str(input)?;
         Ok(match attestation_type {
             AttestationType::None => Self::NoAttestation,
-            AttestationType::AzureTdx => Self::Azure(
-                values
-                    .into_iter()
-                    .map(|(k, v)| Ok((u32::from(k), decode(&v)?)))
-                    .collect::<Result<_, MeasurementFormatError>>()?,
-            ),
             AttestationType::DcapTdx | AttestationType::GcpTdx => {
                 if values.len() != 5 || values.keys().any(|k| *k > 4) {
                     return Err(MeasurementFormatError::BadRegisterIndex);
