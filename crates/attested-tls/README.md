@@ -16,11 +16,11 @@ Attestation may be provided by either the server, or the client, or both.
 
 ## Optional features
 
-No features are enabled by default. Enable `ws` for the `websockets` module or
-`rpc` for the `attested_rpc` module in your Cargo dependency:
+No features are enabled by default. To use the `websockets` module, enable `ws`
+in your Cargo dependency.
 
 ```toml
-attested-tls = { path = "../attested-tls", features = ["ws", "rpc"] }
+attested-tls = { path = "../attested-tls", features = ["ws"] }
 ```
 
 ## Protocol Specification

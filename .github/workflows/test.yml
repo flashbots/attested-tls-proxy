@@ -39,7 +39,32 @@ jobs:
       run: cargo check -p attested-tls --locked
 
     - name: Run cargo clippy
-      run: cargo clippy --workspace --features attested-tls/ws,attested-tls/rpc --locked -- -D warnings
+      run: cargo clippy --workspace --features attested-tls/ws --locked -- -D warnings
 
     - name: Run cargo test
-      run: cargo test --workspace --features attested-tls/ws,attested-tls/rpc --all-targets --locked -- --test-threads=1
+      run: cargo test --workspace --features attested-tls/ws --all-targets --locked -- --test-threads=1
+
+  dependency_checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+
+    - name: Install dependency checks
+      id: install_checks
+      run: cargo install --locked cargo-audit@0.22.1 cargo-deny@0.22.0
+
+    - name: Run cargo audit
+      run: cargo audit --file Cargo.lock
+
+    - name: Run cargo deny
+      if: ${{ !cancelled() && steps.install_checks.outcome == 'success' }}
+      run: cargo deny --locked --features attested-tls/ws check bans licenses sources

@@ -210,16 +210,16 @@ artifacts remain in the root `target/` directory.
 
 ```sh
 cargo build -p attested-tls-proxy --locked
-cargo test --workspace --features attested-tls/ws,attested-tls/rpc --all-targets --locked
-cargo clippy --workspace --features attested-tls/ws,attested-tls/rpc --locked -- -D warnings
+cargo test --workspace --features attested-tls/ws --all-targets --locked
+cargo clippy --workspace --features attested-tls/ws --locked -- -D warnings
 cargo fmt --all -- --check
 ```
 
 To install from a local checkout, use `cargo install --path crates/attested-tls-proxy --locked`.
 Docker and Compose commands also run from the repository root.
 
-The `attested-tls` library's `ws` and `rpc` features are opt-in and included in
-the test and lint commands above.
+The test and lint commands above enable the `attested-tls` library's opt-in
+WebSocket feature (`ws`).
 
 ## Trying it out locally (without CVM attestation)
 
